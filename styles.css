@@ -1,0 +1,86 @@
+/* Linux.do 文章复制 & 下载 — 注入按钮样式 */
+
+/* 按钮容器 */
+.ldcopy-actions {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+/* 单个按钮 */
+.ldcopy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--primary-low-mid, #ccc);
+  border-radius: 4px;
+  background: var(--secondary, #f5f5f5);
+  color: var(--primary, #333);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.ldcopy-btn:hover {
+  background: var(--highlight-bg, #e8e8e8);
+  border-color: var(--primary-medium, #999);
+}
+
+.ldcopy-btn:active {
+  transform: scale(0.96);
+}
+
+.ldcopy-btn svg {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+/* 暗色模式适配 */
+html.dark .ldcopy-btn,
+body.dark .ldcopy-btn {
+  background: #2a2a3e;
+  border-color: #444;
+  color: #ddd;
+}
+
+html.dark .ldcopy-btn:hover,
+body.dark .ldcopy-btn:hover {
+  background: #3a3a5e;
+  border-color: #666;
+}
+
+/* Toast 提示 */
+.ldcopy-toast {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  padding: 10px 20px;
+  background: #1a1a2e;
+  color: #fff;
+  border: 1px solid #333;
+  border-radius: 8px;
+  font-size: 14px;
+  z-index: 100000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s, transform 0.3s;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.ldcopy-toast-show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+
+/* 按钮上的文字在窄屏隐藏 */
+@media (max-width: 768px) {
+  .ldcopy-btn span {
+    display: none;
+  }
+}
