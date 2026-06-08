@@ -1,10 +1,230 @@
 /* ========================================
    Linux.do 文章复制 & 下载 — Content Script
-   使用 /raw/ API 获取原始 Markdown
+   使用 /raw/ API 获取原始内容，自动转换为 Markdown
    ======================================== */
 
 (() => {
   'use strict';
+
+  // ---------- HTML → Markdown 转换 ----------
+
+  // 检测内容是否为 HTML（而非纯 Markdown）
+  // 用 DOMParser 解析后判断是否存在 HTML 元素节点
+  function isHtmlContent(text) {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(trimmed, 'text/html');
+    // 如果 body 下有非 <p> 的元素，或者有带属性的标签，就是 HTML
+    const elCount = doc.body.querySelectorAll('*').length;
+    // 纯文本被 DOMParser 包装成 <body><p>...</p></body>，只有 1-2 个元素
+    // 真正的 HTML 会有更多元素或带属性的标签
+    if (elCount > 2) return true;
+    // 检查是否有带属性的标签（如 <a href="...">、<img src="...">）
+    const allEls = doc.body.querySelectorAll('*');
+    for (const el of allEls) {
+      if (el.attributes.length > 0) return true;
+    }
+    // 检查是否以显式 HTML 标签开头（非自动包装的 <p>）
+    if (/^<(?!p>|\/p>)[a-zA-Z][\s\S]*>/.test(trimmed)) return true;
+    return false;
+  }
+
+  // 轻量 HTML → Markdown 转换器
+  function htmlToMarkdown(html) {
+    // 创建临时 DOM 解析 HTML
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const body = doc.body;
+
+    function walk(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return node.textContent;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return '';
+
+      const tag = node.tagName.toLowerCase();
+      const children = Array.from(node.childNodes).map(walk).join('');
+
+      switch (tag) {
+        case 'h1': return `\n# ${children.trim()}\n\n`;
+        case 'h2': return `\n## ${children.trim()}\n\n`;
+        case 'h3': return `\n### ${children.trim()}\n\n`;
+        case 'h4': return `\n#### ${children.trim()}\n\n`;
+        case 'h5': return `\n##### ${children.trim()}\n\n`;
+        case 'h6': return `\n###### ${children.trim()}\n\n`;
+        case 'p': return `\n${children.trim()}\n\n`;
+        case 'br': return '\n';
+        case 'hr': return '\n---\n\n';
+        case 'strong':
+        case 'b': {
+          const t = children.trim();
+          return t ? `**${t}**` : '';
+        }
+        case 'em':
+        case 'i': {
+          const t = children.trim();
+          return t ? `*${t}*` : '';
+        }
+        case 'del':
+        case 's': {
+          const t = children.trim();
+          return t ? `~~${t}~~` : '';
+        }
+        case 'code': {
+          const t = children.trim();
+          return t ? `\`${t}\`` : '';
+        }
+        case 'pre': {
+          const codeEl = node.querySelector('code');
+          const lang = codeEl?.className?.match(/lang-(\w+)/)?.[1] || '';
+          const codeText = codeEl ? codeEl.textContent : node.textContent;
+          return `\n\`\`\`${lang}\n${codeText.trim()}\n\`\`\`\n\n`;
+        }
+        case 'a': {
+          const href = node.getAttribute('href') || '';
+          const t = children.trim();
+          if (!t) return '';
+          if (href && href !== t) return `[${t}](${href})`;
+          return t;
+        }
+        case 'img': {
+          const src = node.getAttribute('src') || '';
+          const alt = node.getAttribute('alt') || '';
+          return src ? `![${alt}](${src})` : '';
+        }
+        case 'blockquote': {
+          const lines = children.trim().split('\n').map(l => `> ${l}`).join('\n');
+          return `\n${lines}\n\n`;
+        }
+        case 'aside': {
+          // Discourse <aside class="quote"> 引用块
+          if (node.classList?.contains('quote')) {
+            const titleEl = node.querySelector('.quote-controls, [data-username]');
+            const quoteUser = node.getAttribute('data-username') ||
+              titleEl?.getAttribute('data-username') || '';
+            const bq = node.querySelector(':scope > blockquote');
+            const content = bq ? Array.from(bq.childNodes).map(walk).join('').trim() : children.trim();
+            const attribution = quoteUser ? `**${quoteUser} said:**\n` : '';
+            const lines = (attribution + content).split('\n').map(l => `> ${l}`).join('\n');
+            return `\n${lines}\n\n`;
+          }
+          return children;
+        }
+        case 'ul': {
+          return '\n' + Array.from(node.children).map(li => {
+            if (li.tagName?.toLowerCase() === 'li') {
+              return `- ${walk(li).trim()}`;
+            }
+            return walk(li);
+          }).join('\n') + '\n\n';
+        }
+        case 'ol': {
+          return '\n' + Array.from(node.children).map((li, i) => {
+            if (li.tagName?.toLowerCase() === 'li') {
+              return `${i + 1}. ${walk(li).trim()}`;
+            }
+            return walk(li);
+          }).join('\n') + '\n\n';
+        }
+        case 'li':
+          return children;
+        case 'table': {
+          return htmlTableToMarkdown(node);
+        }
+        case 'sup':
+          return `<sup>${children}</sup>`;
+        case 'sub':
+          return `<sub>${children}</sub>`;
+        case 'mark':
+          return `==${children.trim()}==`;
+        case 'u':
+          return children;
+        case 'span': {
+          // Discourse @mention
+          if (node.classList?.contains('mention')) {
+            return children.trim() || node.textContent.trim();
+          }
+          return children;
+        }
+        case 'div': {
+          // Discourse <div class="lightbox-wrapper"> 图片包装
+          if (node.classList?.contains('lightbox-wrapper')) {
+            const img = node.querySelector('img');
+            if (img) {
+              const src = img.getAttribute('data-original-href') || img.getAttribute('src') || '';
+              const alt = img.getAttribute('alt') || '';
+              return src ? `\n![${alt}](${src})\n` : children;
+            }
+          }
+          // Discourse <div class="onebox"> 链接预览
+          if (node.classList?.contains('onebox')) {
+            const link = node.querySelector('a[href]');
+            const title = node.querySelector('.onebox-body h3, .source a')?.textContent?.trim();
+            const href = link?.getAttribute('href') || '';
+            if (title && href) return `\n[${title}](${href})\n`;
+          }
+          return children;
+        }
+        case 'section':
+        case 'article':
+        case 'main':
+        case 'nav':
+        case 'header':
+        case 'footer':
+        case 'figure':
+        case 'figcaption':
+        case 'details':
+        case 'summary':
+        case 'dd':
+        case 'dt':
+        case 'dl':
+        case 'abbr':
+        case 'cite':
+        case 'ins':
+          return children;
+        default:
+          return children;
+      }
+    }
+
+    function htmlTableToMarkdown(tableEl) {
+      const rows = [];
+      tableEl.querySelectorAll('tr').forEach(tr => {
+        const cells = Array.from(tr.querySelectorAll('td, th')).map(cell => {
+          return cell.textContent.trim().replace(/\|/g, '\\|');
+        });
+        rows.push(cells);
+      });
+      if (rows.length === 0) return '';
+
+      const colCount = Math.max(...rows.map(r => r.length));
+      // 补齐列数
+      rows.forEach(r => { while (r.length < colCount) r.push(''); });
+
+      const lines = [];
+      lines.push('| ' + rows[0].join(' | ') + ' |');
+      lines.push('| ' + rows[0].map(() => '---').join(' | ') + ' |');
+      for (let i = 1; i < rows.length; i++) {
+        lines.push('| ' + rows[i].join(' | ') + ' |');
+      }
+      return '\n' + lines.join('\n') + '\n\n';
+    }
+
+    let md = walk(body);
+    // 清理多余空行（最多保留两个连续换行）
+    md = md.replace(/\n{3,}/g, '\n\n').trim();
+    return md;
+  }
+
+  // 对 raw 内容进行后处理：如果是 HTML 则转换为 Markdown
+  function ensureMarkdown(rawContent) {
+    const trimmed = rawContent.trim();
+    if (isHtmlContent(trimmed)) {
+      return htmlToMarkdown(trimmed);
+    }
+    return trimmed;
+  }
 
   // ---------- 页面信息提取 ----------
 
@@ -104,6 +324,14 @@
     });
   }
 
+  // 规范化 Discourse Markdown → 标准 Markdown
+  // 处理 Discourse 特有的图片语法: ![alt|WxH](url) → ![alt](url)
+  function normalizeDiscourseMd(md) {
+    // ![alt|640x500](url) → ![alt](url)
+    // 也处理 ![alt|640x500|inline](url) 等多参数情况
+    return md.replace(/!\[([^\]]+?)\|(\d+x\d+(?:x\d+)?(?:\|[^]]*)?)\]\(/g, '![$1](');
+  }
+
   function downloadFile(content, filename) {
     const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -159,9 +387,10 @@
           const topicId = getTopicId();
           const meta = getPostMeta(postEl);
           const raw = await fetchRawPost(topicId, meta.postNumber);
+          const normalized = normalizeDiscourseMd(raw);
           const imageMap = getPostImages(postEl);
-          const processedRaw = replaceUploadUrls(raw, imageMap);
-          const md = formatPostMd(meta, processedRaw, getTopicTitle(), getTopicUrl());
+          const processedRaw = replaceUploadUrls(normalized, imageMap);
+          const md = formatPostMd(meta, ensureMarkdown(processedRaw), getTopicTitle(), getTopicUrl());
           await copyToClipboard(md);
           showToast('✅ 已复制到剪贴板');
         } catch (err) {
@@ -184,10 +413,11 @@
           const topicId = getTopicId();
           const meta = getPostMeta(postEl);
           const raw = await fetchRawPost(topicId, meta.postNumber);
+          const normalized = normalizeDiscourseMd(raw);
           const imageMap = getPostImages(postEl);
-          const processedRaw = replaceUploadUrls(raw, imageMap);
+          const processedRaw = replaceUploadUrls(normalized, imageMap);
           const title = getTopicTitle();
-          const md = formatPostMd(meta, processedRaw, title, getTopicUrl());
+          const md = formatPostMd(meta, ensureMarkdown(processedRaw), title, getTopicUrl());
           const filename = sanitizeFilename(`${title}_#${meta.postNumber || 'post'}.md`);
           downloadFile(md, filename);
           showToast(`✅ 已下载 ${filename}`);
@@ -215,9 +445,10 @@
       const meta = getPostMeta(postEl);
       try {
         const raw = await fetchRawPost(topicId, meta.postNumber);
+        const normalized = normalizeDiscourseMd(raw);
         const imageMap = getPostImages(postEl);
-        const processedRaw = replaceUploadUrls(raw, imageMap);
-        posts.push({ meta, raw: processedRaw });
+        const processedRaw = replaceUploadUrls(normalized, imageMap);
+        posts.push({ meta, raw: ensureMarkdown(processedRaw) });
       } catch {
         // 单个帖子获取失败则跳过
       }
