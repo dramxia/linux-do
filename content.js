@@ -422,9 +422,13 @@
       document.body.appendChild(toast);
     }
 
+    if (toast.hideTimer) clearTimeout(toast.hideTimer);
     toast.textContent = message;
     toast.className = 'ldcopy-toast ldcopy-toast-show';
-    setTimeout(() => { toast.className = 'ldcopy-toast'; }, 2000);
+    toast.hideTimer = setTimeout(() => {
+      toast.className = 'ldcopy-toast';
+      toast.hideTimer = null;
+    }, 2500);
   }
 
   namespace.output = {
@@ -469,24 +473,50 @@
     };
   }
 
-  async function getAllPostsRaw(settings) {
-    const { discourse } = namespace;
-    const posts = [];
+  function getFallbackMeta(postEl, index) {
+    try {
+      return namespace.discourse.getPostMeta(postEl);
+    } catch {
+      return { postId: '', postNumber: String(index + 1), author: 'Unknown', date: '' };
+    }
+  }
 
-    for (const postEl of discourse.getPostElements()) {
+  async function collectLoadedPosts(settings) {
+    const { discourse } = namespace;
+    const postEls = Array.from(discourse.getPostElements());
+    const posts = [];
+    const failures = [];
+
+    for (const [index, postEl] of postEls.entries()) {
       try {
         const result = await buildPostMarkdown(postEl, settings);
         posts.push({ meta: result.meta, raw: result.raw });
-      } catch {
-        // 单个帖子获取失败时跳过，避免影响整帖导出。
+      } catch (err) {
+        const meta = getFallbackMeta(postEl, index);
+        failures.push({
+          meta,
+          error: err?.message || '未知错误',
+        });
       }
     }
 
-    return posts;
+    return {
+      posts,
+      failures,
+      total: postEls.length,
+      successCount: posts.length,
+      failureCount: failures.length,
+    };
+  }
+
+  async function getAllPostsRaw(settings) {
+    const result = await collectLoadedPosts(settings);
+    return result.posts;
   }
 
   namespace.postExport = {
     buildPostMarkdown,
+    collectLoadedPosts,
     getAllPostsRaw,
   };
 })();
@@ -649,6 +679,16 @@
 
   const namespace = globalThis.LinuxDoToolkit = globalThis.LinuxDoToolkit || {};
 
+  function assertExportResult(result) {
+    if (result.total === 0) throw new Error('当前页面没有检测到已加载楼层');
+    if (result.successCount === 0) throw new Error('已加载楼层全部导出失败');
+  }
+
+  function getExportToastPrefix(result) {
+    if (result.failureCount === 0) return '✅';
+    return `⚠️ 已处理 ${result.successCount}/${result.total} 个楼层，${result.failureCount} 个失败。`;
+  }
+
   function registerMessageHandlers() {
     const { discourse, output, postExport, settings: settingsApi } = namespace;
 
@@ -673,11 +713,13 @@
         (async () => {
           try {
             const settings = await settingsApi.getSettings();
-            const posts = await postExport.getAllPostsRaw(settings);
-            const md = output.formatTopicMd(posts, discourse.getTopicTitle(), discourse.getTopicUrl(), settings);
+            const result = await postExport.collectLoadedPosts(settings);
+            assertExportResult(result);
+            const md = output.formatTopicMd(result.posts, discourse.getTopicTitle(), discourse.getTopicUrl(), settings);
             await output.copyToClipboard(md);
-            sendResponse({ success: true });
-            output.showToast('✅ 已复制整个主题');
+            sendResponse({ success: true, ...result });
+            const prefix = getExportToastPrefix(result);
+            output.showToast(result.failureCount === 0 ? '✅ 已复制整个主题' : `${prefix} 已复制`);
           } catch (err) {
             sendResponse({ success: false, error: err.message });
             output.showToast('❌ 失败: ' + err.message);
@@ -690,13 +732,15 @@
         (async () => {
           try {
             const settings = await settingsApi.getSettings();
-            const posts = await postExport.getAllPostsRaw(settings);
+            const result = await postExport.collectLoadedPosts(settings);
+            assertExportResult(result);
             const title = discourse.getTopicTitle();
-            const md = output.formatTopicMd(posts, title, discourse.getTopicUrl(), settings);
+            const md = output.formatTopicMd(result.posts, title, discourse.getTopicUrl(), settings);
             const filename = output.sanitizeFilename(`${title}.md`);
             output.downloadFile(md, filename);
-            sendResponse({ success: true, filename });
-            output.showToast(`✅ 已下载 ${filename}`);
+            sendResponse({ success: true, filename, ...result });
+            const prefix = getExportToastPrefix(result);
+            output.showToast(result.failureCount === 0 ? `✅ 已下载 ${filename}` : `${prefix} 已下载 ${filename}`);
           } catch (err) {
             sendResponse({ success: false, error: err.message });
             output.showToast('❌ 失败: ' + err.message);
@@ -722,24 +766,61 @@
 
   const namespace = globalThis.LinuxDoToolkit = globalThis.LinuxDoToolkit || {};
 
+  let refreshTimer = null;
+  let base64Timer = null;
+  let refreshInFlight = false;
+  let refreshPending = false;
+
   function refreshEnhancements() {
-    namespace.buttons.injectButtons();
-    namespace.base64.injectBase64Button();
+    if (refreshInFlight) {
+      refreshPending = true;
+      return;
+    }
+
+    refreshInFlight = true;
+    Promise.all([
+      namespace.buttons.injectButtons(),
+      namespace.base64.injectBase64Button(),
+    ]).catch(() => {
+      // 页面增强失败不应影响宿主页面，后续 DOM 变化会再次触发刷新。
+    }).finally(() => {
+      refreshInFlight = false;
+      if (refreshPending) {
+        refreshPending = false;
+        scheduleRefreshEnhancements();
+      }
+    });
+  }
+
+  function scheduleRefreshEnhancements(delay = 150) {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      refreshEnhancements();
+    }, delay);
+  }
+
+  function scheduleBase64ButtonRefresh(delay = 100) {
+    if (base64Timer) clearTimeout(base64Timer);
+    base64Timer = setTimeout(() => {
+      base64Timer = null;
+      namespace.base64.injectBase64Button();
+    }, delay);
   }
 
   function bindDynamicPageEvents() {
     document.addEventListener('selectionchange', () => {
-      setTimeout(() => namespace.base64.injectBase64Button(), 100);
+      scheduleBase64ButtonRefresh();
     });
 
-    const observer = new MutationObserver(() => refreshEnhancements());
+    const observer = new MutationObserver(() => scheduleRefreshEnhancements());
     observer.observe(document.querySelector('#main-outlet, #main, body') || document.body, {
       childList: true,
       subtree: true,
     });
 
-    window.addEventListener('discourse-navigate-completed', refreshEnhancements);
-    window.addEventListener('page:change', refreshEnhancements);
+    window.addEventListener('discourse-navigate-completed', () => scheduleRefreshEnhancements(0));
+    window.addEventListener('page:change', () => scheduleRefreshEnhancements(0));
   }
 
   function init() {

@@ -4,6 +4,16 @@
 
   const namespace = globalThis.LinuxDoToolkit = globalThis.LinuxDoToolkit || {};
 
+  function assertExportResult(result) {
+    if (result.total === 0) throw new Error('当前页面没有检测到已加载楼层');
+    if (result.successCount === 0) throw new Error('已加载楼层全部导出失败');
+  }
+
+  function getExportToastPrefix(result) {
+    if (result.failureCount === 0) return '✅';
+    return `⚠️ 已处理 ${result.successCount}/${result.total} 个楼层，${result.failureCount} 个失败。`;
+  }
+
   function registerMessageHandlers() {
     const { discourse, output, postExport, settings: settingsApi } = namespace;
 
@@ -28,11 +38,13 @@
         (async () => {
           try {
             const settings = await settingsApi.getSettings();
-            const posts = await postExport.getAllPostsRaw(settings);
-            const md = output.formatTopicMd(posts, discourse.getTopicTitle(), discourse.getTopicUrl(), settings);
+            const result = await postExport.collectLoadedPosts(settings);
+            assertExportResult(result);
+            const md = output.formatTopicMd(result.posts, discourse.getTopicTitle(), discourse.getTopicUrl(), settings);
             await output.copyToClipboard(md);
-            sendResponse({ success: true });
-            output.showToast('✅ 已复制整个主题');
+            sendResponse({ success: true, ...result });
+            const prefix = getExportToastPrefix(result);
+            output.showToast(result.failureCount === 0 ? '✅ 已复制整个主题' : `${prefix} 已复制`);
           } catch (err) {
             sendResponse({ success: false, error: err.message });
             output.showToast('❌ 失败: ' + err.message);
@@ -45,13 +57,15 @@
         (async () => {
           try {
             const settings = await settingsApi.getSettings();
-            const posts = await postExport.getAllPostsRaw(settings);
+            const result = await postExport.collectLoadedPosts(settings);
+            assertExportResult(result);
             const title = discourse.getTopicTitle();
-            const md = output.formatTopicMd(posts, title, discourse.getTopicUrl(), settings);
+            const md = output.formatTopicMd(result.posts, title, discourse.getTopicUrl(), settings);
             const filename = output.sanitizeFilename(`${title}.md`);
             output.downloadFile(md, filename);
-            sendResponse({ success: true, filename });
-            output.showToast(`✅ 已下载 ${filename}`);
+            sendResponse({ success: true, filename, ...result });
+            const prefix = getExportToastPrefix(result);
+            output.showToast(result.failureCount === 0 ? `✅ 已下载 ${filename}` : `${prefix} 已下载 ${filename}`);
           } catch (err) {
             sendResponse({ success: false, error: err.message });
             output.showToast('❌ 失败: ' + err.message);

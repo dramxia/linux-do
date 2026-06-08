@@ -1,7 +1,6 @@
-// background.js — Service Worker
-// 保持最小化，主要逻辑在 content.js 中
+// background.js — Chrome MV3 Service Worker
+// 当前保持最小化：主要业务逻辑在 content.js / popup.js 中。
 
-chrome.action.onClicked.addListener(async (tab) => {
-  // 点击图标时，如果在 linux.do 则打开 popup
-  // 默认已有 popup.html，这里不需要额外处理
+chrome.runtime.onInstalled.addListener(() => {
+  // 预留生命周期入口，确保 manifest 中注册的后台脚本职责明确。
 });

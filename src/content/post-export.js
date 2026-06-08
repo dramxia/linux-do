@@ -28,24 +28,50 @@
     };
   }
 
-  async function getAllPostsRaw(settings) {
-    const { discourse } = namespace;
-    const posts = [];
+  function getFallbackMeta(postEl, index) {
+    try {
+      return namespace.discourse.getPostMeta(postEl);
+    } catch {
+      return { postId: '', postNumber: String(index + 1), author: 'Unknown', date: '' };
+    }
+  }
 
-    for (const postEl of discourse.getPostElements()) {
+  async function collectLoadedPosts(settings) {
+    const { discourse } = namespace;
+    const postEls = Array.from(discourse.getPostElements());
+    const posts = [];
+    const failures = [];
+
+    for (const [index, postEl] of postEls.entries()) {
       try {
         const result = await buildPostMarkdown(postEl, settings);
         posts.push({ meta: result.meta, raw: result.raw });
-      } catch {
-        // 单个帖子获取失败时跳过，避免影响整帖导出。
+      } catch (err) {
+        const meta = getFallbackMeta(postEl, index);
+        failures.push({
+          meta,
+          error: err?.message || '未知错误',
+        });
       }
     }
 
-    return posts;
+    return {
+      posts,
+      failures,
+      total: postEls.length,
+      successCount: posts.length,
+      failureCount: failures.length,
+    };
+  }
+
+  async function getAllPostsRaw(settings) {
+    const result = await collectLoadedPosts(settings);
+    return result.posts;
   }
 
   namespace.postExport = {
     buildPostMarkdown,
+    collectLoadedPosts,
     getAllPostsRaw,
   };
 })();

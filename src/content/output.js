@@ -57,9 +57,13 @@
       document.body.appendChild(toast);
     }
 
+    if (toast.hideTimer) clearTimeout(toast.hideTimer);
     toast.textContent = message;
     toast.className = 'ldcopy-toast ldcopy-toast-show';
-    setTimeout(() => { toast.className = 'ldcopy-toast'; }, 2000);
+    toast.hideTimer = setTimeout(() => {
+      toast.className = 'ldcopy-toast';
+      toast.hideTimer = null;
+    }, 2500);
   }
 
   namespace.output = {
