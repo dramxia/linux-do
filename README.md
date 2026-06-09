@@ -11,9 +11,11 @@ Chrome 浏览器插件，用于一键复制或下载 linux.do 帖子内容为 Ma
   - 复制当前已加载楼层：按页面 DOM 中已加载楼层范围，调用 Discourse `/raw/...` 接口获取内容并合并为 Markdown
   - 下载当前已加载楼层：保存为 `.md` 文件；若部分楼层获取失败，会提示成功 / 失败数量
 - **Base64 解码**：选中文本后，在 Discourse 选择浮层中注入 `base64` 按钮
+- **正文 / 评论分栏**：帖子页自动将 1 楼正文固定在左侧，评论区显示在右侧，窄屏自动恢复单列
 - **功能开关**：支持在 popup 中启用 / 关闭常用能力
   - 显示楼层复制 / 下载按钮
   - 启用 Base64 解码
+  - 帖子页正文 / 评论分栏
   - 导出时保留来源元信息
   - 替换 `upload://` 图片链接
 
@@ -63,6 +65,7 @@ linux-do-toolkit/
 │   │   └── settings.js          # 设置读写
 │   ├── content/
 │   │   ├── index.js             # Content Script 入口
+│   │   ├── layout.js            # 帖子页正文 / 评论分栏
 │   │   ├── buttons.js           # 楼层按钮注入
 │   │   ├── base64.js            # Base64 选择工具
 │   │   ├── discourse.js         # Discourse 页面适配

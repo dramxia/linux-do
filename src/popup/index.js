@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const settingInputs = {
     enablePostActions: document.getElementById('enablePostActions'),
     enableBase64Decode: document.getElementById('enableBase64Decode'),
+    enableSplitLayout: document.getElementById('enableSplitLayout'),
     includeMetadata: document.getElementById('includeMetadata'),
     replaceUploadUrls: document.getElementById('replaceUploadUrls'),
   };

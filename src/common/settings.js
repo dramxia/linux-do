@@ -7,6 +7,7 @@
   const DEFAULT_SETTINGS = Object.freeze({
     enablePostActions: true,
     enableBase64Decode: true,
+    enableSplitLayout: false,
     includeMetadata: true,
     replaceUploadUrls: true,
   });

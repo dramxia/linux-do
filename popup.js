@@ -10,6 +10,7 @@
   const DEFAULT_SETTINGS = Object.freeze({
     enablePostActions: true,
     enableBase64Decode: true,
+    enableSplitLayout: false,
     includeMetadata: true,
     replaceUploadUrls: true,
   });
@@ -85,6 +86,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const settingInputs = {
     enablePostActions: document.getElementById('enablePostActions'),
     enableBase64Decode: document.getElementById('enableBase64Decode'),
+    enableSplitLayout: document.getElementById('enableSplitLayout'),
     includeMetadata: document.getElementById('includeMetadata'),
     replaceUploadUrls: document.getElementById('replaceUploadUrls'),
   };

@@ -10,6 +10,7 @@ const contentFiles = [
   'src/common/settings.js',
   'src/content/markdown.js',
   'src/content/discourse.js',
+  'src/content/layout.js',
   'src/content/output.js',
   'src/content/post-export.js',
   'src/content/buttons.js',
