@@ -424,6 +424,11 @@
   const HEADER_TITLE_INNER_CLASS = 'ldtk-topic-header-title-inner';
   const HEADER_META_CLASS = 'ldtk-topic-header-meta';
   const HEADER_META_INNER_CLASS = 'ldtk-topic-header-meta-inner';
+  const ARTICLE_META_CLASS = 'ldtk-topic-article-meta';
+  const ARTICLE_META_INNER_CLASS = 'ldtk-topic-article-meta-inner';
+  const ARTICLE_ACTIONS_CLASS = 'ldtk-topic-article-actions';
+  const FOOTER_ACTIONS_SOURCE_ATTR = 'data-ldtk-footer-actions-source';
+  const FOOTER_ACTIONS_PLACEHOLDER_ATTR = 'data-ldtk-footer-actions-placeholder';
   const TOPIC_META_SOURCE_ATTR = 'data-ldtk-topic-meta-source';
   const NATIVE_STREAM_CLASS = 'ldtk-topic-native-stream';
   const ORIGINAL_MAIN_POST_CLASS = 'ldtk-topic-original-main-post';
@@ -432,6 +437,17 @@
   const PAGER_INFO_CLASS = 'ldtk-comments-pager-info';
   const PAGER_BUTTON_CLASS = 'ldtk-comments-pager-button';
   const PAGE_SIZE = 20;
+  const TOPIC_META_SELECTORS = [
+    '.topic-map',
+    '.topic-map-expanded',
+    '.topic-map__contents',
+    '.topic-map-section',
+    '.topic-map-summary',
+    '.topic-map-stats',
+    '.topic-map__stats',
+    '.topic-stats',
+  ];
+  const FOOTER_ACTIONS_SELECTORS = '#topic-footer-buttons, .topic-footer-main-buttons';
 
   const pagerState = {
     topicId: '',
@@ -498,16 +514,7 @@
   }
 
   function findTopicMetaSource() {
-    const directMatch = Array.from(document.querySelectorAll([
-      '.topic-map',
-      '.topic-map-expanded',
-      '.topic-map__contents',
-      '.topic-map-section',
-      '.topic-map-summary',
-      '.topic-map-stats',
-      '.topic-map__stats',
-      '.topic-stats',
-    ].join(','))).find((el) => (
+    const directMatch = Array.from(document.querySelectorAll(TOPIC_META_SELECTORS.join(','))).find((el) => (
       !el.closest(`.${HEADER_META_CLASS}`) &&
       !el.closest(`.${ARTICLE_PANE_CLASS}`) &&
       !el.closest(`.${COMMENTS_PANE_CLASS}`)
@@ -569,11 +576,97 @@
       }
     }
 
+    headerMeta.replaceChildren(buildTopicMetaClone(source, HEADER_META_INNER_CLASS));
+  }
+
+  function buildTopicMetaClone(source, innerClass) {
     const clone = source.cloneNode(true);
-    clone.classList.add(HEADER_META_INNER_CLASS);
+    clone.classList.add(innerClass);
+    clone.removeAttribute('id');
     clone.removeAttribute(TOPIC_META_SOURCE_ATTR);
     stripHeaderMetaCloneUnsafeNodes(clone);
-    headerMeta.replaceChildren(clone);
+    return clone;
+  }
+
+  function syncArticleTopicMeta(pane) {
+    if (!pane) return;
+
+    const source = findTopicMetaSource();
+    let articleMeta = pane.querySelector(`:scope > .${ARTICLE_META_CLASS}`);
+
+    if (!source) {
+      articleMeta?.remove();
+      return;
+    }
+
+    if (!articleMeta) {
+      articleMeta = document.createElement('section');
+      articleMeta.className = ARTICLE_META_CLASS;
+      articleMeta.setAttribute('aria-label', '主题统计与操作');
+      pane.appendChild(articleMeta);
+    }
+
+    articleMeta.replaceChildren(buildTopicMetaClone(source, ARTICLE_META_INNER_CLASS));
+  }
+
+  function findFooterActionsSource() {
+    return Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find((el) => (
+      !el.closest(`.${ARTICLE_PANE_CLASS}`) &&
+      !el.closest(`.${HEADER_META_CLASS}`) &&
+      !el.closest(`.${COMMENTS_PANE_CLASS}`)
+    ));
+  }
+
+  function ensureFooterActionsPlaceholder(source) {
+    const existing = document.querySelector(`[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`);
+    if (existing) return existing;
+
+    const placeholder = document.createElement('span');
+    placeholder.hidden = true;
+    placeholder.setAttribute(FOOTER_ACTIONS_PLACEHOLDER_ATTR, 'true');
+    source.parentElement?.insertBefore(placeholder, source);
+    return placeholder;
+  }
+
+  function syncArticleFooterActions(pane) {
+    if (!pane) return;
+
+    const movedSource = pane.querySelector(`:scope > .${ARTICLE_ACTIONS_CLASS} > [${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`);
+    const source = movedSource || findFooterActionsSource();
+    let articleActions = pane.querySelector(`:scope > .${ARTICLE_ACTIONS_CLASS}`);
+
+    if (!source) {
+      articleActions?.remove();
+      return;
+    }
+
+    if (!articleActions) {
+      articleActions = document.createElement('section');
+      articleActions.className = ARTICLE_ACTIONS_CLASS;
+      articleActions.setAttribute('aria-label', '主题操作');
+      pane.appendChild(articleActions);
+    }
+
+    if (!movedSource) {
+      ensureFooterActionsPlaceholder(source);
+      source.setAttribute(FOOTER_ACTIONS_SOURCE_ATTR, 'true');
+      articleActions.appendChild(source);
+    }
+  }
+
+  function restoreFooterActions() {
+    const source = document.querySelector(`[${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`);
+    const placeholder = document.querySelector(`[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`);
+
+    if (source) {
+      source.removeAttribute(FOOTER_ACTIONS_SOURCE_ATTR);
+      if (placeholder?.parentElement) {
+        placeholder.parentElement.insertBefore(source, placeholder);
+      }
+    }
+
+    placeholder?.remove();
+    document.querySelectorAll(`.${ARTICLE_ACTIONS_CLASS}`).forEach((el) => el.remove());
   }
 
   function syncSplitHeaderTitle() {
@@ -602,10 +695,18 @@
     syncSplitHeaderMeta(mount, headerTitle);
   }
 
-  function scheduleSplitHeaderSync() {
+  function syncSplitTopicMeta() {
     syncSplitHeaderTitle();
+    document.querySelectorAll(`.${ARTICLE_PANE_CLASS}`).forEach((pane) => {
+      syncArticleTopicMeta(pane);
+      syncArticleFooterActions(pane);
+    });
+  }
+
+  function scheduleSplitHeaderSync() {
+    syncSplitTopicMeta();
     [100, 350, 800, 1500, 3000].forEach((delay) => {
-      setTimeout(syncSplitHeaderTitle, delay);
+      setTimeout(syncSplitTopicMeta, delay);
     });
   }
 
@@ -613,8 +714,23 @@
     if (topicMetaSyncTimer) clearTimeout(topicMetaSyncTimer);
     topicMetaSyncTimer = setTimeout(() => {
       topicMetaSyncTimer = null;
-      syncSplitHeaderTitle();
+      syncSplitTopicMeta();
     }, delay);
+  }
+
+  function isNativeTopicMetaNode(node) {
+    if (node.nodeType !== Node.ELEMENT_NODE) return false;
+
+    if (
+      node.closest?.(`.${HEADER_META_CLASS}`) ||
+      node.closest?.(`.${ARTICLE_PANE_CLASS}`) ||
+      node.closest?.(`.${COMMENTS_PANE_CLASS}`)
+    ) {
+      return false;
+    }
+
+    const selectors = TOPIC_META_SELECTORS.join(',');
+    return node.matches?.(selectors) || Boolean(node.querySelector?.(selectors));
   }
 
   function bindTopicMetaObserver() {
@@ -629,13 +745,7 @@
           ...Array.from(mutation.removedNodes || []),
         ];
 
-        return nodes.some((node) => (
-          node.nodeType === Node.ELEMENT_NODE &&
-          (
-            node.matches?.('.topic-map, .topic-map-expanded, .topic-map__contents, .topic-map-section, .topic-stats') ||
-            node.querySelector?.('.topic-map, .topic-map-expanded, .topic-map__contents, .topic-map-section, .topic-stats')
-          )
-        ));
+        return nodes.some(isNativeTopicMetaNode);
       });
 
       if (shouldSync) scheduleTopicMetaSync();
@@ -661,6 +771,8 @@
 
     document.querySelectorAll(`.${HEADER_TITLE_CLASS}`).forEach((el) => el.remove());
     document.querySelectorAll(`.${HEADER_META_CLASS}`).forEach((el) => el.remove());
+    document.querySelectorAll(`.${ARTICLE_META_CLASS}`).forEach((el) => el.remove());
+    restoreFooterActions();
     document.querySelectorAll(`[${TOPIC_META_SOURCE_ATTR}]`).forEach((el) => {
       el.removeAttribute(TOPIC_META_SOURCE_ATTR);
     });
@@ -669,8 +781,6 @@
   function stripCloneUnsafeNodes(clone) {
     clone.querySelectorAll([
       '.ldcopy-actions',
-      '.post-controls',
-      '.actions',
       '.topic-map',
       '.embedded-posts',
       'script',
@@ -686,6 +796,7 @@
     const clone = mainPost.cloneNode(true);
     clone.classList.add(ARTICLE_CLONE_CLASS);
     clone.classList.remove(ORIGINAL_MAIN_POST_CLASS);
+    clone.removeAttribute('id');
     stripCloneUnsafeNodes(clone);
     return clone;
   }
@@ -742,14 +853,19 @@
     const postId = mainPost.getAttribute('data-post-id') || '';
     const currentPostId = pane.getAttribute('data-source-post-id') || '';
 
-    if (currentPostId === postId && pane.querySelector(`.${ARTICLE_CLONE_CLASS}`)) return;
+    if (currentPostId !== postId || !pane.querySelector(`.${ARTICLE_CLONE_CLASS}`)) {
+      restoreFooterActions();
+      pane.replaceChildren(buildArticleClone(mainPost));
+      pane.setAttribute('data-source-post-id', postId);
+    }
 
-    pane.replaceChildren(buildArticleClone(mainPost));
-    pane.setAttribute('data-source-post-id', postId);
+    syncArticleTopicMeta(pane);
+    syncArticleFooterActions(pane);
   }
 
   function showArticleLoading(pane) {
     if (pane.querySelector(`.${ARTICLE_CLONE_CLASS}`)) return;
+    restoreFooterActions();
     const placeholder = document.createElement('div');
     placeholder.className = ARTICLE_CLONE_CLASS;
     placeholder.textContent = '正在加载正文...';
@@ -1050,6 +1166,14 @@
     return topic;
   }
 
+  function getNativeMainPost(nativeStream) {
+    return (
+      nativeStream?.querySelector?.('[data-post-number="1"].topic-post, .topic-post[data-post-number="1"]') ||
+      nativeStream?.querySelector?.('[data-post-id].topic-post, .topic-post') ||
+      null
+    );
+  }
+
   async function ensureSplitFromTopic(wrapper, nativeStream, topicId) {
     const articlePane = ensureArticlePane(wrapper, nativeStream);
     const commentsPane = ensureCommentsPane(wrapper);
@@ -1070,7 +1194,7 @@
       }
 
       const firstPost = pagerState.postsById.get(Number(pagerState.postIds[0]));
-      const mainPost = firstPost ? createPostFromJson(firstPost) : null;
+      const mainPost = getNativeMainPost(nativeStream) || (firstPost ? createPostFromJson(firstPost) : null);
       if (!mainPost) throw new Error('未找到主题正文');
 
       syncArticlePane(articlePane, mainPost);

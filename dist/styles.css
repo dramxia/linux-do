@@ -264,11 +264,8 @@ body.ldtk-topic-split-active .alert-info {
 }
 
 body.ldtk-topic-split-active [data-ldtk-topic-meta-source="true"],
-body.ldtk-topic-split-active .topic-map:not(.ldtk-topic-header-meta-inner),
-body.ldtk-topic-split-active .container.posts > .row > .topic-map,
-body.ldtk-topic-split-active .topic-area > .topic-map,
-body.ldtk-topic-split-active .topic-map-expanded,
-body.ldtk-topic-split-active .topic-map-section {
+body.ldtk-topic-split-active .container.posts > .row > :where(.topic-map, .topic-map-expanded, .topic-map__contents, .topic-map-section, .topic-map-summary, .topic-map-stats, .topic-map__stats, .topic-stats),
+body.ldtk-topic-split-active .topic-area > :where(.topic-map, .topic-map-expanded, .topic-map__contents, .topic-map-section, .topic-map-summary, .topic-map-stats, .topic-map__stats, .topic-stats) {
   display: none !important;
 }
 
@@ -288,6 +285,8 @@ body.ldtk-topic-split-active .topic-map-section {
 .ldtk-topic-article-pane {
   position: sticky;
   top: var(--ldtk-topic-top-offset);
+  display: flex;
+  flex-direction: column;
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
@@ -357,82 +356,50 @@ body.ldtk-topic-split-active .topic-list-bottom {
   display: none !important;
 }
 
-/* 原生帖子底部操作区收缩成悬浮面板，避免占用左栏阅读空间。 */
-body.ldtk-topic-split-active #topic-footer-buttons,
-body.ldtk-topic-split-active .topic-footer-main-buttons {
-  position: fixed !important;
-  left: 280px;
-  bottom: 20px;
-  z-index: 10000;
+/* 分栏模式下把原生操作区移动到文章栏底部，直接展开显示。 */
+.ldtk-topic-article-actions {
   box-sizing: border-box;
-  width: 44px;
-  max-width: min(520px, calc(44vw - 32px));
-  height: 44px;
-  max-height: 44px;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: hidden;
-  border: 1px solid var(--primary-low-mid, #555);
-  border-radius: 999px;
-  background: var(--secondary, #202020);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
-  opacity: 0.88;
-  transition:
-    width 0.18s ease,
-    max-height 0.18s ease,
-    padding 0.18s ease,
-    border-radius 0.18s ease,
-    opacity 0.18s ease;
+  width: 100%;
+  margin: -6px 0 20px;
+  padding-left: 64px;
 }
 
-body.ldtk-topic-split-active #topic-footer-buttons::before,
-body.ldtk-topic-split-active .topic-footer-main-buttons::before {
-  content: "操作";
-  position: absolute;
-  inset: 0;
-  display: flex;
+body.ldtk-topic-split-active .ldtk-topic-article-actions #topic-footer-buttons,
+body.ldtk-topic-split-active .ldtk-topic-article-actions .topic-footer-main-buttons {
+  position: static !important;
+  z-index: auto;
+  display: flex !important;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  color: var(--primary, #ddd);
-  font-size: 12px;
-  font-weight: 600;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-
-body.ldtk-topic-split-active #topic-footer-buttons > *,
-body.ldtk-topic-split-active .topic-footer-main-buttons > * {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-
-body.ldtk-topic-split-active #topic-footer-buttons:hover,
-body.ldtk-topic-split-active #topic-footer-buttons:focus-within,
-body.ldtk-topic-split-active .topic-footer-main-buttons:hover,
-body.ldtk-topic-split-active .topic-footer-main-buttons:focus-within {
-  width: min(520px, calc(44vw - 32px));
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100% !important;
   height: auto;
-  max-height: 160px;
+  max-height: none;
+  margin: 0 !important;
   padding: 10px !important;
-  overflow: auto;
+  overflow: visible;
+  border: 1px solid var(--primary-low-mid, #555);
   border-radius: 12px;
+  background: transparent;
+  box-shadow: none;
   opacity: 1;
 }
 
-body.ldtk-topic-split-active #topic-footer-buttons:hover::before,
-body.ldtk-topic-split-active #topic-footer-buttons:focus-within::before,
-body.ldtk-topic-split-active .topic-footer-main-buttons:hover::before,
-body.ldtk-topic-split-active .topic-footer-main-buttons:focus-within::before {
-  opacity: 0;
+body.ldtk-topic-split-active .ldtk-topic-article-actions #topic-footer-buttons::before,
+body.ldtk-topic-split-active .ldtk-topic-article-actions .topic-footer-main-buttons::before {
+  content: none !important;
 }
 
-body.ldtk-topic-split-active #topic-footer-buttons:hover > *,
-body.ldtk-topic-split-active #topic-footer-buttons:focus-within > *,
-body.ldtk-topic-split-active .topic-footer-main-buttons:hover > *,
-body.ldtk-topic-split-active .topic-footer-main-buttons:focus-within > * {
+body.ldtk-topic-split-active .ldtk-topic-article-actions #topic-footer-buttons > *,
+body.ldtk-topic-split-active .ldtk-topic-article-actions .topic-footer-main-buttons > * {
   opacity: 1;
   pointer-events: auto;
+}
+
+body.ldtk-topic-split-active .ldtk-topic-article-actions :where(.topic-notifications-options, .topic-notifications-button, .select-kit, .select-kit-header, .btn) {
+  max-width: 100%;
 }
 
 .ldtk-comments-pager {
@@ -489,6 +456,81 @@ body.ldtk-topic-split-active .topic-footer-main-buttons:focus-within > * {
 
 .ldtk-topic-article-clone {
   margin-top: 0;
+  flex: 1 1 auto;
+}
+
+.ldtk-topic-article-clone .topic-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.ldtk-topic-article-clone .post-menu-area,
+.ldtk-topic-article-clone .embedded-posts {
+  margin-top: auto;
+}
+
+.ldtk-topic-article-meta {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 8px 0 18px;
+  padding-left: 64px;
+}
+
+.ldtk-topic-article-meta-inner {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 12px 0 0 !important;
+  border-top: 1px solid var(--primary-low, rgba(128, 128, 128, 0.22));
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.ldtk-topic-article-meta-inner * {
+  box-sizing: border-box;
+}
+
+.ldtk-topic-article-meta-inner > :where(.buttons, .topic-map__buttons),
+.ldtk-topic-article-meta-inner > :has(> button, > .btn) {
+  flex: 0 0 auto;
+  order: 2;
+  margin-left: auto !important;
+}
+
+.ldtk-topic-article-meta-inner :where(.buttons, .topic-map__buttons),
+.ldtk-topic-article-meta-inner :where(.participants, .avatars, .topic-map-users, .topic-map__users, .topic-map__stats, .topic-map-stats, .stats),
+.ldtk-topic-article-meta-inner > :not(.buttons):not(.topic-map__buttons) {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.ldtk-topic-article-meta-inner > :where(.participants, .avatars, .topic-map-users, .topic-map__users, .topic-map__stats, .topic-map-stats, .stats),
+.ldtk-topic-article-meta-inner > :not(.buttons):not(.topic-map__buttons):not(:has(> button, > .btn)) {
+  flex: 1 1 auto;
+  order: 1;
+}
+
+.ldtk-topic-article-meta-inner :where(.number, .value) {
+  color: var(--tertiary, #2aa8ee);
+  font-weight: 700;
+}
+
+.ldtk-topic-article-meta-inner img.avatar,
+.ldtk-topic-article-meta-inner .avatar {
+  width: 32px !important;
+  height: 32px !important;
 }
 
 .ldtk-topic-article-clone .topic-body,
@@ -586,32 +628,9 @@ body.ldtk-topic-split-active .topic-footer-main-buttons:focus-within > * {
     overflow: visible;
   }
 
-  body.ldtk-topic-split-active #topic-footer-buttons,
-  body.ldtk-topic-split-active .topic-footer-main-buttons {
-    position: static !important;
-    width: auto;
-    max-width: none;
-    height: auto;
-    max-height: none;
-    margin: revert !important;
-    padding: revert !important;
-    overflow: visible;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-    opacity: 1;
-  }
-
-  body.ldtk-topic-split-active #topic-footer-buttons::before,
-  body.ldtk-topic-split-active .topic-footer-main-buttons::before {
-    content: none;
-  }
-
-  body.ldtk-topic-split-active #topic-footer-buttons > *,
-  body.ldtk-topic-split-active .topic-footer-main-buttons > * {
-    opacity: 1;
-    pointer-events: auto;
+  .ldtk-topic-article-meta,
+  .ldtk-topic-article-actions {
+    padding-left: 0;
   }
 
   .ldtk-topic-native-stream {
