@@ -487,6 +487,36 @@
   }
 
   // src/content/output.ts
+  var ToastManager = class {
+    el = null;
+    hideTimer = null;
+    show(message, duration = 2500) {
+      if (!this.el) {
+        this.el = document.createElement("div");
+        this.el.id = "ldcopy-toast";
+        document.body.appendChild(this.el);
+      }
+      if (this.hideTimer) clearTimeout(this.hideTimer);
+      this.el.textContent = message;
+      this.el.className = "ldcopy-toast ldcopy-toast-show";
+      this.hideTimer = setTimeout(() => {
+        this.hide();
+      }, duration);
+    }
+    hide() {
+      if (this.hideTimer) {
+        clearTimeout(this.hideTimer);
+        this.hideTimer = null;
+      }
+      if (this.el) {
+        this.el.className = "ldcopy-toast";
+      }
+    }
+  };
+  var toastManager = new ToastManager();
+  function showToast(message) {
+    toastManager.show(message);
+  }
   function formatPostMd(meta, rawMd, title, url, options = {}) {
     if (options.includeMetadata === false) return rawMd.trim();
     const sourceUrl = url + (meta.postNumber ? "#post-" + meta.postNumber : "");
@@ -524,21 +554,6 @@
   }
   function sanitizeFilename(name) {
     return name.replace(/[<>:"/\\|?*\n\r]/g, "_").replace(/\s+/g, " ").substring(0, 80);
-  }
-  function showToast(message) {
-    let toast = document.getElementById("ldcopy-toast");
-    if (!toast) {
-      toast = document.createElement("div");
-      toast.id = "ldcopy-toast";
-      document.body.appendChild(toast);
-    }
-    if (toast.hideTimer) clearTimeout(toast.hideTimer);
-    toast.textContent = message;
-    toast.className = "ldcopy-toast ldcopy-toast-show";
-    toast.hideTimer = setTimeout(() => {
-      toast.className = "ldcopy-toast";
-      toast.hideTimer = null;
-    }, 2500);
   }
 
   // src/content/markdown.ts
@@ -931,24 +946,35 @@ ${lines}
   }
 
   // src/content/layout/comment-pager.ts
-  var pagerState = {
-    topicId: "",
-    page: 1,
-    postIds: [],
-    postsById: /* @__PURE__ */ new Map(),
-    loading: false
+  var PagerState = class {
+    topicId = "";
+    page = 1;
+    postIds = [];
+    postsById = /* @__PURE__ */ new Map();
+    loading = false;
+    reset(topicId) {
+      this.topicId = topicId || "";
+      this.page = 1;
+      this.postIds = [];
+      this.postsById.clear();
+      this.loading = false;
+      document.querySelectorAll(`.${COMMENTS_PANE_CLASS}`).forEach((stream) => {
+        stream.removeAttribute("data-ldtk-pager-topic-id");
+        stream.removeAttribute("data-ldtk-pager-page");
+        stream.removeAttribute("data-ldtk-pager-key");
+      });
+    }
+    destroy() {
+      this.topicId = "";
+      this.page = 1;
+      this.postIds = [];
+      this.postsById.clear();
+      this.loading = false;
+    }
   };
+  var pagerState = new PagerState();
   function resetPager(topicId) {
-    pagerState.topicId = topicId || "";
-    pagerState.page = 1;
-    pagerState.postIds = [];
-    pagerState.postsById.clear();
-    pagerState.loading = false;
-    document.querySelectorAll(`.${COMMENTS_PANE_CLASS}`).forEach((stream) => {
-      stream.removeAttribute("data-ldtk-pager-topic-id");
-      stream.removeAttribute("data-ldtk-pager-page");
-      stream.removeAttribute("data-ldtk-pager-key");
-    });
+    pagerState.reset(topicId);
   }
   function getTotalPages() {
     return Math.max(1, Math.ceil(Math.max(0, pagerState.postIds.length - 1) / PAGE_SIZE));
@@ -1116,13 +1142,24 @@ ${lines}
   }
 
   // src/content/layout/resize-handler.ts
-  var resizeListener = null;
+  var ResizeHandler = class {
+    listener = null;
+    bind() {
+      if (this.listener) return;
+      this.listener = () => {
+        document.querySelectorAll(`.${WRAPPER_CLASS}`).forEach(updateSplitPaneHeight);
+      };
+      window.addEventListener("resize", this.listener);
+    }
+    unbind() {
+      if (!this.listener) return;
+      window.removeEventListener("resize", this.listener);
+      this.listener = null;
+    }
+  };
+  var resizeHandler = new ResizeHandler();
   function bindResizeHandler() {
-    if (resizeListener) return;
-    resizeListener = () => {
-      document.querySelectorAll(`.${WRAPPER_CLASS}`).forEach(updateSplitPaneHeight);
-    };
-    window.addEventListener("resize", resizeListener);
+    resizeHandler.bind();
   }
 
   // src/content/layout/split-pane-layout.ts
@@ -1458,41 +1495,72 @@ ${lines}
     registerMessageHandlers
   };
 
+  // src/content/refresh-state.ts
+  var RefreshState = class {
+    refreshTimer = null;
+    base64Timer = null;
+    inFlight = false;
+    pending = false;
+    // 去抖：清掉旧定时器，排一个新的。
+    scheduleRefresh(callback, delay = 150) {
+      if (this.refreshTimer) clearTimeout(this.refreshTimer);
+      this.refreshTimer = setTimeout(() => {
+        this.refreshTimer = null;
+        callback();
+      }, delay);
+    }
+    scheduleBase64(callback, delay = 100) {
+      if (this.base64Timer) clearTimeout(this.base64Timer);
+      this.base64Timer = setTimeout(() => {
+        this.base64Timer = null;
+        callback();
+      }, delay);
+    }
+    // 重入守卫：成功获取返回 true 并标记 in-flight；并发调用返回 false 由调用方标记 pending。
+    tryAcquire() {
+      if (this.inFlight) return false;
+      this.inFlight = true;
+      return true;
+    }
+    release() {
+      this.inFlight = false;
+    }
+    hasPending() {
+      return this.pending;
+    }
+    markPending() {
+      this.pending = true;
+    }
+    clearPending() {
+      this.pending = false;
+    }
+  };
+
   // src/content/index.ts
-  var refreshTimer = null;
-  var base64Timer = null;
-  var refreshInFlight = false;
-  var refreshPending = false;
+  var refreshState = new RefreshState();
   async function refreshEnhancements() {
-    if (refreshInFlight) {
-      refreshPending = true;
+    if (!refreshState.tryAcquire()) {
+      refreshState.markPending();
       return;
     }
-    refreshInFlight = true;
     Promise.resolve().then(async () => {
       await layout.applyTopicSplitLayout();
       await buttons.injectButtons();
       await base64.injectBase64Button();
     }).catch(() => {
     }).finally(() => {
-      refreshInFlight = false;
-      if (refreshPending) {
-        refreshPending = false;
+      refreshState.release();
+      if (refreshState.hasPending()) {
+        refreshState.clearPending();
         scheduleRefreshEnhancements();
       }
     });
   }
   function scheduleRefreshEnhancements(delay = 150) {
-    if (refreshTimer) clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => {
-      refreshTimer = null;
-      refreshEnhancements();
-    }, delay);
+    refreshState.scheduleRefresh(refreshEnhancements, delay);
   }
   function scheduleBase64ButtonRefresh(delay = 100) {
-    if (base64Timer) clearTimeout(base64Timer);
-    base64Timer = setTimeout(() => {
-      base64Timer = null;
+    refreshState.scheduleBase64(() => {
       base64.injectBase64Button();
     }, delay);
   }

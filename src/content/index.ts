@@ -4,19 +4,16 @@ import { buttons } from './buttons';
 import { base64 } from './base64';
 import { messages } from './messages';
 import { onSettingsChanged } from '../common/settings';
+import { RefreshState } from './refresh-state';
 
-let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-let base64Timer: ReturnType<typeof setTimeout> | null = null;
-let refreshInFlight = false;
-let refreshPending = false;
+const refreshState = new RefreshState();
 
 async function refreshEnhancements(): Promise<void> {
-  if (refreshInFlight) {
-    refreshPending = true;
+  if (!refreshState.tryAcquire()) {
+    refreshState.markPending();
     return;
   }
 
-  refreshInFlight = true;
   Promise.resolve().then(async () => {
     // 分栏会隐藏原生 post stream。必须先完成布局隔离，
     // 再给当前可见分页楼层注入按钮，避免改动原生滚动流导致抖动。
@@ -26,26 +23,20 @@ async function refreshEnhancements(): Promise<void> {
   }).catch(() => {
     // 页面增强失败不应影响宿主页面，后续 DOM 变化会再次触发刷新。
   }).finally(() => {
-    refreshInFlight = false;
-    if (refreshPending) {
-      refreshPending = false;
+    refreshState.release();
+    if (refreshState.hasPending()) {
+      refreshState.clearPending();
       scheduleRefreshEnhancements();
     }
   });
 }
 
 function scheduleRefreshEnhancements(delay = 150): void {
-  if (refreshTimer) clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(() => {
-    refreshTimer = null;
-    refreshEnhancements();
-  }, delay);
+  refreshState.scheduleRefresh(refreshEnhancements, delay);
 }
 
 function scheduleBase64ButtonRefresh(delay = 100): void {
-  if (base64Timer) clearTimeout(base64Timer);
-  base64Timer = setTimeout(() => {
-    base64Timer = null;
+  refreshState.scheduleBase64(() => {
     base64.injectBase64Button();
   }, delay);
 }

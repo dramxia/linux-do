@@ -1,10 +1,6 @@
 /* Linux.do 工具箱 — 输出与反馈模块 */
 import type { PostMeta } from './discourse';
 
-interface ToastElement extends HTMLDivElement {
-  hideTimer?: ReturnType<typeof setTimeout> | null;
-}
-
 interface FormatOptions {
   includeMetadata?: boolean;
 }
@@ -13,6 +9,45 @@ export interface PostMarkdown {
   meta: PostMeta;
   raw: string;
   markdown: string;
+}
+
+// Toast 生命周期封装为类实例。原先 hideTimer 作为动态属性挂在 DOM 元素上，
+// 现在收敛为 ToastManager 类，hideTimer 成为私有字段。单例 toastManager 供
+// showToast 函数委派使用，调用方 (buttons.ts/base64.ts/messages.ts) 不需改动。
+export class ToastManager {
+  private el: HTMLDivElement | null = null;
+  private hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+  show(message: string, duration = 2500): void {
+    if (!this.el) {
+      this.el = document.createElement('div');
+      this.el.id = 'ldcopy-toast';
+      document.body.appendChild(this.el);
+    }
+
+    if (this.hideTimer) clearTimeout(this.hideTimer);
+    this.el.textContent = message;
+    this.el.className = 'ldcopy-toast ldcopy-toast-show';
+    this.hideTimer = setTimeout(() => {
+      this.hide();
+    }, duration);
+  }
+
+  hide(): void {
+    if (this.hideTimer) {
+      clearTimeout(this.hideTimer);
+      this.hideTimer = null;
+    }
+    if (this.el) {
+      this.el.className = 'ldcopy-toast';
+    }
+  }
+}
+
+const toastManager = new ToastManager();
+
+export function showToast(message: string): void {
+  toastManager.show(message);
 }
 
 export function formatPostMd(meta: PostMeta, rawMd: string, title: string, url: string, options: FormatOptions = {}): string {
@@ -58,23 +93,6 @@ export function downloadFile(content: string, filename: string): void {
 
 export function sanitizeFilename(name: string): string {
   return name.replace(/[<>:"/\\|?*\n\r]/g, '_').replace(/\s+/g, ' ').substring(0, 80);
-}
-
-export function showToast(message: string): void {
-  let toast = document.getElementById('ldcopy-toast') as ToastElement | null;
-  if (!toast) {
-    toast = document.createElement('div') as ToastElement;
-    toast.id = 'ldcopy-toast';
-    document.body.appendChild(toast);
-  }
-
-  if (toast.hideTimer) clearTimeout(toast.hideTimer);
-  toast.textContent = message;
-  toast.className = 'ldcopy-toast ldcopy-toast-show';
-  toast.hideTimer = setTimeout(() => {
-    toast!.className = 'ldcopy-toast';
-    toast!.hideTimer = null;
-  }, 2500);
 }
 
 export const output = {

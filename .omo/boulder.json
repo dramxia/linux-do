@@ -8,7 +8,7 @@
       "plan_name": "refactor-toolkit",
       "status": "active",
       "started_at": "2026-07-22T09:31:06.433Z",
-      "updated_at": "2026-07-22T11:18:27.490Z",
+      "updated_at": "2026-07-22T11:38:51.310Z",
       "session_ids": [
         "opencode:ses_07714537dffe1eI7BYbqvMFq6f"
       ],
@@ -80,6 +80,19 @@
           "status": "completed",
           "ended_at": "2026-07-22T11:18:27.490Z",
           "elapsed_ms": 89507
+        },
+        "todo:6": {
+          "task_key": "todo:6",
+          "task_label": "6",
+          "task_title": "状态提取到类型化容器",
+          "session_id": "opencode:ses_076724e67ffeXijZMrVDg9p3Xo",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-22T11:38:51.310Z",
+          "started_at": "2026-07-22T11:37:50.337Z",
+          "status": "completed",
+          "ended_at": "2026-07-22T11:38:51.310Z",
+          "elapsed_ms": 60973
         }
       }
     }
@@ -87,7 +100,7 @@
   "active_plan": "/Users/misemo/project/my/plugin/linux-do-toolkit/.omo/plans/refactor-toolkit.md",
   "started_at": "2026-07-22T09:31:06.433Z",
   "status": "active",
-  "updated_at": "2026-07-22T11:18:27.490Z",
+  "updated_at": "2026-07-22T11:38:51.310Z",
   "session_ids": [
     "opencode:ses_07714537dffe1eI7BYbqvMFq6f"
   ],
@@ -159,6 +172,19 @@
       "status": "completed",
       "ended_at": "2026-07-22T11:18:27.490Z",
       "elapsed_ms": 89507
+    },
+    "todo:6": {
+      "task_key": "todo:6",
+      "task_label": "6",
+      "task_title": "状态提取到类型化容器",
+      "session_id": "opencode:ses_076724e67ffeXijZMrVDg9p3Xo",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-22T11:38:51.310Z",
+      "started_at": "2026-07-22T11:37:50.337Z",
+      "status": "completed",
+      "ended_at": "2026-07-22T11:38:51.310Z",
+      "elapsed_ms": 60973
     }
   },
   "agent": "atlas"

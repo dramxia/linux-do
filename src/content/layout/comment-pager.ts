@@ -9,29 +9,44 @@ import {
   PAGER_BUTTON_CLASS,
   PAGER_CLASS,
   PAGER_INFO_CLASS,
-  type PagerState,
 } from './dom-queries';
 import { createPostFromJson } from './post-renderer';
 
-const pagerState: PagerState = {
-  topicId: '',
-  page: 1,
-  postIds: [],
-  postsById: new Map<number, DiscoursePost>(),
-  loading: false,
-};
+// 分页状态封装为类实例。原先为模块级 const 对象 + 4 个 let 变量；
+// 现在收敛为单一 PagerState 实例，destroy() 提供显式重置入口。
+export class PagerState {
+  topicId = '';
+  page = 1;
+  postIds: Array<string | number> = [];
+  postsById = new Map<number, DiscoursePost>();
+  loading = false;
+
+  reset(topicId: string | null): void {
+    this.topicId = topicId || '';
+    this.page = 1;
+    this.postIds = [];
+    this.postsById.clear();
+    this.loading = false;
+    document.querySelectorAll<HTMLElement>(`.${COMMENTS_PANE_CLASS}`).forEach((stream) => {
+      stream.removeAttribute('data-ldtk-pager-topic-id');
+      stream.removeAttribute('data-ldtk-pager-page');
+      stream.removeAttribute('data-ldtk-pager-key');
+    });
+  }
+
+  destroy(): void {
+    this.topicId = '';
+    this.page = 1;
+    this.postIds = [];
+    this.postsById.clear();
+    this.loading = false;
+  }
+}
+
+const pagerState = new PagerState();
 
 function resetPager(topicId: string | null): void {
-  pagerState.topicId = topicId || '';
-  pagerState.page = 1;
-  pagerState.postIds = [];
-  pagerState.postsById.clear();
-  pagerState.loading = false;
-  document.querySelectorAll<HTMLElement>(`.${COMMENTS_PANE_CLASS}`).forEach((stream) => {
-    stream.removeAttribute('data-ldtk-pager-topic-id');
-    stream.removeAttribute('data-ldtk-pager-page');
-    stream.removeAttribute('data-ldtk-pager-key');
-  });
+  pagerState.reset(topicId);
 }
 
 function getTotalPages(): number {
@@ -245,4 +260,3 @@ export {
   ensureCommentPager,
   createPostFromJson,
 };
-

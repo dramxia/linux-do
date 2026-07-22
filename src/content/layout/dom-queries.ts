@@ -1,13 +1,4 @@
 /* Linux.do 工具箱 — 布局模块共享常量与工具函数 */
-import type { DiscoursePost } from '../discourse';
-
-export interface PagerState {
-  topicId: string;
-  page: number;
-  postIds: Array<string | number>;
-  postsById: Map<number, DiscoursePost>;
-  loading: boolean;
-}
 
 export const BODY_CLASS = 'ldtk-topic-split-active';
 export const WRAPPER_CLASS = 'ldtk-topic-split-wrapper';
