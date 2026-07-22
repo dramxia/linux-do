@@ -2,6 +2,7 @@
 import * as discourse from './discourse';
 import * as output from './output';
 import * as postExport from './post-export';
+import { on } from './event-bus';
 import { getSettings as _getSettings, type DiscourseSettings } from '../common/settings';
 
 const COPY_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
@@ -80,3 +81,11 @@ export const buttons = {
   injectButtons,
   removeInjectedActions,
 };
+
+// 订阅 layout 的 posts:rendered 事件，触发按钮注入。
+// emit 同步执行，等价于原先 comment-pager 直接调用 buttons.injectButtons()。
+// injectButtons 内部通过 .ldcopy-actions 存在性检查保证幂等，与 index.ts refreshEnhancements
+// 的初始加载调用不冲突（两者都调用 injectButtons，重复调用为 no-op）。
+on('posts:rendered', () => {
+  void injectButtons();
+});

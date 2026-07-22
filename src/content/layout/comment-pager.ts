@@ -1,7 +1,7 @@
 /* Linux.do 工具箱 — 评论分页状态机与加载编排 */
 import * as discourse from '../discourse';
 import type { DiscoursePost, TopicJson } from '../discourse';
-import * as buttons from '../buttons';
+import { emit } from '../event-bus';
 import {
   COMMENTS_PANE_CLASS,
   PAGED_COMMENT_CLASS,
@@ -191,7 +191,7 @@ async function loadPage(stream: HTMLElement, page: number): Promise<void> {
     pagerState.page = nextPage;
     renderCurrentPage(stream);
     if (shouldResetScroll) resetCommentsScroll(stream);
-    buttons.injectButtons?.();
+    emit('posts:rendered', { posts: pagerState.postIds });
   } catch (err) {
     setPagerStatus(stream, `评论加载失败：${(err as Error)?.message || '未知错误'}`, true);
   } finally {
