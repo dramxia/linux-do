@@ -217,3 +217,55 @@
 
 
 
+
+## 2026-07-22 T5 — Discourse API 性能优化 (IN PROGRESS)
+
+### 前置探针结果 (Probe)
+- **探针命令**: `curl -sS -m 15 'https://linux.do/t/1.json'` + `curl -sS -m 15 'https://linux.do/t/1/posts.json?post_ids[]=1&include_raw=true'`
+- **探针结果**: FAILED — Connection timed out after 15006ms (HTTP_STATUS:000, SIZE:0)。沙箱环境无法访问 linux.do。
+- **降级方案**: 保留串行 /raw/ 但加并发限制（Promise pool 5 并发）+ 429 Retry-After 退避（初始 1s 指数退避，最多 3 次重试）。
+- **include_raw 参数**: 因探针失败，无法验证 linux.do 是否支持 `include_raw=true` 参数。不修改 `fetchPostsByIds`（YAGNI — 降级路径不使用该参数，添加它会成为死代码）。若未来在可联网环境重新探针成功，可再添加。
+
+### 实施方案
+- 新增 `src/content/api-rate-limiter.ts`: `batchFetchWithBackoff` (Promise pool + 429 退避) + `RateLimitError` + `parseRetryAfter`
+- 修改 `src/content/discourse.ts`: `fetchRawPost` 在 429 时抛出 `RateLimitError` (携带 Retry-After 解析值)
+- 修改 `src/content/post-export.ts`: `collectLoadedPosts` 使用 `batchFetchWithBackoff` (concurrency=5, maxRetries=3, initialBackoffMs=1000)
+- `buildPostMarkdown` 签名不变 (降级路径仍调 `fetchRawPost`)
+- 新增 `test/api-rate-limiter.test.ts`: 单元测试 (并发限制、429 退避、最大重试、非429不重试、顺序保持、空输入)
+- 新增 `test/post-export.test.ts`: 集成测试 (collectLoadedPosts 批量 + 429 退避，fake timers + mock fetch)
+
+
+### Outcome (COMPLETED)
+- 前置探针 FAILED (网络不可达, HTTP 000) → 采用降级方案。
+- 所有 Verification 通过:
+  1. `grep 'Retry-After\|backoff' src/content/api-rate-limiter.ts` → 4 行匹配 (非空) ✅
+  2. `grep 'include_raw' src/content/post-export.ts` → 0 (降级路径不使用, 探针失败故不添加 fetchPostsByIds 的 include_raw 参数, 避免死代码) ✅ (降级豁免)
+  3. `npm run build && node --check content.js` → PASS (content.js 57.0kb) ✅
+  4. `npm test` → 133/133 通过 (含新增 api-rate-limiter.test.ts 17 tests + post-export.test.ts 7 tests) ✅
+  5. `tsc --noEmit` → PASS ✅
+
+### Files changed
+- NEW: `src/content/api-rate-limiter.ts` (122 pure LOC) — `RateLimitError` 类 + `parseRetryAfter` (支持秒数/HTTP-date) + `batchFetchWithBackoff` (Promise pool 并发限制 + 429 退避)。results/failures 分离设计避免重复计数。
+- NEW: `test/api-rate-limiter.test.ts` (17 tests) — parseRetryAfter (5)、RateLimitError (2)、batchFetchWithBackoff (10: 空输入/顺序/并发限制/Retry-After 退避/最大重试耗尽/非429不重试/等待时长/指数退避/maxBackoffMs 封顶)。
+- NEW: `test/post-export.test.ts` (7 tests) — collectLoadedPosts 集成测试 (空结果/批量收集/非429失败不重试/429 重试成功/429 重试耗尽失败/并发≤5/RateLimitError 携带 Retry-After)。
+- MODIFIED: `src/content/discourse.ts` — `fetchRawPost` 在 429 时抛出 `RateLimitError(parseRetryAfter(res.headers.get('Retry-After')))` 而非通用 HTTP 错误；新增 `import { RateLimitError, parseRetryAfter } from './api-rate-limiter'`。其他函数 (fetchTopicJson/fetchPostsByIds) 不变。
+- MODIFIED: `src/content/post-export.ts` (99→118 pure LOC) — `collectLoadedPosts` 从串行 for 循环改为 `batchFetchWithBackoff` (concurrency=5, maxRetries=3, initialBackoffMs=1000)。提取 `buildPostMarkdownFromRaw` 共享渲染路径 (buildPostMarkdown 调它, 批量路径也调它, 避免重复渲染逻辑)。buildPostMarkdown 签名不变 (buttons.ts 调用不受影响)。
+
+### Key design decisions
+1. **降级路径实现选择**: 探针失败后, 保留串行 /raw/ (每楼一个 fetch) 但用 Promise pool 限制为 5 并发。这比成功路径 (批量 posts.json?include_raw=true) 请求数多, 但在无法验证 include_raw 参数可用性时是唯一安全选择。若未来在可联网环境重新探针成功, 可再切换到批量路径。
+2. **不添加 fetchPostsByIds 的 include_raw 参数**: YAGNI — 降级路径不使用 fetchPostsByIds, 添加它会成为死代码。原计划要求"可选参数, 默认 false, 导出路径传 true", 但导出路径走 /raw/ 不走 fetchPostsByIds, 故取消 (todo 标记 cancelled)。
+3. **RateLimitError 携带 retryAfterMs**: 而非让 rate-limiter 自己解析 response。discourse.ts 的 fetchRawPost 解析 Retry-After 头并构造 RateLimitError, rate-limiter 只消费 err.retryAfterMs。这样 rate-limiter 不依赖 fetch/Response 类型, 可测试性更高 (测试直接构造 RateLimitError)。
+4. **results/failures 分离**: 初版 results 是定长数组 (失败项置 undefined) + failures 数组, 导致 collectLoadedPosts 双重计数。重构为 results 只含成功项 (带 index), failures 只含失败项 (带 index), 单一事实来源, 无重复。
+5. **buildPostMarkdownFromRaw 提取**: buildPostMarkdown 原本 fetch + 渲染耦合。提取渲染部分为 buildPostMarkdownFromRaw(postEl, meta, raw, settings), buildPostMarkdown 调它 (fetch 后), 批量路径也调它 (批量 fetch 后逐项渲染)。渲染逻辑 (normalizeDiscourseMd + replaceUploadUrls + ensureMarkdown + formatPostMd) 只有一处实现。
+6. **退避策略**: max(retryAfterMs, exponentialMs)。Retry-After 头值优先 (服务端建议), 但若头缺失 (retryAfterMs=0) 则用指数退避 (initialBackoffMs * 2^attempt, 封顶 maxBackoffMs)。这覆盖两种 429 场景: 带 Retry-After 头的标准 429, 和不带头的非标准 429。
+7. **maxRetries=3 (4 次尝试)**: Discourse max_user_api_reqs_per_minute=20, 5 并发在 12 秒内发完 20 请求即触发 429。3 次重试 + 指数退避 (1s+2s+4s=7s 等待) 足以让速率窗口滑过。超过 3 次重试则放弃该楼, 记入 failures, 不阻塞其他楼层。
+
+### Pitfalls avoided
+- **fake timers + advanceTimersByTimeAsync 分步推进**: 初版用单次 `advanceTimersByTimeAsync(5000)` 试图覆盖所有退避等待, 但 promise 链的微任务调度需要分步 await。改为按退避序列分步推进 (1000 → 2000 → 4000), 每步 await 让 microtask queue 排空。这是 vitest fake timers + 异步代码的标准模式。
+- **mock fetch 返回 Response-like 对象**: jsdom 不提供 fetch, 需手动 mock。构造 `{ ok, status, headers: { get }, text: async }` 最小 Response 形状, 避免 mock 整个 Response 类型。headers.get 需大小写不敏感 (HTTP 头名不区分大小写), 用 Map + toLowerCase()。
+- **window.location 不可直接赋值**: jsdom 的 window.location 是只读属性, 用 Object.defineProperty + configurable: true 覆盖, 使 getTopicId() (读 window.location.pathname) 能解析 /t/topic/123 → "123"。
+
+### Residual notes for downstream tasks
+- **include_raw 参数未验证**: 若未来在可联网环境探针成功, 可为 fetchPostsByIds 添加 include_raw 参数, 并将 collectLoadedPosts 切换到批量路径 (fetchTopicJson 获取 stream[], 分批 20 个 post_id 调 fetchPostsByIds(include_raw=true))。当前降级路径的 rate-limiter 基础设施可复用。
+- **maxBackoffMs=30000 默认值**: 当前 collectLoadedPosts 未传 maxBackoffMs, 用默认 30s。若 Discourse 429 Retry-After 头返回 >30s, 会被封顶到 30s (取 max(header, exponential), exponential 封顶 30s, 但 header 值不封顶)。实际 header 值通常 <10s, 不会触发。
+- **buildPostMarkdown 仍调 fetchRawPost**: 单楼复制/下载按钮 (buttons.ts) 仍走单次 /raw/ 无退避路径。若按钮也需 429 退避, 可让 buildPostMarkdown 也走 rate-limiter, 但单次请求触发 429 概率低, 当前不优化。

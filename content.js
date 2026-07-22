@@ -1,5 +1,84 @@
 "use strict";
 (() => {
+  // src/content/api-rate-limiter.ts
+  var RateLimitError = class extends Error {
+    retryAfterMs;
+    constructor(retryAfterMs, message = "HTTP 429 Too Many Requests") {
+      super(message);
+      this.name = "RateLimitError";
+      this.retryAfterMs = retryAfterMs;
+    }
+  };
+  function parseRetryAfter(headerValue, now = /* @__PURE__ */ new Date()) {
+    if (!headerValue) return 0;
+    const trimmed = headerValue.trim();
+    if (!trimmed) return 0;
+    if (/^\d+$/.test(trimmed)) {
+      return Number(trimmed) * 1e3;
+    }
+    const date = new Date(trimmed);
+    if (!Number.isNaN(date.getTime())) {
+      return Math.max(0, date.getTime() - now.getTime());
+    }
+    return 0;
+  }
+  async function batchFetchWithBackoff(options) {
+    const {
+      items,
+      task,
+      concurrency,
+      maxRetries = 3,
+      initialBackoffMs = 1e3,
+      maxBackoffMs = 3e4
+    } = options;
+    const results = [];
+    const failures = [];
+    if (items.length === 0) return { results, failures };
+    let cursor = 0;
+    async function runItem(item, index) {
+      let attempt = 0;
+      while (true) {
+        try {
+          const value = await task(item, attempt);
+          results.push({ index, value });
+          return;
+        } catch (err) {
+          if (err instanceof RateLimitError && attempt < maxRetries) {
+            const exponentialMs = Math.min(
+              initialBackoffMs * 2 ** attempt,
+              maxBackoffMs
+            );
+            const waitMs = Math.max(err.retryAfterMs, exponentialMs);
+            await sleep(waitMs);
+            attempt += 1;
+            continue;
+          }
+          failures.push({
+            index,
+            item,
+            error: err instanceof Error ? err : new Error(String(err))
+          });
+          return;
+        }
+      }
+    }
+    async function worker() {
+      while (cursor < items.length) {
+        const index = cursor;
+        cursor += 1;
+        await runItem(items[index], index);
+      }
+    }
+    const poolSize = Math.min(concurrency, items.length);
+    await Promise.all(Array.from({ length: poolSize }, () => worker()));
+    return { results, failures };
+  }
+  function sleep(ms) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
   // src/content/discourse.ts
   function isHTMLElement(el) {
     return el instanceof HTMLElement;
@@ -41,6 +120,9 @@
   async function fetchRawPost(topicId, postNumber) {
     if (!topicId || !postNumber) throw new Error("\u7F3A\u5C11\u4E3B\u9898 ID \u6216\u697C\u5C42\u53F7");
     const res = await fetch(`/raw/${topicId}/${postNumber}`, { credentials: "same-origin" });
+    if (res.status === 429) {
+      throw new RateLimitError(parseRetryAfter(res.headers.get("Retry-After")));
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.text();
   }
@@ -688,6 +770,9 @@ ${lines}
     const topicId = getTopicId();
     const meta = getPostMeta(postEl);
     const raw = await fetchRawPost(topicId, meta.postNumber);
+    return buildPostMarkdownFromRaw(postEl, meta, raw, settings);
+  }
+  function buildPostMarkdownFromRaw(postEl, meta, raw, settings) {
     const normalized = normalizeDiscourseMd(raw);
     const processedRaw = settings.replaceUploadUrls === false ? normalized : replaceUploadUrls(normalized, getPostImages(postEl));
     const md = ensureMarkdown(processedRaw);
@@ -712,28 +797,41 @@ ${lines}
   }
   async function collectLoadedPosts(settings) {
     const postEls = Array.from(getPostElements());
-    const posts = [];
-    const failures = [];
-    for (const [index, postEl] of postEls.entries()) {
-      try {
-        const result = await buildPostMarkdown(postEl, settings);
-        posts.push({ meta: result.meta, raw: result.raw });
-      } catch (err) {
-        const meta = getFallbackMeta(postEl, index);
-        failures.push({
-          meta,
-          error: err?.message || "\u672A\u77E5\u9519\u8BEF"
-        });
+    const items = postEls.map((postEl, index) => ({
+      postEl,
+      meta: getFallbackMeta(postEl, index),
+      index
+    }));
+    const topicId = getTopicId();
+    const { results, failures } = await batchFetchWithBackoff({
+      items,
+      concurrency: COLLECT_CONCURRENCY,
+      maxRetries: COLLECT_MAX_RETRIES,
+      initialBackoffMs: COLLECT_INITIAL_BACKOFF_MS,
+      task: async (item) => {
+        const raw = await fetchRawPost(topicId, item.meta.postNumber);
+        return buildPostMarkdownFromRaw(item.postEl, item.meta, raw, settings);
       }
-    }
+    });
+    const posts = results.map(({ value }) => {
+      const built = value;
+      return { meta: built.meta, raw: built.raw };
+    });
+    const postFailures = failures.map((failure) => ({
+      meta: failure.item.meta,
+      error: failure.error.message || "\u672A\u77E5\u9519\u8BEF"
+    }));
     return {
       posts,
-      failures,
+      failures: postFailures,
       total: postEls.length,
       successCount: posts.length,
-      failureCount: failures.length
+      failureCount: postFailures.length
     };
   }
+  var COLLECT_CONCURRENCY = 5;
+  var COLLECT_MAX_RETRIES = 3;
+  var COLLECT_INITIAL_BACKOFF_MS = 1e3;
 
   // src/content/buttons.ts
   var COPY_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';

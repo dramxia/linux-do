@@ -8,7 +8,7 @@
       "plan_name": "refactor-toolkit",
       "status": "active",
       "started_at": "2026-07-22T09:31:06.433Z",
-      "updated_at": "2026-07-22T10:13:25.933Z",
+      "updated_at": "2026-07-22T11:18:27.490Z",
       "session_ids": [
         "opencode:ses_07714537dffe1eI7BYbqvMFq6f"
       ],
@@ -20,15 +20,15 @@
         "todo:1": {
           "task_key": "todo:1",
           "task_label": "1",
-          "task_title": "ES modules 迁移 + esbuild 构建系统",
-          "session_id": "opencode:ses_076d299a8ffenY2ppKLoHy2fkj",
+          "task_title": "`src/content/layout/split-pane-layout.ts` — 集群 C+G+O+I+N: split-pane 容器/高度/文章面板克隆/顶层编排/拆除恢复/原生主帖探测 (行53-82+371-464+767-817+466-490+759-765)",
+          "session_id": "opencode:ses_0769d21deffe71zM4hFgk4v8pv",
           "agent": "Sisyphus-Junior",
           "category": "deep",
-          "updated_at": "2026-07-22T09:50:31.283Z",
           "started_at": "2026-07-22T09:47:12.164Z",
+          "ended_at": "2026-07-22T10:50:45.176Z",
+          "elapsed_ms": 3813012,
           "status": "completed",
-          "ended_at": "2026-07-22T09:50:31.283Z",
-          "elapsed_ms": 199119
+          "updated_at": "2026-07-22T10:50:45.176Z"
         },
         "todo:2": {
           "task_key": "todo:2",
@@ -42,6 +42,44 @@
           "status": "completed",
           "ended_at": "2026-07-22T10:13:25.933Z",
           "elapsed_ms": 143583
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "task_title": "测试基础设施",
+          "session_id": "opencode:ses_076ae4084ffeQVl2KvpAgc0uqa",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-22T10:31:43.278Z",
+          "started_at": "2026-07-22T10:29:50.313Z",
+          "status": "completed",
+          "ended_at": "2026-07-22T10:31:43.278Z",
+          "elapsed_ms": 112965
+        },
+        "todo:4": {
+          "task_key": "todo:4",
+          "task_label": "4",
+          "task_title": "layout.js 拆分为 7 个内聚模块",
+          "session_id": "opencode:ses_0769d21deffe71zM4hFgk4v8pv",
+          "agent": "Sisyphus-Junior",
+          "updated_at": "2026-07-22T10:54:45.117Z",
+          "started_at": "2026-07-22T10:54:00.019Z",
+          "status": "completed",
+          "ended_at": "2026-07-22T10:54:45.116Z",
+          "elapsed_ms": 45097
+        },
+        "todo:5": {
+          "task_key": "todo:5",
+          "task_label": "5",
+          "task_title": "Discourse API 性能优化",
+          "session_id": "opencode:ses_07687744affeJxSScq7nGhJh7A",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-22T11:18:27.490Z",
+          "started_at": "2026-07-22T11:16:57.983Z",
+          "status": "completed",
+          "ended_at": "2026-07-22T11:18:27.490Z",
+          "elapsed_ms": 89507
         }
       }
     }
@@ -49,7 +87,7 @@
   "active_plan": "/Users/misemo/project/my/plugin/linux-do-toolkit/.omo/plans/refactor-toolkit.md",
   "started_at": "2026-07-22T09:31:06.433Z",
   "status": "active",
-  "updated_at": "2026-07-22T10:13:25.933Z",
+  "updated_at": "2026-07-22T11:18:27.490Z",
   "session_ids": [
     "opencode:ses_07714537dffe1eI7BYbqvMFq6f"
   ],
@@ -61,15 +99,15 @@
     "todo:1": {
       "task_key": "todo:1",
       "task_label": "1",
-      "task_title": "ES modules 迁移 + esbuild 构建系统",
-      "session_id": "opencode:ses_076d299a8ffenY2ppKLoHy2fkj",
+      "task_title": "`src/content/layout/split-pane-layout.ts` — 集群 C+G+O+I+N: split-pane 容器/高度/文章面板克隆/顶层编排/拆除恢复/原生主帖探测 (行53-82+371-464+767-817+466-490+759-765)",
+      "session_id": "opencode:ses_0769d21deffe71zM4hFgk4v8pv",
       "agent": "Sisyphus-Junior",
       "category": "deep",
-      "updated_at": "2026-07-22T09:50:31.283Z",
       "started_at": "2026-07-22T09:47:12.164Z",
+      "ended_at": "2026-07-22T10:50:45.176Z",
+      "elapsed_ms": 3813012,
       "status": "completed",
-      "ended_at": "2026-07-22T09:50:31.283Z",
-      "elapsed_ms": 199119
+      "updated_at": "2026-07-22T10:50:45.176Z"
     },
     "todo:2": {
       "task_key": "todo:2",
@@ -83,6 +121,44 @@
       "status": "completed",
       "ended_at": "2026-07-22T10:13:25.933Z",
       "elapsed_ms": 143583
+    },
+    "todo:3": {
+      "task_key": "todo:3",
+      "task_label": "3",
+      "task_title": "测试基础设施",
+      "session_id": "opencode:ses_076ae4084ffeQVl2KvpAgc0uqa",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-22T10:31:43.278Z",
+      "started_at": "2026-07-22T10:29:50.313Z",
+      "status": "completed",
+      "ended_at": "2026-07-22T10:31:43.278Z",
+      "elapsed_ms": 112965
+    },
+    "todo:4": {
+      "task_key": "todo:4",
+      "task_label": "4",
+      "task_title": "layout.js 拆分为 7 个内聚模块",
+      "session_id": "opencode:ses_0769d21deffe71zM4hFgk4v8pv",
+      "agent": "Sisyphus-Junior",
+      "updated_at": "2026-07-22T10:54:45.117Z",
+      "started_at": "2026-07-22T10:54:00.019Z",
+      "status": "completed",
+      "ended_at": "2026-07-22T10:54:45.116Z",
+      "elapsed_ms": 45097
+    },
+    "todo:5": {
+      "task_key": "todo:5",
+      "task_label": "5",
+      "task_title": "Discourse API 性能优化",
+      "session_id": "opencode:ses_07687744affeJxSScq7nGhJh7A",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-22T11:18:27.490Z",
+      "started_at": "2026-07-22T11:16:57.983Z",
+      "status": "completed",
+      "ended_at": "2026-07-22T11:18:27.490Z",
+      "elapsed_ms": 89507
     }
   },
   "agent": "atlas"

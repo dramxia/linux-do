@@ -1,4 +1,5 @@
 /* Linux.do 工具箱 — Discourse 页面适配模块 */
+import { RateLimitError, parseRetryAfter } from './api-rate-limiter';
 
 export interface PostMeta {
   postId: string;
@@ -87,6 +88,9 @@ export function getPostMeta(postEl: HTMLElement): PostMeta {
 export async function fetchRawPost(topicId: string | null, postNumber: string): Promise<string> {
   if (!topicId || !postNumber) throw new Error('缺少主题 ID 或楼层号');
   const res = await fetch(`/raw/${topicId}/${postNumber}`, { credentials: 'same-origin' });
+  if (res.status === 429) {
+    throw new RateLimitError(parseRetryAfter(res.headers.get('Retry-After')));
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.text();
 }
