@@ -193,6 +193,7 @@ export function normalizeDiscourseMd(md: string): string {
 export const markdown = {
   isHtmlContent,
   htmlToMarkdown,
+  htmlTableToMarkdown,
   ensureMarkdown,
   normalizeDiscourseMd,
 };

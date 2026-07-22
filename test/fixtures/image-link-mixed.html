@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Image + link + onebox mixed fixture</title></head>
+<body>
+  <p>Paragraph with an inline image: <img src="https://cdn.example.com/upload/image.png" alt="screenshot"></p>
+
+  <div class="lightbox-wrapper">
+    <a class="lightbox" href="https://cdn.example.com/original/big.jpg" title="big.jpg">
+      <img src="https://cdn.example.com/upload/thumb.jpg" alt="big" data-original-href="https://cdn.example.com/original/big.jpg">
+    </a>
+  </div>
+
+  <p>External link: <a href="https://example.org/resource">example resource</a>.</p>
+
+  <div class="onebox">
+    <article class="onebox-body">
+      <h3>foo/bar repository</h3>
+      <p>Some description from the linked page.</p>
+    </article>
+    <header class="source">
+      <a href="https://github.com/foo/bar">github.com</a>
+    </header>
+  </div>
+</body>
+</html>

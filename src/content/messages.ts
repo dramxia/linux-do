@@ -39,12 +39,12 @@ interface ErrorResponse {
 
 type MessageResponse = InfoResponse | SuccessResponse | ExportResponse | ErrorResponse;
 
-function assertExportResult(result: ExportResult): void {
+export function assertExportResult(result: ExportResult): void {
   if (result.total === 0) throw new Error('当前页面没有检测到已加载楼层');
   if (result.successCount === 0) throw new Error('已加载楼层全部导出失败');
 }
 
-function getExportToastPrefix(result: ExportResult): string {
+export function getExportToastPrefix(result: ExportResult): string {
   if (result.failureCount === 0) return '✅';
   return `⚠️ 已处理 ${result.successCount}/${result.total} 个楼层，${result.failureCount} 个失败。`;
 }

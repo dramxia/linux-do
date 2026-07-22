@@ -563,7 +563,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     stream.scrollTop = 0;
   }
 
-  function escapeHtml(value: unknown): string {
+  export function escapeHtml(value: unknown): string {
     return String(value ?? '').replace(/[&<>"']/g, (char) => ({
       '&': '&amp;',
       '<': '&lt;',
@@ -573,7 +573,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     }[char] as string));
   }
 
-  function escapeAttr(value: unknown): string {
+  export function escapeAttr(value: unknown): string {
     return escapeHtml(value).replace(/`/g, '&#96;');
   }
 
