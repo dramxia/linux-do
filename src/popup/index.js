@@ -1,6 +1,7 @@
 /* Linux.do 工具箱 — Popup 入口 */
+import { getSettings as _getSettings, saveSettings as _saveSettings } from '../common/settings.js';
+
 document.addEventListener('DOMContentLoaded', async () => {
-  const settingsApi = globalThis.LinuxDoToolkit.settings;
   const infoEl = document.getElementById('info');
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
@@ -13,14 +14,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   async function loadSettings() {
-    const settings = await settingsApi.getSettings();
+    const settings = await _getSettings();
     Object.entries(settingInputs).forEach(([key, input]) => {
       if (input) input.checked = Boolean(settings[key]);
     });
   }
 
   async function saveSetting(key, checked) {
-    await settingsApi.saveSettings({ [key]: checked });
+    await _saveSettings({ [key]: checked });
     if (tab?.id) {
       chrome.tabs.sendMessage(tab.id, { action: 'refreshEnhancements' }, () => {});
     }

@@ -4,7 +4,7 @@
   "private": true,
   "description": "Linux.do 浏览器工具箱：Markdown 导出与阅读辅助",
   "scripts": {
-    "build": "node scripts/build.js",
+    "build": "node scripts/build.mjs",
     "check": "npm run build && node --check content.js && node --check popup.js && node -e \"JSON.parse(require('fs').readFileSync('manifest.json','utf8'))\""
   },
   "keywords": [
@@ -13,5 +13,8 @@
     "markdown",
     "discourse"
   ],
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
 }

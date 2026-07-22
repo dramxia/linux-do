@@ -1,10 +1,9 @@
 /* Linux.do 工具箱 — 主题分栏布局模块 */
-(() => {
-  'use strict';
+import * as discourse from './discourse.js';
+import * as buttons from './buttons.js';
+import { getSettings as _getSettings } from '../common/settings.js';
 
-  const namespace = globalThis.LinuxDoToolkit = globalThis.LinuxDoToolkit || {};
-
-  const BODY_CLASS = 'ldtk-topic-split-active';
+const BODY_CLASS = 'ldtk-topic-split-active';
   const WRAPPER_CLASS = 'ldtk-topic-split-wrapper';
   const ARTICLE_PANE_CLASS = 'ldtk-topic-article-pane';
   const ARTICLE_CLONE_CLASS = 'ldtk-topic-article-clone';
@@ -651,7 +650,6 @@
 
     try {
       if (missingIds.length) {
-        const { discourse } = namespace;
         const posts = await discourse.fetchPostsByIds(pagerState.topicId, missingIds);
         posts.forEach((post) => {
           if (post?.id) pagerState.postsById.set(Number(post.id), post);
@@ -661,7 +659,7 @@
       pagerState.page = nextPage;
       renderCurrentPage(stream);
       if (shouldResetScroll) resetCommentsScroll(stream);
-      namespace.buttons?.injectButtons?.();
+      buttons.injectButtons?.();
     } catch (err) {
       setPagerStatus(stream, `评论加载失败：${err?.message || '未知错误'}`, true);
     } finally {
@@ -707,7 +705,6 @@
       pagerState.loading = true;
 
       try {
-        const { discourse } = namespace;
         const topic = await discourse.fetchTopicJson(topicId);
         pagerState.postIds = topic?.post_stream?.stream || [];
         (topic?.post_stream?.posts || []).forEach((post) => {
@@ -745,9 +742,8 @@
     }
   }
 
-  async function loadTopicSnapshot(topicId) {
-    const { discourse } = namespace;
-    const topic = await discourse.fetchTopicJson(topicId);
+async function loadTopicSnapshot(topicId) {
+  const topic = await discourse.fetchTopicJson(topicId);
     const posts = topic?.post_stream?.posts || [];
     pagerState.postIds = topic?.post_stream?.stream || posts.map((post) => post.id).filter(Boolean);
     posts.forEach((post) => {
@@ -799,10 +795,9 @@
     }
   }
 
-  async function applyTopicSplitLayout() {
-    const { discourse, settings: settingsApi } = namespace;
-    const settings = await settingsApi.getSettings();
-    const topicId = discourse.getTopicId();
+async function applyTopicSplitLayout() {
+  const settings = await _getSettings();
+  const topicId = discourse.getTopicId();
 
     if (!settings.enableSplitLayout || !topicId) {
       restoreTopicSplitLayout();
@@ -820,8 +815,7 @@
     document.querySelectorAll(`.${WRAPPER_CLASS}`).forEach(updateSplitPaneHeight);
   });
 
-  namespace.layout = {
-    applyTopicSplitLayout,
-    restoreTopicSplitLayout,
-  };
-})();
+export const layout = {
+  applyTopicSplitLayout,
+  restoreTopicSplitLayout,
+};
