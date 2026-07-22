@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { escapeHtml, escapeAttr } from '../src/content/layout';
+import { escapeHtml, escapeAttr } from '../src/content/layout/dom-queries';
 
 describe('escapeHtml', () => {
   it('escapes all five HTML special chars (& < > " \')', () => {

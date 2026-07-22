@@ -1,5 +1,5 @@
 /* Linux.do 工具箱 — Content Script 入口 */
-import { layout } from './layout';
+import { layout } from './layout/split-pane-layout';
 import { buttons } from './buttons';
 import { base64 } from './base64';
 import { messages } from './messages';
