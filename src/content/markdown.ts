@@ -1,7 +1,7 @@
 /* Linux.do 工具箱 — Markdown 转换模块 */
 
 // 检测内容是否为 HTML（而非纯 Markdown）。
-function isHtmlContent(text) {
+function isHtmlContent(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
 
@@ -18,11 +18,11 @@ function isHtmlContent(text) {
   return /^<(?!p>|\/p>)[a-zA-Z][\s\S]*>/.test(trimmed);
 }
 
-function htmlTableToMarkdown(tableEl) {
-  const rows = [];
+function htmlTableToMarkdown(tableEl: HTMLElement): string {
+  const rows: string[][] = [];
   tableEl.querySelectorAll('tr').forEach((tr) => {
     const cells = Array.from(tr.querySelectorAll('td, th')).map((cell) => {
-      return cell.textContent.trim().replace(/\|/g, '\\|');
+      return cell.textContent?.trim().replace(/\|/g, '\\|') || '';
     });
     rows.push(cells);
   });
@@ -34,7 +34,7 @@ function htmlTableToMarkdown(tableEl) {
     while (row.length < colCount) row.push('');
   });
 
-  const lines = [];
+  const lines: string[] = [];
   lines.push('| ' + rows[0].join(' | ') + ' |');
   lines.push('| ' + rows[0].map(() => '---').join(' | ') + ' |');
   for (let i = 1; i < rows.length; i += 1) {
@@ -45,16 +45,17 @@ function htmlTableToMarkdown(tableEl) {
 }
 
 // 轻量 HTML → Markdown 转换器，覆盖 Discourse 常见结构。
-function htmlToMarkdown(html) {
+function htmlToMarkdown(html: string): string {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
 
-  function walk(node) {
-    if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+  function walk(node: Node): string {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
 
-    const tag = node.tagName.toLowerCase();
-    const children = Array.from(node.childNodes).map(walk).join('');
+    const el = node as HTMLElement;
+    const tag = el.tagName.toLowerCase();
+    const children = Array.from(el.childNodes).map(walk).join('');
 
     switch (tag) {
       case 'h1': return `\n# ${children.trim()}\n\n`;
@@ -86,20 +87,20 @@ function htmlToMarkdown(html) {
         return text ? `\`${text}\`` : '';
       }
       case 'pre': {
-        const codeEl = node.querySelector('code');
+        const codeEl = el.querySelector('code');
         const lang = codeEl?.className?.match(/lang-(\w+)/)?.[1] || '';
-        const codeText = codeEl ? codeEl.textContent : node.textContent;
+        const codeText = codeEl ? (codeEl.textContent || '') : (el.textContent || '');
         return `\n\`\`\`${lang}\n${codeText.trim()}\n\`\`\`\n\n`;
       }
       case 'a': {
-        const href = node.getAttribute('href') || '';
+        const href = el.getAttribute('href') || '';
         const text = children.trim();
         if (!text) return '';
         return href && href !== text ? `[${text}](${href})` : text;
       }
       case 'img': {
-        const src = node.getAttribute('src') || '';
-        const alt = node.getAttribute('alt') || '';
+        const src = el.getAttribute('src') || '';
+        const alt = el.getAttribute('alt') || '';
         return src ? `![${alt}](${src})` : '';
       }
       case 'blockquote': {
@@ -107,10 +108,10 @@ function htmlToMarkdown(html) {
         return `\n${lines}\n\n`;
       }
       case 'aside': {
-        if (node.classList?.contains('quote')) {
-          const titleEl = node.querySelector('.quote-controls, [data-username]');
-          const quoteUser = node.getAttribute('data-username') || titleEl?.getAttribute('data-username') || '';
-          const blockquote = node.querySelector(':scope > blockquote');
+        if (el.classList?.contains('quote')) {
+          const titleEl = el.querySelector('.quote-controls, [data-username]');
+          const quoteUser = el.getAttribute('data-username') || titleEl?.getAttribute('data-username') || '';
+          const blockquote = el.querySelector(':scope > blockquote');
           const content = blockquote ? Array.from(blockquote.childNodes).map(walk).join('').trim() : children.trim();
           const attribution = quoteUser ? `**${quoteUser} said:**\n` : '';
           const lines = (attribution + content).split('\n').map((line) => `> ${line}`).join('\n');
@@ -119,36 +120,36 @@ function htmlToMarkdown(html) {
         return children;
       }
       case 'ul': {
-        return '\n' + Array.from(node.children).map((li) => {
+        return '\n' + Array.from(el.children).map((li) => {
           return li.tagName?.toLowerCase() === 'li' ? `- ${walk(li).trim()}` : walk(li);
         }).join('\n') + '\n\n';
       }
       case 'ol': {
-        return '\n' + Array.from(node.children).map((li, index) => {
+        return '\n' + Array.from(el.children).map((li, index) => {
           return li.tagName?.toLowerCase() === 'li' ? `${index + 1}. ${walk(li).trim()}` : walk(li);
         }).join('\n') + '\n\n';
       }
       case 'li': return children;
-      case 'table': return htmlTableToMarkdown(node);
+      case 'table': return htmlTableToMarkdown(el);
       case 'sup': return `<sup>${children}</sup>`;
       case 'sub': return `<sub>${children}</sub>`;
       case 'mark': return `==${children.trim()}==`;
       case 'span': {
-        if (node.classList?.contains('mention')) return children.trim() || node.textContent.trim();
+        if (el.classList?.contains('mention')) return children.trim() || (el.textContent?.trim() || '');
         return children;
       }
       case 'div': {
-        if (node.classList?.contains('lightbox-wrapper')) {
-          const img = node.querySelector('img');
+        if (el.classList?.contains('lightbox-wrapper')) {
+          const img = el.querySelector('img');
           if (img) {
             const src = img.getAttribute('data-original-href') || img.getAttribute('src') || '';
             const alt = img.getAttribute('alt') || '';
             return src ? `\n![${alt}](${src})\n` : children;
           }
         }
-        if (node.classList?.contains('onebox')) {
-          const link = node.querySelector('a[href]');
-          const title = node.querySelector('.onebox-body h3, .source a')?.textContent?.trim();
+        if (el.classList?.contains('onebox')) {
+          const link = el.querySelector('a[href]');
+          const title = el.querySelector('.onebox-body h3, .source a')?.textContent?.trim() || '';
           const href = link?.getAttribute('href') || '';
           if (title && href) return `\n[${title}](${href})\n`;
         }
@@ -180,12 +181,12 @@ function htmlToMarkdown(html) {
   return walk(doc.body).replace(/\n{3,}/g, '\n\n').trim();
 }
 
-export function ensureMarkdown(rawContent) {
+export function ensureMarkdown(rawContent: string): string {
   const trimmed = rawContent.trim();
   return isHtmlContent(trimmed) ? htmlToMarkdown(trimmed) : trimmed;
 }
 
-export function normalizeDiscourseMd(md) {
+export function normalizeDiscourseMd(md: string): string {
   return md.replace(/!\[([^\]]+?)\|(\d+x\d+(?:x\d+)?(?:\|[^\]]*)?)\]\(/g, '![$1](');
 }
 

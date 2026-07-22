@@ -1,16 +1,16 @@
 /* Linux.do 工具箱 — Content Script 入口 */
-import { layout } from './layout.js';
-import { buttons } from './buttons.js';
-import { base64 } from './base64.js';
-import { messages } from './messages.js';
-import { onSettingsChanged } from '../common/settings.js';
+import { layout } from './layout';
+import { buttons } from './buttons';
+import { base64 } from './base64';
+import { messages } from './messages';
+import { onSettingsChanged } from '../common/settings';
 
-let refreshTimer = null;
-let base64Timer = null;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let base64Timer: ReturnType<typeof setTimeout> | null = null;
 let refreshInFlight = false;
 let refreshPending = false;
 
-async function refreshEnhancements() {
+async function refreshEnhancements(): Promise<void> {
   if (refreshInFlight) {
     refreshPending = true;
     return;
@@ -34,7 +34,7 @@ async function refreshEnhancements() {
   });
 }
 
-function scheduleRefreshEnhancements(delay = 150) {
+function scheduleRefreshEnhancements(delay = 150): void {
   if (refreshTimer) clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
@@ -42,7 +42,7 @@ function scheduleRefreshEnhancements(delay = 150) {
   }, delay);
 }
 
-function scheduleBase64ButtonRefresh(delay = 100) {
+function scheduleBase64ButtonRefresh(delay = 100): void {
   if (base64Timer) clearTimeout(base64Timer);
   base64Timer = setTimeout(() => {
     base64Timer = null;
@@ -50,14 +50,14 @@ function scheduleBase64ButtonRefresh(delay = 100) {
   }, delay);
 }
 
-function bindDynamicPageEvents() {
+function bindDynamicPageEvents(): void {
   document.addEventListener('selectionchange', () => {
     scheduleBase64ButtonRefresh();
   });
 
   const observer = new MutationObserver((mutations) => {
     const onlyToolkitChanges = mutations.every((mutation) => {
-      const target = mutation.target;
+      const target = mutation.target as Element | null;
       const addedNodes = Array.from(mutation.addedNodes || []);
       const removedNodes = Array.from(mutation.removedNodes || []);
 
@@ -65,15 +65,15 @@ function bindDynamicPageEvents() {
         target?.closest?.('.ldtk-topic-split-wrapper') ||
         addedNodes.concat(removedNodes).every((node) => (
           node.nodeType !== Node.ELEMENT_NODE ||
-          node.matches?.('[class^="ldtk-"], [id^="ldcopy-"]') ||
-          node.closest?.('.ldtk-topic-split-wrapper')
+          (node as Element).matches?.('[class^="ldtk-"], [id^="ldcopy-"]') ||
+          (node as Element).closest?.('.ldtk-topic-split-wrapper')
         ))
       );
     });
 
     if (!onlyToolkitChanges) scheduleRefreshEnhancements();
   });
-  observer.observe(document.querySelector('#main-outlet, #main, body') || document.body, {
+  observer.observe(document.querySelector<HTMLElement>('#main-outlet, #main, body') || document.body, {
     childList: true,
     subtree: true,
   });
@@ -82,7 +82,7 @@ function bindDynamicPageEvents() {
   window.addEventListener('page:change', () => scheduleRefreshEnhancements(0));
 }
 
-function init() {
+function init(): void {
   messages.registerMessageHandlers(refreshEnhancements);
   refreshEnhancements();
   bindDynamicPageEvents();

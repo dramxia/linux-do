@@ -1,9 +1,35 @@
 /* Linux.do 工具箱 — 楼层导出流程模块 */
-import * as discourse from './discourse.js';
-import * as markdown from './markdown.js';
-import * as output from './output.js';
+import * as discourse from './discourse';
+import type { PostMeta } from './discourse';
+import * as markdown from './markdown';
+import * as output from './output';
+import type { DiscourseSettings } from '../common/settings';
 
-export async function buildPostMarkdown(postEl, settings) {
+export interface BuildPostResult {
+  meta: PostMeta;
+  markdown: string;
+  raw: string;
+}
+
+export interface CollectedPost {
+  meta: PostMeta;
+  raw: string;
+}
+
+export interface PostFailure {
+  meta: PostMeta;
+  error: string;
+}
+
+export interface ExportResult {
+  posts: CollectedPost[];
+  failures: PostFailure[];
+  total: number;
+  successCount: number;
+  failureCount: number;
+}
+
+export async function buildPostMarkdown(postEl: HTMLElement, settings: DiscourseSettings): Promise<BuildPostResult> {
   const topicId = discourse.getTopicId();
   const meta = discourse.getPostMeta(postEl);
   const raw = await discourse.fetchRawPost(topicId, meta.postNumber);
@@ -26,7 +52,7 @@ export async function buildPostMarkdown(postEl, settings) {
   };
 }
 
-function getFallbackMeta(postEl, index) {
+function getFallbackMeta(postEl: HTMLElement, index: number): PostMeta {
   try {
     return discourse.getPostMeta(postEl);
   } catch {
@@ -34,10 +60,10 @@ function getFallbackMeta(postEl, index) {
   }
 }
 
-export async function collectLoadedPosts(settings) {
+export async function collectLoadedPosts(settings: DiscourseSettings): Promise<ExportResult> {
   const postEls = Array.from(discourse.getPostElements());
-  const posts = [];
-  const failures = [];
+  const posts: CollectedPost[] = [];
+  const failures: PostFailure[] = [];
 
   for (const [index, postEl] of postEls.entries()) {
     try {
@@ -47,7 +73,7 @@ export async function collectLoadedPosts(settings) {
       const meta = getFallbackMeta(postEl, index);
       failures.push({
         meta,
-        error: err?.message || '未知错误',
+        error: (err as Error)?.message || '未知错误',
       });
     }
   }
@@ -61,7 +87,7 @@ export async function collectLoadedPosts(settings) {
   };
 }
 
-export async function getAllPostsRaw(settings) {
+export async function getAllPostsRaw(settings: DiscourseSettings): Promise<CollectedPost[]> {
   const result = await collectLoadedPosts(settings);
   return result.posts;
 }

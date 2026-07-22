@@ -1,8 +1,8 @@
 /* Linux.do 工具箱 — Base64 选择工具模块 */
-import * as output from './output.js';
-import { getSettings as _getSettings } from '../common/settings.js';
+import * as output from './output';
+import { getSettings as _getSettings } from '../common/settings';
 
-function decodeBase64Utf8(text) {
+function decodeBase64Utf8(text: string): string {
   const normalized = text.replace(/\s+/g, '');
   const binary = atob(normalized);
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
@@ -15,15 +15,15 @@ function decodeBase64Utf8(text) {
   }
 }
 
-function stripChineseText(text) {
+function stripChineseText(text: string): string {
   return text.replace(/[\p{Script=Han}\u3000-\u303f\uff01-\uff60]/gu, '');
 }
 
-function getSelectedText() {
-  return window.getSelection().toString().trim();
+function getSelectedText(): string {
+  return window.getSelection()?.toString().trim() || '';
 }
 
-function styleSelectionToolButton(button, order) {
+function styleSelectionToolButton(button: HTMLButtonElement, order: number): void {
   button.style.cssText = [
     'margin-right: 4px',
     'padding: 4px 8px',
@@ -34,7 +34,7 @@ function styleSelectionToolButton(button, order) {
   ].join('; ');
 }
 
-async function injectBase64Button() {
+export async function injectBase64Button(): Promise<void> {
   const settings = await _getSettings();
   if (!settings.enableBase64Decode) {
     document.querySelectorAll('.ldcopy-base64-btn, .ldcopy-strip-chinese-btn').forEach((el) => el.remove());
@@ -44,7 +44,7 @@ async function injectBase64Button() {
   const quoteContainer = document.querySelector('.quote-button');
   if (!quoteContainer) return;
 
-  let base64Btn = quoteContainer.querySelector('.ldcopy-base64-btn');
+  let base64Btn = quoteContainer.querySelector<HTMLButtonElement>('.ldcopy-base64-btn');
   if (!base64Btn) {
     base64Btn = document.createElement('button');
     base64Btn.className = 'btn btn-flat ldcopy-base64-btn';
@@ -64,7 +64,7 @@ async function injectBase64Button() {
         await output.copyToClipboard(decodeBase64Utf8(selectedText));
         output.showToast('✅ Base64 解码已复制');
       } catch (err) {
-        output.showToast('❌ Base64 解码失败: ' + err.message);
+        output.showToast('❌ Base64 解码失败: ' + (err as Error).message);
       }
     });
 
@@ -92,7 +92,7 @@ async function injectBase64Button() {
         await output.copyToClipboard(strippedText);
         output.showToast('✅ 已去中文并复制');
       } catch (err) {
-        output.showToast('❌ 去中文失败: ' + err.message);
+        output.showToast('❌ 去中文失败: ' + (err as Error).message);
       }
     });
 

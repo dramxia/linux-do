@@ -1,7 +1,21 @@
+"use strict";
 (() => {
-  // src/content/discourse.js
+  // src/content/discourse.ts
+  function isHTMLElement(el) {
+    return el instanceof HTMLElement;
+  }
   function getTopicTitle() {
-    return document.querySelector(".fancy-title")?.textContent?.trim() || document.querySelector("#topic-title h1")?.textContent?.trim() || document.title.replace(/\s*[—–-]\s*Linux\.do\s*$/, "").trim() || "Untitled";
+    const fancy = document.querySelector(".fancy-title");
+    if (isHTMLElement(fancy)) {
+      const text = fancy.textContent?.trim();
+      if (text) return text;
+    }
+    const titleEl = document.querySelector("#topic-title h1");
+    if (isHTMLElement(titleEl)) {
+      const text = titleEl.textContent?.trim();
+      if (text) return text;
+    }
+    return document.title.replace(/\s*[—–-]\s*Linux\.do\s*$/, "").trim() || "Untitled";
   }
   function getTopicUrl() {
     return window.location.origin + window.location.pathname;
@@ -11,7 +25,7 @@
     return match ? match[1] : null;
   }
   function getAllPostElements() {
-    return Array.from(document.querySelectorAll("[data-post-id].topic-post, .topic-post")).filter((postEl) => !postEl.closest(".ldtk-topic-article-pane"));
+    return Array.from(document.querySelectorAll("[data-post-id].topic-post, .topic-post")).filter((el) => isHTMLElement(el) && !el.closest(".ldtk-topic-article-pane"));
   }
   function getPostElements() {
     return getAllPostElements().filter((postEl) => !postEl.closest(".ldtk-topic-native-stream"));
@@ -44,7 +58,7 @@
     if (!postIds.length) return [];
     const url = new URL(`/t/${topicId}/posts.json`, window.location.origin);
     postIds.forEach((postId) => {
-      url.searchParams.append("post_ids[]", postId);
+      url.searchParams.append("post_ids[]", String(postId));
     });
     const res = await fetch(url.pathname + url.search, {
       credentials: "same-origin",
@@ -73,7 +87,7 @@
     });
   }
 
-  // src/content/output.js
+  // src/content/output.ts
   function formatPostMd(meta, rawMd, title, url, options = {}) {
     if (options.includeMetadata === false) return rawMd.trim();
     const sourceUrl = url + (meta.postNumber ? "#post-" + meta.postNumber : "");
@@ -86,7 +100,7 @@
     }
     const lines = [`<!-- \u6765\u6E90: ${url} -->`, ""];
     posts.forEach((post, index) => {
-      const postNumber = post.meta.postNumber || index + 1;
+      const postNumber = post.meta.postNumber || String(index + 1);
       const postUrl = `${url}#post-${postNumber}`;
       lines.push(`<!-- #${postNumber} ${post.meta.author} | ${postUrl} -->`);
       lines.push("");
@@ -128,7 +142,7 @@
     }, 2500);
   }
 
-  // src/content/markdown.js
+  // src/content/markdown.ts
   function isHtmlContent(text) {
     const trimmed = text.trim();
     if (!trimmed) return false;
@@ -145,7 +159,7 @@
     const rows = [];
     tableEl.querySelectorAll("tr").forEach((tr) => {
       const cells = Array.from(tr.querySelectorAll("td, th")).map((cell) => {
-        return cell.textContent.trim().replace(/\|/g, "\\|");
+        return cell.textContent?.trim().replace(/\|/g, "\\|") || "";
       });
       rows.push(cells);
     });
@@ -166,10 +180,11 @@
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, "text/html");
     function walk(node) {
-      if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+      if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
       if (node.nodeType !== Node.ELEMENT_NODE) return "";
-      const tag = node.tagName.toLowerCase();
-      const children = Array.from(node.childNodes).map(walk).join("");
+      const el = node;
+      const tag = el.tagName.toLowerCase();
+      const children = Array.from(el.childNodes).map(walk).join("");
       switch (tag) {
         case "h1":
           return `
@@ -230,9 +245,9 @@ ${children.trim()}
           return text ? `\`${text}\`` : "";
         }
         case "pre": {
-          const codeEl = node.querySelector("code");
+          const codeEl = el.querySelector("code");
           const lang = codeEl?.className?.match(/lang-(\w+)/)?.[1] || "";
-          const codeText = codeEl ? codeEl.textContent : node.textContent;
+          const codeText = codeEl ? codeEl.textContent || "" : el.textContent || "";
           return `
 \`\`\`${lang}
 ${codeText.trim()}
@@ -241,14 +256,14 @@ ${codeText.trim()}
 `;
         }
         case "a": {
-          const href = node.getAttribute("href") || "";
+          const href = el.getAttribute("href") || "";
           const text = children.trim();
           if (!text) return "";
           return href && href !== text ? `[${text}](${href})` : text;
         }
         case "img": {
-          const src = node.getAttribute("src") || "";
-          const alt = node.getAttribute("alt") || "";
+          const src = el.getAttribute("src") || "";
+          const alt = el.getAttribute("alt") || "";
           return src ? `![${alt}](${src})` : "";
         }
         case "blockquote": {
@@ -259,10 +274,10 @@ ${lines}
 `;
         }
         case "aside": {
-          if (node.classList?.contains("quote")) {
-            const titleEl = node.querySelector(".quote-controls, [data-username]");
-            const quoteUser = node.getAttribute("data-username") || titleEl?.getAttribute("data-username") || "";
-            const blockquote = node.querySelector(":scope > blockquote");
+          if (el.classList?.contains("quote")) {
+            const titleEl = el.querySelector(".quote-controls, [data-username]");
+            const quoteUser = el.getAttribute("data-username") || titleEl?.getAttribute("data-username") || "";
+            const blockquote = el.querySelector(":scope > blockquote");
             const content = blockquote ? Array.from(blockquote.childNodes).map(walk).join("").trim() : children.trim();
             const attribution = quoteUser ? `**${quoteUser} said:**
 ` : "";
@@ -275,19 +290,19 @@ ${lines}
           return children;
         }
         case "ul": {
-          return "\n" + Array.from(node.children).map((li) => {
+          return "\n" + Array.from(el.children).map((li) => {
             return li.tagName?.toLowerCase() === "li" ? `- ${walk(li).trim()}` : walk(li);
           }).join("\n") + "\n\n";
         }
         case "ol": {
-          return "\n" + Array.from(node.children).map((li, index) => {
+          return "\n" + Array.from(el.children).map((li, index) => {
             return li.tagName?.toLowerCase() === "li" ? `${index + 1}. ${walk(li).trim()}` : walk(li);
           }).join("\n") + "\n\n";
         }
         case "li":
           return children;
         case "table":
-          return htmlTableToMarkdown(node);
+          return htmlTableToMarkdown(el);
         case "sup":
           return `<sup>${children}</sup>`;
         case "sub":
@@ -295,12 +310,12 @@ ${lines}
         case "mark":
           return `==${children.trim()}==`;
         case "span": {
-          if (node.classList?.contains("mention")) return children.trim() || node.textContent.trim();
+          if (el.classList?.contains("mention")) return children.trim() || (el.textContent?.trim() || "");
           return children;
         }
         case "div": {
-          if (node.classList?.contains("lightbox-wrapper")) {
-            const img = node.querySelector("img");
+          if (el.classList?.contains("lightbox-wrapper")) {
+            const img = el.querySelector("img");
             if (img) {
               const src = img.getAttribute("data-original-href") || img.getAttribute("src") || "";
               const alt = img.getAttribute("alt") || "";
@@ -309,9 +324,9 @@ ${lines}
 ` : children;
             }
           }
-          if (node.classList?.contains("onebox")) {
-            const link = node.querySelector("a[href]");
-            const title = node.querySelector(".onebox-body h3, .source a")?.textContent?.trim();
+          if (el.classList?.contains("onebox")) {
+            const link = el.querySelector("a[href]");
+            const title = el.querySelector(".onebox-body h3, .source a")?.textContent?.trim() || "";
             const href = link?.getAttribute("href") || "";
             if (title && href) return `
 [${title}](${href})
@@ -351,7 +366,7 @@ ${lines}
     return md.replace(/!\[([^\]]+?)\|(\d+x\d+(?:x\d+)?(?:\|[^\]]*)?)\]\(/g, "![$1](");
   }
 
-  // src/content/post-export.js
+  // src/content/post-export.ts
   async function buildPostMarkdown(postEl, settings) {
     const topicId = getTopicId();
     const meta = getPostMeta(postEl);
@@ -403,7 +418,7 @@ ${lines}
     };
   }
 
-  // src/common/settings.js
+  // src/common/settings.ts
   var DEFAULT_SETTINGS = Object.freeze({
     enablePostActions: true,
     enableBase64Decode: true,
@@ -442,7 +457,7 @@ ${lines}
     });
   }
 
-  // src/content/buttons.js
+  // src/content/buttons.ts
   var COPY_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
   var DOWNLOAD_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>';
   function removeInjectedActions() {
@@ -510,7 +525,7 @@ ${lines}
     removeInjectedActions
   };
 
-  // src/content/layout.js
+  // src/content/layout.ts
   var BODY_CLASS = "ldtk-topic-split-active";
   var WRAPPER_CLASS = "ldtk-topic-split-wrapper";
   var ARTICLE_PANE_CLASS = "ldtk-topic-article-pane";
@@ -602,7 +617,7 @@ ${lines}
       const hasAvatars = el.querySelectorAll("img.avatar, .avatar").length >= 2;
       const hasSummary = Boolean(el.querySelector('[title*="\u603B\u7ED3"], button, .btn'));
       return hasStatsText && (hasAvatars || hasSummary);
-    });
+    }) || null;
   }
   function stripHeaderMetaCloneUnsafeNodes(clone) {
     clone.querySelectorAll([
@@ -661,7 +676,7 @@ ${lines}
     articleMeta.replaceChildren(buildTopicMetaClone(source, ARTICLE_META_INNER_CLASS));
   }
   function findFooterActionsSource() {
-    return Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find((el) => !el.closest(`.${ARTICLE_PANE_CLASS}`) && !el.closest(`.${HEADER_META_CLASS}`) && !el.closest(`.${COMMENTS_PANE_CLASS}`));
+    return Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find((el) => el instanceof HTMLElement && !el.closest(`.${ARTICLE_PANE_CLASS}`) && !el.closest(`.${HEADER_META_CLASS}`) && !el.closest(`.${COMMENTS_PANE_CLASS}`)) || null;
   }
   function ensureFooterActionsPlaceholder(source) {
     const existing = document.querySelector(`[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`);
@@ -748,11 +763,12 @@ ${lines}
   }
   function isNativeTopicMetaNode(node) {
     if (node.nodeType !== Node.ELEMENT_NODE) return false;
-    if (node.closest?.(`.${HEADER_META_CLASS}`) || node.closest?.(`.${ARTICLE_PANE_CLASS}`) || node.closest?.(`.${COMMENTS_PANE_CLASS}`)) {
+    const el = node;
+    if (el.closest?.(`.${HEADER_META_CLASS}`) || el.closest?.(`.${ARTICLE_PANE_CLASS}`) || el.closest?.(`.${COMMENTS_PANE_CLASS}`)) {
       return false;
     }
     const selectors = TOPIC_META_SELECTORS.join(",");
-    return node.matches?.(selectors) || Boolean(node.querySelector?.(selectors));
+    return el.matches?.(selectors) || Boolean(el.querySelector?.(selectors));
   }
   function bindTopicMetaObserver() {
     if (topicMetaObserver) return;
@@ -1048,7 +1064,8 @@ ${lines}
         <button class="${PAGER_BUTTON_CLASS}" type="button" data-ldtk-pager-action="next">\u4E0B\u4E00\u9875</button>
       `;
       pager.addEventListener("click", (event) => {
-        const button = event.target.closest("[data-ldtk-pager-action]");
+        const target = event.target;
+        const button = target.closest("[data-ldtk-pager-action]");
         if (!button || pagerState.loading) return;
         const action = button.getAttribute("data-ldtk-pager-action");
         loadPage(stream, pagerState.page + (action === "next" ? 1 : -1));
@@ -1098,7 +1115,7 @@ ${lines}
   async function loadTopicSnapshot(topicId) {
     const topic = await fetchTopicJson(topicId);
     const posts = topic?.post_stream?.posts || [];
-    pagerState.postIds = topic?.post_stream?.stream || posts.map((post) => post.id).filter(Boolean);
+    pagerState.postIds = topic?.post_stream?.stream || posts.map((post) => post.id).filter((id) => typeof id === "number");
     posts.forEach((post) => {
       if (post?.id) pagerState.postsById.set(Number(post.id), post);
     });
@@ -1156,7 +1173,7 @@ ${lines}
     restoreTopicSplitLayout
   };
 
-  // src/content/base64.js
+  // src/content/base64.ts
   function decodeBase64Utf8(text) {
     const normalized = text.replace(/\s+/g, "");
     const binary = atob(normalized);
@@ -1171,7 +1188,7 @@ ${lines}
     return text.replace(/[\p{Script=Han}\u3000-\u303f\uff01-\uff60]/gu, "");
   }
   function getSelectedText() {
-    return window.getSelection().toString().trim();
+    return window.getSelection()?.toString().trim() || "";
   }
   function styleSelectionToolButton(button, order) {
     button.style.cssText = [
@@ -1246,7 +1263,7 @@ ${lines}
     injectBase64Button
   };
 
-  // src/content/messages.js
+  // src/content/messages.ts
   function assertExportResult(result) {
     if (result.total === 0) throw new Error("\u5F53\u524D\u9875\u9762\u6CA1\u6709\u68C0\u6D4B\u5230\u5DF2\u52A0\u8F7D\u697C\u5C42");
     if (result.successCount === 0) throw new Error("\u5DF2\u52A0\u8F7D\u697C\u5C42\u5168\u90E8\u5BFC\u51FA\u5931\u8D25");
@@ -1256,67 +1273,69 @@ ${lines}
     return `\u26A0\uFE0F \u5DF2\u5904\u7406 ${result.successCount}/${result.total} \u4E2A\u697C\u5C42\uFF0C${result.failureCount} \u4E2A\u5931\u8D25\u3002`;
   }
   function registerMessageHandlers(refreshEnhancements2) {
-    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-      if (msg.action === "getInfo") {
-        const postEls = getPostElements();
-        sendResponse({
-          title: getTopicTitle(),
-          url: getTopicUrl(),
-          postCount: postEls.length
-        });
-        return true;
+    chrome.runtime.onMessage.addListener(
+      (msg, _sender, sendResponse) => {
+        if (msg.action === "getInfo") {
+          const postEls = getPostElements();
+          sendResponse({
+            title: getTopicTitle(),
+            url: getTopicUrl(),
+            postCount: postEls.length
+          });
+          return true;
+        }
+        if (msg.action === "refreshEnhancements") {
+          refreshEnhancements2?.();
+          sendResponse({ success: true });
+          return true;
+        }
+        if (msg.action === "copyTopic") {
+          (async () => {
+            try {
+              const settings = await getSettings();
+              const result = await collectLoadedPosts(settings);
+              assertExportResult(result);
+              const md = formatTopicMd(result.posts, getTopicTitle(), getTopicUrl(), settings);
+              await copyToClipboard(md);
+              sendResponse({ success: true, ...result });
+              const prefix = getExportToastPrefix(result);
+              showToast(result.failureCount === 0 ? "\u2705 \u5DF2\u590D\u5236\u6574\u4E2A\u4E3B\u9898" : `${prefix} \u5DF2\u590D\u5236`);
+            } catch (err) {
+              sendResponse({ success: false, error: err.message });
+              showToast("\u274C \u5931\u8D25: " + err.message);
+            }
+          })();
+          return true;
+        }
+        if (msg.action === "downloadTopic") {
+          (async () => {
+            try {
+              const settings = await getSettings();
+              const result = await collectLoadedPosts(settings);
+              assertExportResult(result);
+              const title = getTopicTitle();
+              const md = formatTopicMd(result.posts, title, getTopicUrl(), settings);
+              const filename = sanitizeFilename(`${title}.md`);
+              downloadFile(md, filename);
+              sendResponse({ success: true, filename, ...result });
+              const prefix = getExportToastPrefix(result);
+              showToast(result.failureCount === 0 ? `\u2705 \u5DF2\u4E0B\u8F7D ${filename}` : `${prefix} \u5DF2\u4E0B\u8F7D ${filename}`);
+            } catch (err) {
+              sendResponse({ success: false, error: err.message });
+              showToast("\u274C \u5931\u8D25: " + err.message);
+            }
+          })();
+          return true;
+        }
+        return false;
       }
-      if (msg.action === "refreshEnhancements") {
-        refreshEnhancements2?.();
-        sendResponse({ success: true });
-        return true;
-      }
-      if (msg.action === "copyTopic") {
-        (async () => {
-          try {
-            const settings = await getSettings();
-            const result = await collectLoadedPosts(settings);
-            assertExportResult(result);
-            const md = formatTopicMd(result.posts, getTopicTitle(), getTopicUrl(), settings);
-            await copyToClipboard(md);
-            sendResponse({ success: true, ...result });
-            const prefix = getExportToastPrefix(result);
-            showToast(result.failureCount === 0 ? "\u2705 \u5DF2\u590D\u5236\u6574\u4E2A\u4E3B\u9898" : `${prefix} \u5DF2\u590D\u5236`);
-          } catch (err) {
-            sendResponse({ success: false, error: err.message });
-            showToast("\u274C \u5931\u8D25: " + err.message);
-          }
-        })();
-        return true;
-      }
-      if (msg.action === "downloadTopic") {
-        (async () => {
-          try {
-            const settings = await getSettings();
-            const result = await collectLoadedPosts(settings);
-            assertExportResult(result);
-            const title = getTopicTitle();
-            const md = formatTopicMd(result.posts, title, getTopicUrl(), settings);
-            const filename = sanitizeFilename(`${title}.md`);
-            downloadFile(md, filename);
-            sendResponse({ success: true, filename, ...result });
-            const prefix = getExportToastPrefix(result);
-            showToast(result.failureCount === 0 ? `\u2705 \u5DF2\u4E0B\u8F7D ${filename}` : `${prefix} \u5DF2\u4E0B\u8F7D ${filename}`);
-          } catch (err) {
-            sendResponse({ success: false, error: err.message });
-            showToast("\u274C \u5931\u8D25: " + err.message);
-          }
-        })();
-        return true;
-      }
-      return false;
-    });
+    );
   }
   var messages = {
     registerMessageHandlers
   };
 
-  // src/content/index.js
+  // src/content/index.ts
   var refreshTimer = null;
   var base64Timer = null;
   var refreshInFlight = false;

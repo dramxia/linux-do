@@ -1,6 +1,16 @@
 /* Linux.do 工具箱 — 设置模块 */
 
-export const DEFAULT_SETTINGS = Object.freeze({
+export interface DiscourseSettings {
+  enablePostActions: boolean;
+  enableBase64Decode: boolean;
+  enableSplitLayout: boolean;
+  includeMetadata: boolean;
+  replaceUploadUrls: boolean;
+}
+
+type SettingsCallback = (settings: DiscourseSettings) => void;
+
+export const DEFAULT_SETTINGS: Readonly<DiscourseSettings> = Object.freeze({
   enablePostActions: true,
   enableBase64Decode: true,
   enableSplitLayout: false,
@@ -8,47 +18,48 @@ export const DEFAULT_SETTINGS = Object.freeze({
   replaceUploadUrls: true,
 });
 
-function hasChromeStorage() {
+function hasChromeStorage(): boolean {
   return typeof chrome !== 'undefined' && Boolean(chrome.storage?.sync);
 }
 
-function normalizeSettings(value = {}) {
+function normalizeSettings(value: Partial<DiscourseSettings> = {}): DiscourseSettings {
   return { ...DEFAULT_SETTINGS, ...value };
 }
 
-export function getSettings() {
+export function getSettings(): Promise<DiscourseSettings> {
   if (!hasChromeStorage()) {
     return Promise.resolve(normalizeSettings());
   }
 
-  return new Promise((resolve) => {
+  return new Promise<DiscourseSettings>((resolve) => {
     chrome.storage.sync.get(DEFAULT_SETTINGS, (items) => {
       if (chrome.runtime?.lastError) {
         resolve(normalizeSettings());
         return;
       }
-      resolve(normalizeSettings(items));
+      resolve(normalizeSettings(items as Partial<DiscourseSettings>));
     });
   });
 }
 
-export function saveSettings(partialSettings) {
+export function saveSettings(partialSettings: Partial<DiscourseSettings>): Promise<DiscourseSettings> {
+  const normalized = normalizeSettings(partialSettings);
   if (!hasChromeStorage()) {
-    return Promise.resolve(normalizeSettings(partialSettings));
+    return Promise.resolve(normalized);
   }
 
-  return new Promise((resolve, reject) => {
+  return new Promise<DiscourseSettings>((resolve, reject) => {
     chrome.storage.sync.set(partialSettings, () => {
       if (chrome.runtime?.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
         return;
       }
-      resolve();
+      resolve(normalized);
     });
   });
 }
 
-export function onSettingsChanged(callback) {
+export function onSettingsChanged(callback: SettingsCallback): void {
   if (!hasChromeStorage() || !chrome.storage?.onChanged) return;
 
   chrome.storage.onChanged.addListener((changes, areaName) => {

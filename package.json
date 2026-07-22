@@ -5,7 +5,7 @@
   "description": "Linux.do 浏览器工具箱：Markdown 导出与阅读辅助",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check": "npm run build && node --check content.js && node --check popup.js && node -e \"JSON.parse(require('fs').readFileSync('manifest.json','utf8'))\""
+    "check": "npm run build && tsc --noEmit && node --check content.js && node --check popup.js && node --check background.js && node -e \"JSON.parse(require('fs').readFileSync('manifest.json','utf8'))\""
   },
   "keywords": [
     "chrome-extension",
@@ -15,6 +15,8 @@
   ],
   "license": "UNLICENSED",
   "devDependencies": {
-    "esbuild": "^0.24.0"
+    "chrome-types": "^0.1.336",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3"
   }
 }

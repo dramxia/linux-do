@@ -1,0 +1,89 @@
+{
+  "schema_version": 2,
+  "active_work_id": "refactor-toolkit-16f6b97d",
+  "works": {
+    "refactor-toolkit-16f6b97d": {
+      "work_id": "refactor-toolkit-16f6b97d",
+      "active_plan": "/Users/misemo/project/my/plugin/linux-do-toolkit/.omo/plans/refactor-toolkit.md",
+      "plan_name": "refactor-toolkit",
+      "status": "active",
+      "started_at": "2026-07-22T09:31:06.433Z",
+      "updated_at": "2026-07-22T10:13:25.933Z",
+      "session_ids": [
+        "opencode:ses_07714537dffe1eI7BYbqvMFq6f"
+      ],
+      "session_origins": {
+        "opencode:ses_07714537dffe1eI7BYbqvMFq6f": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "ES modules 迁移 + esbuild 构建系统",
+          "session_id": "opencode:ses_076d299a8ffenY2ppKLoHy2fkj",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-22T09:50:31.283Z",
+          "started_at": "2026-07-22T09:47:12.164Z",
+          "status": "completed",
+          "ended_at": "2026-07-22T09:50:31.283Z",
+          "elapsed_ms": 199119
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "TypeScript 迁移",
+          "session_id": "opencode:ses_076c29e4cffehqEfnAw3EYlbwt",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-22T10:13:25.933Z",
+          "started_at": "2026-07-22T10:11:02.350Z",
+          "status": "completed",
+          "ended_at": "2026-07-22T10:13:25.933Z",
+          "elapsed_ms": 143583
+        }
+      }
+    }
+  },
+  "active_plan": "/Users/misemo/project/my/plugin/linux-do-toolkit/.omo/plans/refactor-toolkit.md",
+  "started_at": "2026-07-22T09:31:06.433Z",
+  "status": "active",
+  "updated_at": "2026-07-22T10:13:25.933Z",
+  "session_ids": [
+    "opencode:ses_07714537dffe1eI7BYbqvMFq6f"
+  ],
+  "session_origins": {
+    "opencode:ses_07714537dffe1eI7BYbqvMFq6f": "direct"
+  },
+  "plan_name": "refactor-toolkit",
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "ES modules 迁移 + esbuild 构建系统",
+      "session_id": "opencode:ses_076d299a8ffenY2ppKLoHy2fkj",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-22T09:50:31.283Z",
+      "started_at": "2026-07-22T09:47:12.164Z",
+      "status": "completed",
+      "ended_at": "2026-07-22T09:50:31.283Z",
+      "elapsed_ms": 199119
+    },
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "TypeScript 迁移",
+      "session_id": "opencode:ses_076c29e4cffehqEfnAw3EYlbwt",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-22T10:13:25.933Z",
+      "started_at": "2026-07-22T10:11:02.350Z",
+      "status": "completed",
+      "ended_at": "2026-07-22T10:13:25.933Z",
+      "elapsed_ms": 143583
+    }
+  },
+  "agent": "atlas"
+}

@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["src/background.ts"],
+  "sourcesContent": ["// background.ts \u2014 Chrome MV3 Service Worker\n// \u5F53\u524D\u4FDD\u6301\u6700\u5C0F\u5316\uFF1A\u4E3B\u8981\u4E1A\u52A1\u903B\u8F91\u5728 content.js / popup.js \u4E2D\u3002\n\nchrome.runtime.onInstalled.addListener(() => {\n  // \u9884\u7559\u751F\u547D\u5468\u671F\u5165\u53E3\uFF0C\u786E\u4FDD manifest \u4E2D\u6CE8\u518C\u7684\u540E\u53F0\u811A\u672C\u804C\u8D23\u660E\u786E\u3002\n});\n"],
+  "mappings": ";;;AAGA,SAAO,QAAQ,YAAY,YAAY,MAAM;AAAA,EAE7C,CAAC;",
+  "names": []
+}

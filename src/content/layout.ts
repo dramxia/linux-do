@@ -1,7 +1,16 @@
 /* Linux.do 工具箱 — 主题分栏布局模块 */
-import * as discourse from './discourse.js';
-import * as buttons from './buttons.js';
-import { getSettings as _getSettings } from '../common/settings.js';
+import * as discourse from './discourse';
+import type { DiscoursePost, TopicJson } from './discourse';
+import * as buttons from './buttons';
+import { getSettings as _getSettings } from '../common/settings';
+
+interface PagerState {
+  topicId: string;
+  page: number;
+  postIds: Array<string | number>;
+  postsById: Map<number, DiscoursePost>;
+  loading: boolean;
+}
 
 const BODY_CLASS = 'ldtk-topic-split-active';
   const WRAPPER_CLASS = 'ldtk-topic-split-wrapper';
@@ -38,18 +47,18 @@ const BODY_CLASS = 'ldtk-topic-split-active';
   ];
   const FOOTER_ACTIONS_SELECTORS = '#topic-footer-buttons, .topic-footer-main-buttons';
 
-  const pagerState = {
+  const pagerState: PagerState = {
     topicId: '',
     page: 1,
     postIds: [],
-    postsById: new Map(),
+    postsById: new Map<number, DiscoursePost>(),
     loading: false,
   };
 
-  let topicMetaObserver = null;
-  let topicMetaSyncTimer = null;
+  let topicMetaObserver: MutationObserver | null = null;
+  let topicMetaSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function getSplitWrapper(stream) {
+  function getSplitWrapper(stream: HTMLElement | null): HTMLElement | null {
     if (!stream?.parentElement) return null;
     if (stream.parentElement.classList.contains(WRAPPER_CLASS)) {
       return stream.parentElement;
@@ -62,16 +71,16 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     return wrapper;
   }
 
-  function getNativeStream() {
+  function getNativeStream(): HTMLElement | null {
     return (
-      document.querySelector(`.${NATIVE_STREAM_CLASS}`) ||
-      document.querySelector('#post-stream') ||
-      document.querySelector('.post-stream') ||
-      document.querySelector('.topic-posts')
+      document.querySelector<HTMLElement>(`.${NATIVE_STREAM_CLASS}`) ||
+      document.querySelector<HTMLElement>('#post-stream') ||
+      document.querySelector<HTMLElement>('.post-stream') ||
+      document.querySelector<HTMLElement>('.topic-posts')
     );
   }
 
-  function updateSplitPaneHeight(wrapper) {
+  function updateSplitPaneHeight(wrapper: HTMLElement | null): void {
     if (!wrapper) return;
 
     const viewportHeight = window.visualViewport?.height || window.innerHeight;
@@ -80,15 +89,15 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     wrapper.style.setProperty('--ldtk-split-pane-height', `${height}px`);
   }
 
-  function getHeaderTitleMount() {
+  function getHeaderTitleMount(): HTMLElement | null {
     return (
-      document.querySelector('.d-header .contents') ||
-      document.querySelector('header.d-header .contents') ||
-      document.querySelector('.d-header')
+      document.querySelector<HTMLElement>('.d-header .contents') ||
+      document.querySelector<HTMLElement>('header.d-header .contents') ||
+      document.querySelector<HTMLElement>('.d-header')
     );
   }
 
-  function stripHeaderCloneUnsafeNodes(clone) {
+  function stripHeaderCloneUnsafeNodes(clone: HTMLElement): void {
     clone.querySelectorAll([
       'script',
       'style',
@@ -102,7 +111,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     });
   }
 
-  function findTopicMetaSource() {
+  function findTopicMetaSource(): Element | null {
     const directMatch = Array.from(document.querySelectorAll(TOPIC_META_SELECTORS.join(','))).find((el) => (
       !el.closest(`.${HEADER_META_CLASS}`) &&
       !el.closest(`.${ARTICLE_PANE_CLASS}`) &&
@@ -126,10 +135,10 @@ const BODY_CLASS = 'ldtk-topic-split-active';
       const hasAvatars = el.querySelectorAll('img.avatar, .avatar').length >= 2;
       const hasSummary = Boolean(el.querySelector('[title*="总结"], button, .btn'));
       return hasStatsText && (hasAvatars || hasSummary);
-    });
+    }) || null;
   }
 
-  function stripHeaderMetaCloneUnsafeNodes(clone) {
+  function stripHeaderMetaCloneUnsafeNodes(clone: HTMLElement): void {
     clone.querySelectorAll([
       'script',
       'style',
@@ -143,7 +152,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     });
   }
 
-  function syncSplitHeaderMeta(mount, headerTitle) {
+  function syncSplitHeaderMeta(mount: HTMLElement | null, headerTitle: HTMLElement | null): void {
     const source = findTopicMetaSource();
     if (!source || !mount) return;
 
@@ -152,7 +161,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     });
     source.setAttribute(TOPIC_META_SOURCE_ATTR, 'true');
 
-    let headerMeta = mount.querySelector(`:scope > .${HEADER_META_CLASS}`);
+    let headerMeta = mount.querySelector<HTMLElement>(`:scope > .${HEADER_META_CLASS}`);
 
     if (!headerMeta) {
       headerMeta = document.createElement('div');
@@ -168,8 +177,8 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     headerMeta.replaceChildren(buildTopicMetaClone(source, HEADER_META_INNER_CLASS));
   }
 
-  function buildTopicMetaClone(source, innerClass) {
-    const clone = source.cloneNode(true);
+  function buildTopicMetaClone(source: Element, innerClass: string): HTMLElement {
+    const clone = source.cloneNode(true) as HTMLElement;
     clone.classList.add(innerClass);
     clone.removeAttribute('id');
     clone.removeAttribute(TOPIC_META_SOURCE_ATTR);
@@ -177,11 +186,11 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     return clone;
   }
 
-  function syncArticleTopicMeta(pane) {
+  function syncArticleTopicMeta(pane: HTMLElement | null): void {
     if (!pane) return;
 
     const source = findTopicMetaSource();
-    let articleMeta = pane.querySelector(`:scope > .${ARTICLE_META_CLASS}`);
+    let articleMeta = pane.querySelector<HTMLElement>(`:scope > .${ARTICLE_META_CLASS}`);
 
     if (!source) {
       articleMeta?.remove();
@@ -198,16 +207,17 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     articleMeta.replaceChildren(buildTopicMetaClone(source, ARTICLE_META_INNER_CLASS));
   }
 
-  function findFooterActionsSource() {
-    return Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find((el) => (
+  function findFooterActionsSource(): HTMLElement | null {
+    return Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find((el): el is HTMLElement => (
+      el instanceof HTMLElement &&
       !el.closest(`.${ARTICLE_PANE_CLASS}`) &&
       !el.closest(`.${HEADER_META_CLASS}`) &&
       !el.closest(`.${COMMENTS_PANE_CLASS}`)
-    ));
+    )) || null;
   }
 
-  function ensureFooterActionsPlaceholder(source) {
-    const existing = document.querySelector(`[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`);
+  function ensureFooterActionsPlaceholder(source: HTMLElement): HTMLElement {
+    const existing = document.querySelector<HTMLElement>(`[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`);
     if (existing) return existing;
 
     const placeholder = document.createElement('span');
@@ -217,12 +227,12 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     return placeholder;
   }
 
-  function syncArticleFooterActions(pane) {
+  function syncArticleFooterActions(pane: HTMLElement | null): void {
     if (!pane) return;
 
-    const movedSource = pane.querySelector(`:scope > .${ARTICLE_ACTIONS_CLASS} > [${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`);
+    const movedSource = pane.querySelector<HTMLElement>(`:scope > .${ARTICLE_ACTIONS_CLASS} > [${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`);
     const source = movedSource || findFooterActionsSource();
-    let articleActions = pane.querySelector(`:scope > .${ARTICLE_ACTIONS_CLASS}`);
+    let articleActions = pane.querySelector<HTMLElement>(`:scope > .${ARTICLE_ACTIONS_CLASS}`);
 
     if (!source) {
       articleActions?.remove();
@@ -243,9 +253,9 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     }
   }
 
-  function restoreFooterActions() {
-    const source = document.querySelector(`[${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`);
-    const placeholder = document.querySelector(`[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`);
+  function restoreFooterActions(): void {
+    const source = document.querySelector<HTMLElement>(`[${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`);
+    const placeholder = document.querySelector<HTMLElement>(`[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`);
 
     if (source) {
       source.removeAttribute(FOOTER_ACTIONS_SOURCE_ATTR);
@@ -258,18 +268,18 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     document.querySelectorAll(`.${ARTICLE_ACTIONS_CLASS}`).forEach((el) => el.remove());
   }
 
-  function syncSplitHeaderTitle() {
-    const source = document.querySelector('#topic-title');
+  function syncSplitHeaderTitle(): void {
+    const source = document.querySelector<HTMLElement>('#topic-title');
     const mount = getHeaderTitleMount();
     if (!source || !mount) return;
 
-    let headerTitle = mount.querySelector(`:scope > .${HEADER_TITLE_CLASS}`);
+    let headerTitle = mount.querySelector<HTMLElement>(`:scope > .${HEADER_TITLE_CLASS}`);
 
     if (!headerTitle) {
       headerTitle = document.createElement('div');
       headerTitle.className = HEADER_TITLE_CLASS;
 
-      const logoArea = mount.querySelector(':scope > .title, :scope > .home-logo-wrapper, :scope > .brand-header');
+      const logoArea = mount.querySelector<HTMLElement>(':scope > .title, :scope > .home-logo-wrapper, :scope > .brand-header');
       if (logoArea) {
         logoArea.insertAdjacentElement('afterend', headerTitle);
       } else {
@@ -277,29 +287,29 @@ const BODY_CLASS = 'ldtk-topic-split-active';
       }
     }
 
-    const clone = source.cloneNode(true);
+    const clone = source.cloneNode(true) as HTMLElement;
     clone.className = HEADER_TITLE_INNER_CLASS;
     stripHeaderCloneUnsafeNodes(clone);
     headerTitle.replaceChildren(clone);
     syncSplitHeaderMeta(mount, headerTitle);
   }
 
-  function syncSplitTopicMeta() {
+  function syncSplitTopicMeta(): void {
     syncSplitHeaderTitle();
-    document.querySelectorAll(`.${ARTICLE_PANE_CLASS}`).forEach((pane) => {
+    document.querySelectorAll<HTMLElement>(`.${ARTICLE_PANE_CLASS}`).forEach((pane) => {
       syncArticleTopicMeta(pane);
       syncArticleFooterActions(pane);
     });
   }
 
-  function scheduleSplitHeaderSync() {
+  function scheduleSplitHeaderSync(): void {
     syncSplitTopicMeta();
     [100, 350, 800, 1500, 3000].forEach((delay) => {
       setTimeout(syncSplitTopicMeta, delay);
     });
   }
 
-  function scheduleTopicMetaSync(delay = 80) {
+  function scheduleTopicMetaSync(delay = 80): void {
     if (topicMetaSyncTimer) clearTimeout(topicMetaSyncTimer);
     topicMetaSyncTimer = setTimeout(() => {
       topicMetaSyncTimer = null;
@@ -307,28 +317,29 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     }, delay);
   }
 
-  function isNativeTopicMetaNode(node) {
+  function isNativeTopicMetaNode(node: Node): boolean {
     if (node.nodeType !== Node.ELEMENT_NODE) return false;
+    const el = node as Element;
 
     if (
-      node.closest?.(`.${HEADER_META_CLASS}`) ||
-      node.closest?.(`.${ARTICLE_PANE_CLASS}`) ||
-      node.closest?.(`.${COMMENTS_PANE_CLASS}`)
+      el.closest?.(`.${HEADER_META_CLASS}`) ||
+      el.closest?.(`.${ARTICLE_PANE_CLASS}`) ||
+      el.closest?.(`.${COMMENTS_PANE_CLASS}`)
     ) {
       return false;
     }
 
     const selectors = TOPIC_META_SELECTORS.join(',');
-    return node.matches?.(selectors) || Boolean(node.querySelector?.(selectors));
+    return el.matches?.(selectors) || Boolean(el.querySelector?.(selectors));
   }
 
-  function bindTopicMetaObserver() {
+  function bindTopicMetaObserver(): void {
     if (topicMetaObserver) return;
 
-    const target = document.querySelector('#main-outlet, #main, body') || document.body;
+    const target = document.querySelector<HTMLElement>('#main-outlet, #main, body') || document.body;
     topicMetaObserver = new MutationObserver((mutations) => {
       const shouldSync = mutations.some((mutation) => {
-        const nodes = [
+        const nodes: Node[] = [
           mutation.target,
           ...Array.from(mutation.addedNodes || []),
           ...Array.from(mutation.removedNodes || []),
@@ -347,7 +358,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     });
   }
 
-  function restoreSplitHeaderTitle() {
+  function restoreSplitHeaderTitle(): void {
     if (topicMetaSyncTimer) {
       clearTimeout(topicMetaSyncTimer);
       topicMetaSyncTimer = null;
@@ -367,7 +378,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     });
   }
 
-  function stripCloneUnsafeNodes(clone) {
+  function stripCloneUnsafeNodes(clone: HTMLElement): void {
     clone.querySelectorAll([
       '.ldcopy-actions',
       '.topic-map',
@@ -381,8 +392,8 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     });
   }
 
-  function buildArticleClone(mainPost) {
-    const clone = mainPost.cloneNode(true);
+  function buildArticleClone(mainPost: HTMLElement): HTMLElement {
+    const clone = mainPost.cloneNode(true) as HTMLElement;
     clone.classList.add(ARTICLE_CLONE_CLASS);
     clone.classList.remove(ORIGINAL_MAIN_POST_CLASS);
     clone.removeAttribute('id');
@@ -390,8 +401,8 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     return clone;
   }
 
-  function ensureArticlePane(wrapper, stream) {
-    let pane = wrapper.querySelector(`:scope > .${ARTICLE_PANE_CLASS}`);
+  function ensureArticlePane(wrapper: HTMLElement, stream: HTMLElement): HTMLElement {
+    let pane = wrapper.querySelector<HTMLElement>(`:scope > .${ARTICLE_PANE_CLASS}`);
 
     if (!pane) {
       pane = document.createElement('aside');
@@ -403,8 +414,8 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     return pane;
   }
 
-  function ensureCommentsPane(wrapper) {
-    let pane = wrapper.querySelector(`:scope > .${COMMENTS_PANE_CLASS}`);
+  function ensureCommentsPane(wrapper: HTMLElement): HTMLElement {
+    let pane = wrapper.querySelector<HTMLElement>(`:scope > .${COMMENTS_PANE_CLASS}`);
 
     if (!pane) {
       pane = document.createElement('section');
@@ -417,8 +428,8 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     return pane;
   }
 
-  function ensureCommentsStream(pane) {
-    let stream = pane.querySelector(`:scope > .${COMMENTS_STREAM_CLASS}`);
+  function ensureCommentsStream(pane: HTMLElement): HTMLElement {
+    let stream = pane.querySelector<HTMLElement>(`:scope > .${COMMENTS_STREAM_CLASS}`);
 
     if (!stream) {
       stream = document.createElement('div');
@@ -431,14 +442,14 @@ const BODY_CLASS = 'ldtk-topic-split-active';
         child !== stream &&
         !child.classList.contains(PAGER_CLASS)
       ) {
-        stream.appendChild(child);
+        stream!.appendChild(child);
       }
     });
 
     return stream;
   }
 
-  function syncArticlePane(pane, mainPost) {
+  function syncArticlePane(pane: HTMLElement, mainPost: HTMLElement): void {
     const postId = mainPost.getAttribute('data-post-id') || '';
     const currentPostId = pane.getAttribute('data-source-post-id') || '';
 
@@ -452,7 +463,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     syncArticleFooterActions(pane);
   }
 
-  function showArticleLoading(pane) {
+  function showArticleLoading(pane: HTMLElement): void {
     if (pane.querySelector(`.${ARTICLE_CLONE_CLASS}`)) return;
     restoreFooterActions();
     const placeholder = document.createElement('div');
@@ -462,7 +473,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     pane.removeAttribute('data-source-post-id');
   }
 
-  function restoreTopicSplitLayout() {
+  function restoreTopicSplitLayout(): void {
     document.body.classList.remove(BODY_CLASS);
     restoreSplitHeaderTitle();
 
@@ -470,56 +481,56 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     document.querySelectorAll(`.${COMMENTS_PANE_CLASS}`).forEach((pane) => pane.remove());
     document.querySelectorAll(`.${PAGER_CLASS}`).forEach((pager) => pager.remove());
     document.querySelectorAll(`.${PAGED_COMMENT_CLASS}`).forEach((postEl) => postEl.remove());
-    document.querySelectorAll(`.${NATIVE_STREAM_CLASS}`).forEach((stream) => {
+    document.querySelectorAll<HTMLElement>(`.${NATIVE_STREAM_CLASS}`).forEach((stream) => {
       stream.classList.remove(NATIVE_STREAM_CLASS);
       stream.removeAttribute('aria-hidden');
       if (stream.parentElement?.classList.contains(WRAPPER_CLASS)) {
         stream.parentElement.parentElement?.insertBefore(stream, stream.parentElement);
       }
     });
-    document.querySelectorAll(`.${WRAPPER_CLASS}`).forEach((wrapper) => {
+    document.querySelectorAll<HTMLElement>(`.${WRAPPER_CLASS}`).forEach((wrapper) => {
       if (!wrapper.children.length) wrapper.remove();
       else wrapper.classList.remove(WRAPPER_CLASS);
     });
     document.querySelectorAll(`.${COMMENTS_STREAM_CLASS}`).forEach((stream) => stream.classList.remove(COMMENTS_STREAM_CLASS));
-    document.querySelectorAll(`.${ORIGINAL_MAIN_POST_CLASS}`).forEach((postEl) => {
+    document.querySelectorAll<HTMLElement>(`.${ORIGINAL_MAIN_POST_CLASS}`).forEach((postEl) => {
       postEl.classList.remove(ORIGINAL_MAIN_POST_CLASS);
       postEl.removeAttribute('aria-hidden');
     });
   }
 
-  function resetPager(topicId) {
+  function resetPager(topicId: string | null): void {
     pagerState.topicId = topicId || '';
     pagerState.page = 1;
     pagerState.postIds = [];
     pagerState.postsById.clear();
     pagerState.loading = false;
-    document.querySelectorAll(`.${COMMENTS_PANE_CLASS}`).forEach((stream) => {
+    document.querySelectorAll<HTMLElement>(`.${COMMENTS_PANE_CLASS}`).forEach((stream) => {
       stream.removeAttribute('data-ldtk-pager-topic-id');
       stream.removeAttribute('data-ldtk-pager-page');
       stream.removeAttribute('data-ldtk-pager-key');
     });
   }
 
-  function getTotalPages() {
+  function getTotalPages(): number {
     return Math.max(1, Math.ceil(Math.max(0, pagerState.postIds.length - 1) / PAGE_SIZE));
   }
 
-  function shouldShowPager() {
+  function shouldShowPager(): boolean {
     return getTotalPages() > 1;
   }
 
-  function getPagePostIds(page) {
+  function getPagePostIds(page: number): Array<string | number> {
     const commentIds = pagerState.postIds.slice(1);
     const start = (page - 1) * PAGE_SIZE;
     return commentIds.slice(start, start + PAGE_SIZE);
   }
 
-  function getPageKey(page = pagerState.page) {
+  function getPageKey(page: number = pagerState.page): string {
     return getPagePostIds(page).join(',');
   }
 
-  function isCurrentPageRendered(stream) {
+  function isCurrentPageRendered(stream: HTMLElement): boolean {
     return (
       stream.getAttribute('data-ldtk-pager-topic-id') === pagerState.topicId &&
       stream.getAttribute('data-ldtk-pager-page') === String(pagerState.page) &&
@@ -527,46 +538,46 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     );
   }
 
-  function setPagerStatus(stream, text, isError = false) {
-    const infoEl = stream.parentElement?.querySelector(`.${PAGER_INFO_CLASS}`);
+  function setPagerStatus(stream: HTMLElement, text: string, isError = false): void {
+    const infoEl = stream.parentElement?.querySelector<HTMLElement>(`.${PAGER_INFO_CLASS}`);
     if (!infoEl) return;
     infoEl.textContent = text;
     infoEl.classList.toggle('is-error', isError);
   }
 
-  function updatePagerButtons(stream) {
+  function updatePagerButtons(stream: HTMLElement): void {
     const totalPages = getTotalPages();
-    const prevBtn = stream.parentElement?.querySelector('[data-ldtk-pager-action="prev"]');
-    const nextBtn = stream.parentElement?.querySelector('[data-ldtk-pager-action="next"]');
+    const prevBtn = stream.parentElement?.querySelector<HTMLButtonElement>('[data-ldtk-pager-action="prev"]');
+    const nextBtn = stream.parentElement?.querySelector<HTMLButtonElement>('[data-ldtk-pager-action="next"]');
 
     if (prevBtn) prevBtn.disabled = pagerState.loading || pagerState.page <= 1;
     if (nextBtn) nextBtn.disabled = pagerState.loading || pagerState.page >= totalPages;
   }
 
-  function removePager(stream) {
+  function removePager(stream: HTMLElement): void {
     stream.parentElement?.querySelector(`:scope > .${PAGER_CLASS}`)?.remove();
   }
 
-  function resetCommentsScroll(stream) {
+  function resetCommentsScroll(stream: HTMLElement): void {
     // 分页切换后立即回到评论栏顶部，避免平滑滚动带来的等待感。
     stream.scrollTop = 0;
   }
 
-  function escapeHtml(value) {
+  function escapeHtml(value: unknown): string {
     return String(value ?? '').replace(/[&<>"']/g, (char) => ({
       '&': '&amp;',
       '<': '&lt;',
       '>': '&gt;',
       '"': '&quot;',
       "'": '&#39;',
-    }[char]));
+    }[char] as string));
   }
 
-  function escapeAttr(value) {
+  function escapeAttr(value: unknown): string {
     return escapeHtml(value).replace(/`/g, '&#96;');
   }
 
-  function createPostFromJson(post) {
+  function createPostFromJson(post: DiscoursePost): HTMLElement {
     const article = document.createElement('article');
     article.className = `topic-post ${PAGED_COMMENT_CLASS}`;
     article.setAttribute('data-post-id', String(post.id || ''));
@@ -599,11 +610,11 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     return article;
   }
 
-  function removePagedComments(stream) {
+  function removePagedComments(stream: HTMLElement): void {
     stream.querySelectorAll(`:scope > .${PAGED_COMMENT_CLASS}`).forEach((postEl) => postEl.remove());
   }
 
-  function renderCurrentPage(stream) {
+  function renderCurrentPage(stream: HTMLElement): void {
     removePagedComments(stream);
 
     const postIds = getPagePostIds(pagerState.page);
@@ -632,7 +643,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     updatePagerButtons(stream);
   }
 
-  async function loadPage(stream, page) {
+  async function loadPage(stream: HTMLElement, page: number): Promise<void> {
     const totalPages = getTotalPages();
     const nextPage = Math.min(Math.max(1, page), totalPages);
     const shouldResetScroll = nextPage !== pagerState.page;
@@ -661,18 +672,18 @@ const BODY_CLASS = 'ldtk-topic-split-active';
       if (shouldResetScroll) resetCommentsScroll(stream);
       buttons.injectButtons?.();
     } catch (err) {
-      setPagerStatus(stream, `评论加载失败：${err?.message || '未知错误'}`, true);
+      setPagerStatus(stream, `评论加载失败：${(err as Error)?.message || '未知错误'}`, true);
     } finally {
       pagerState.loading = false;
       updatePagerButtons(stream);
     }
   }
 
-  function ensurePager(stream) {
+  function ensurePager(stream: HTMLElement): HTMLElement | null {
     const pane = stream.parentElement;
     if (!pane) return null;
 
-    let pager = pane.querySelector(`:scope > .${PAGER_CLASS}`);
+    let pager = pane.querySelector<HTMLElement>(`:scope > .${PAGER_CLASS}`);
 
     if (!pager) {
       pager = document.createElement('nav');
@@ -685,7 +696,8 @@ const BODY_CLASS = 'ldtk-topic-split-active';
       `;
 
       pager.addEventListener('click', (event) => {
-        const button = event.target.closest('[data-ldtk-pager-action]');
+        const target = event.target as Element;
+        const button = target.closest('[data-ldtk-pager-action]');
         if (!button || pagerState.loading) return;
 
         const action = button.getAttribute('data-ldtk-pager-action');
@@ -698,7 +710,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     return pager;
   }
 
-  async function ensureCommentPager(stream, topicId) {
+  async function ensureCommentPager(stream: HTMLElement, topicId: string): Promise<void> {
     if (pagerState.topicId !== topicId) resetPager(topicId);
 
     if (!pagerState.postIds.length && !pagerState.loading) {
@@ -712,7 +724,7 @@ const BODY_CLASS = 'ldtk-topic-split-active';
         });
       } catch (err) {
         ensurePager(stream);
-        setPagerStatus(stream, `评论初始化失败：${err?.message || '未知错误'}`, true);
+        setPagerStatus(stream, `评论初始化失败：${(err as Error)?.message || '未知错误'}`, true);
         return;
       } finally {
         pagerState.loading = false;
@@ -742,25 +754,25 @@ const BODY_CLASS = 'ldtk-topic-split-active';
     }
   }
 
-async function loadTopicSnapshot(topicId) {
-  const topic = await discourse.fetchTopicJson(topicId);
+  async function loadTopicSnapshot(topicId: string): Promise<TopicJson | undefined> {
+    const topic = await discourse.fetchTopicJson(topicId);
     const posts = topic?.post_stream?.posts || [];
-    pagerState.postIds = topic?.post_stream?.stream || posts.map((post) => post.id).filter(Boolean);
+    pagerState.postIds = topic?.post_stream?.stream || posts.map((post) => post.id).filter((id): id is number => typeof id === 'number');
     posts.forEach((post) => {
       if (post?.id) pagerState.postsById.set(Number(post.id), post);
     });
     return topic;
   }
 
-  function getNativeMainPost(nativeStream) {
+  function getNativeMainPost(nativeStream: HTMLElement | null): HTMLElement | null {
     return (
-      nativeStream?.querySelector?.('[data-post-number="1"].topic-post, .topic-post[data-post-number="1"]') ||
-      nativeStream?.querySelector?.('[data-post-id].topic-post, .topic-post') ||
+      nativeStream?.querySelector?.<HTMLElement>('[data-post-number="1"].topic-post, .topic-post[data-post-number="1"]') ||
+      nativeStream?.querySelector?.<HTMLElement>('[data-post-id].topic-post, .topic-post') ||
       null
     );
   }
 
-  async function ensureSplitFromTopic(wrapper, nativeStream, topicId) {
+  async function ensureSplitFromTopic(wrapper: HTMLElement, nativeStream: HTMLElement, topicId: string): Promise<void> {
     const articlePane = ensureArticlePane(wrapper, nativeStream);
     const commentsPane = ensureCommentsPane(wrapper);
     const commentsStream = ensureCommentsStream(commentsPane);
@@ -795,9 +807,9 @@ async function loadTopicSnapshot(topicId) {
     }
   }
 
-async function applyTopicSplitLayout() {
-  const settings = await _getSettings();
-  const topicId = discourse.getTopicId();
+  async function applyTopicSplitLayout(): Promise<void> {
+    const settings = await _getSettings();
+    const topicId = discourse.getTopicId();
 
     if (!settings.enableSplitLayout || !topicId) {
       restoreTopicSplitLayout();
@@ -812,10 +824,10 @@ async function applyTopicSplitLayout() {
   }
 
   window.addEventListener('resize', () => {
-    document.querySelectorAll(`.${WRAPPER_CLASS}`).forEach(updateSplitPaneHeight);
+    document.querySelectorAll<HTMLElement>(`.${WRAPPER_CLASS}`).forEach(updateSplitPaneHeight);
   });
 
-export const layout = {
-  applyTopicSplitLayout,
-  restoreTopicSplitLayout,
-};
+  export const layout = {
+    applyTopicSplitLayout,
+    restoreTopicSplitLayout,
+  };

@@ -15,7 +15,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 const dist = join(root, 'dist');
 
-const STATIC_FILES = ['manifest.json', 'popup.html', 'styles.css', 'background.js', 'README.md'];
+const STATIC_FILES = ['manifest.json', 'popup.html', 'styles.css', 'README.md'];
 
 async function ensureDir(dir) {
   await mkdir(dir, { recursive: true });
@@ -58,8 +58,9 @@ try {
 
   const result = await build({
     entryPoints: {
-      content: join(root, 'src/content/index.js'),
-      popup: join(root, 'src/popup/index.js'),
+      content: join(root, 'src/content/index.ts'),
+      popup: join(root, 'src/popup/index.ts'),
+      background: join(root, 'src/background.ts'),
     },
     bundle: true,
     format: 'iife',
@@ -73,7 +74,7 @@ try {
   });
 
   await copyStaticFiles();
-  await copyGeneratedToDist(['content.js', 'popup.js', 'content.js.map', 'popup.js.map']);
+  await copyGeneratedToDist(['content.js', 'popup.js', 'background.js', 'content.js.map', 'popup.js.map', 'background.js.map']);
 
   if (result.warnings.length > 0) {
     console.warn(`⚠️  esbuild reported ${result.warnings.length} warning(s).`);
