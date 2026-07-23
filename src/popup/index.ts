@@ -26,32 +26,43 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function loadSettings(): Promise<void> {
     const settings = await _getSettings();
-    (Object.entries(settingInputs) as Array<[SettingKey, HTMLInputElement | null]>).forEach(([key, input]) => {
-      if (input) input.checked = Boolean(settings[key]);
-    });
+    (Object.entries(settingInputs) as Array<[SettingKey, HTMLInputElement | null]>).forEach(
+      ([key, input]) => {
+        if (input) input.checked = Boolean(settings[key]);
+      },
+    );
   }
 
   async function saveSetting(key: SettingKey, checked: boolean): Promise<void> {
     await _saveSettings({ [key]: checked });
     if (tabId !== undefined) {
-      chrome.tabs.sendMessage(tabId, { action: 'refreshEnhancements' } satisfies ContentMessage, {}, () => {});
+      chrome.tabs.sendMessage(
+        tabId,
+        { action: 'refreshEnhancements' } satisfies ContentMessage,
+        {},
+        () => {},
+      );
     }
   }
 
-  (Object.entries(settingInputs) as Array<[SettingKey, HTMLInputElement | null]>).forEach(([key, input]) => {
-    if (!input) return;
-    input.addEventListener('change', () => {
-      saveSetting(key, input.checked).catch((err: Error) => {
-        if (infoEl) infoEl.innerHTML = `⚠️ 设置保存失败：${err.message}`;
+  (Object.entries(settingInputs) as Array<[SettingKey, HTMLInputElement | null]>).forEach(
+    ([key, input]) => {
+      if (!input) return;
+      input.addEventListener('change', () => {
+        saveSetting(key, input.checked).catch((err: Error) => {
+          if (infoEl) infoEl.innerHTML = `⚠️ 设置保存失败：${err.message}`;
+        });
       });
-    });
-  });
+    },
+  );
 
   await loadSettings();
 
   if (!tab?.url?.match(/linux\.do\//)) {
     if (infoEl) infoEl.innerHTML = '⚠️ 请在 linux.do 的帖子页面使用此插件';
-    document.querySelectorAll<HTMLButtonElement>('.btn').forEach((button) => { button.disabled = true; });
+    document.querySelectorAll<HTMLButtonElement>('.btn').forEach((button) => {
+      button.disabled = true;
+    });
     return;
   }
 
@@ -60,28 +71,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
-  chrome.tabs.sendMessage(tabId, { action: 'getInfo' } satisfies ContentMessage, {}, (res: InfoResponse | undefined) => {
-    if (chrome.runtime.lastError || !res) {
-      if (infoEl) infoEl.innerHTML = '⚠️ 页面未加载完成，请刷新后重试';
-      return;
-    }
-    if (infoEl) {
-      infoEl.innerHTML = `
+  chrome.tabs.sendMessage(
+    tabId,
+    { action: 'getInfo' } satisfies ContentMessage,
+    {},
+    (res: InfoResponse | undefined) => {
+      if (chrome.runtime.lastError || !res) {
+        if (infoEl) infoEl.innerHTML = '⚠️ 页面未加载完成，请刷新后重试';
+        return;
+      }
+      if (infoEl) {
+        infoEl.innerHTML = `
         <div class="title">${res.title}</div>
         <div>当前已加载 ${res.postCount} 个楼层</div>
       `;
-    }
-  });
+      }
+    },
+  );
 
   document.getElementById('copyTopic')?.addEventListener('click', () => {
     if (tabId !== undefined) {
-      chrome.tabs.sendMessage(tabId, { action: 'copyTopic' } satisfies ContentMessage, {}, () => window.close());
+      chrome.tabs.sendMessage(tabId, { action: 'copyTopic' } satisfies ContentMessage, {}, () =>
+        window.close(),
+      );
     }
   });
 
   document.getElementById('downloadTopic')?.addEventListener('click', () => {
     if (tabId !== undefined) {
-      chrome.tabs.sendMessage(tabId, { action: 'downloadTopic' } satisfies ContentMessage, {}, () => window.close());
+      chrome.tabs.sendMessage(tabId, { action: 'downloadTopic' } satisfies ContentMessage, {}, () =>
+        window.close(),
+      );
     }
   });
 });

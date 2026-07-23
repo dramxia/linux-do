@@ -96,10 +96,7 @@ export async function batchFetchWithBackoff<T>(
         return;
       } catch (err) {
         if (err instanceof RateLimitError && attempt < maxRetries) {
-          const exponentialMs = Math.min(
-            initialBackoffMs * 2 ** attempt,
-            maxBackoffMs,
-          );
+          const exponentialMs = Math.min(initialBackoffMs * 2 ** attempt, maxBackoffMs);
           const waitMs = Math.max(err.retryAfterMs, exponentialMs);
           await sleep(waitMs);
           attempt += 1;

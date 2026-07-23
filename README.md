@@ -46,15 +46,22 @@ npm run build
 ## 开发
 
 ```bash
-npm run build
-npm run check
+npm install          # 安装开发依赖
+npm run build        # 构建扩展（esbuild 打包到根目录 + dist/）
+npm run check        # 构建 + 类型检查 + 语法验证
+npm test             # 运行测试（Vitest + jsdom）
+npm run test:watch   # 测试 watch 模式
+npm run lint         # ESLint 代码检查
+npm run format       # Prettier 格式化
+npm run format:check # 检查格式化
 ```
 
-当前项目采用零依赖构建：
+当前项目采用**零运行时依赖**（开发依赖：esbuild、typescript、vitest 等，不进发布包）：
 
-- 源码位于 `src/`
-- `scripts/build.js` 会生成根目录 `content.js` / `popup.js`
+- 源码位于 `src/`（TypeScript + ES modules）
+- `scripts/build.mjs` 使用 esbuild 打包，生成根目录 `content.js` / `popup.js` / `background.js`
 - 同时复制完整扩展到 `dist/`
+- shipped 扩展本身仍为零运行时依赖
 
 ## 文件结构
 
@@ -62,29 +69,50 @@ npm run check
 linux-do-toolkit/
 ├── src/
 │   ├── common/
-│   │   └── settings.js          # 设置读写
+│   │   └── settings.ts          # 功能开关设置
 │   ├── content/
-│   │   ├── index.js             # Content Script 入口
-│   │   ├── layout.js            # 帖子页正文 / 评论分栏
-│   │   ├── buttons.js           # 楼层按钮注入
-│   │   ├── base64.js            # Base64 选择工具
-│   │   ├── discourse.js         # Discourse 页面适配
-│   │   ├── markdown.js          # HTML/Markdown 转换
-│   │   ├── messages.js          # popup 消息通信
-│   │   ├── output.js            # 复制、下载、Toast
-│   │   └── post-export.js       # 楼层导出流程
-│   └── popup/
-│       └── index.js             # popup 入口
+│   │   ├── layout/               # 分栏布局模块（T4 拆分）
+│   │   │   ├── dom-queries.ts
+│   │   │   ├── resize-handler.ts
+│   │   │   ├── footer-actions-cloner.ts
+│   │   │   ├── header-title-cloner.ts
+│   │   │   ├── topic-meta-cloner.ts
+│   │   │   ├── comment-pager.ts
+│   │   │   ├── post-renderer.ts
+│   │   │   └── split-pane-layout.ts
+│   │   ├── index.ts              # 入口
+│   │   ├── buttons.ts            # 复制/下载按钮（Shadow DOM）
+│   │   ├── base64.ts             # Base64 解码
+│   │   ├── discourse.ts          # Discourse API 适配
+│   │   ├── markdown.ts           # HTML→Markdown 转换
+│   │   ├── output.ts             # 输出/Toast（Shadow DOM）
+│   │   ├── post-export.ts        # 帖子导出
+│   │   ├── messages.ts           # 消息处理
+│   │   ├── event-bus.ts          # 事件总线
+│   │   ├── managed-observer.ts   # Observer 封装
+│   │   ├── refresh-state.ts      # 刷新状态管理
+│   │   ├── error-handler.ts      # 统一错误处理
+│   │   └── api-rate-limiter.ts   # API 速率限制
+│   ├── popup/
+│   │   └── index.ts
+│   └── background.ts
+├── test/                         # 测试目录
+│   ├── mocks/
+│   │   └── chrome.ts
+│   ├── fixtures/
+│   │   └── *.html
+│   └── *.test.ts
 ├── scripts/
-│   └── build.js                 # 零依赖构建脚本
-├── dist/                        # 构建输出
-├── manifest.json                # 插件配置
-├── background.js                # MV3 Service Worker，当前仅保留生命周期入口
-├── content.js                   # 构建产物
-├── popup.html                   # 工具栏弹窗界面
-├── popup.js                     # 构建产物
-├── styles.css                   # 注入按钮样式
-└── icons/
+│   ├── build.mjs                 # esbuild 构建脚本
+│   └── probe-discourse-css.mjs   # CSS 探针
+├── tsconfig.json
+├── vitest.config.ts
+├── .eslintrc.cjs
+├── .prettierrc
+├── manifest.json
+├── styles.css
+├── popup.html
+└── package.json
 ```
 
 ## Markdown 输出格式

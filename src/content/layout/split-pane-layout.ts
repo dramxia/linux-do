@@ -13,14 +13,8 @@ import {
   PAGER_CLASS,
   WRAPPER_CLASS,
 } from './dom-queries';
-import {
-  bindTopicMetaObserver,
-  syncArticleTopicMeta,
-} from './topic-meta-cloner';
-import {
-  restoreSplitHeaderTitle,
-  scheduleSplitHeaderSync,
-} from './header-title-cloner';
+import { bindTopicMetaObserver, syncArticleTopicMeta } from './topic-meta-cloner';
+import { restoreSplitHeaderTitle, scheduleSplitHeaderSync } from './header-title-cloner';
 import {
   createPostFromJson,
   ensureCommentPager,
@@ -30,6 +24,7 @@ import {
 } from './comment-pager';
 import { restoreFooterActions, syncArticleFooterActions } from './footer-actions-cloner';
 import { bindResizeHandler } from './resize-handler';
+import { handleError } from '../error-handler';
 
 function getSplitWrapper(stream: HTMLElement | null): HTMLElement | null {
   if (!stream?.parentElement) return null;
@@ -63,13 +58,18 @@ export function updateSplitPaneHeight(wrapper: HTMLElement | null): void {
 }
 
 function stripCloneUnsafeNodes(clone: HTMLElement): void {
-  clone.querySelectorAll([
-    '.ldcopy-actions',
-    '.topic-map',
-    '.embedded-posts',
-    'script',
-    'style',
-  ].join(',')).forEach((el) => el.remove());
+  clone
+    .querySelectorAll(
+      [
+        '.ldcopy-actions',
+        '.ldtk-shadow-host',
+        '.topic-map',
+        '.embedded-posts',
+        'script',
+        'style',
+      ].join(','),
+    )
+    .forEach((el) => el.remove());
 
   clone.querySelectorAll('[id]').forEach((el) => {
     el.removeAttribute('id');
@@ -122,10 +122,7 @@ function ensureCommentsStream(pane: HTMLElement): HTMLElement {
   }
 
   Array.from(pane.children).forEach((child) => {
-    if (
-      child !== stream &&
-      !child.classList.contains(PAGER_CLASS)
-    ) {
+    if (child !== stream && !child.classList.contains(PAGER_CLASS)) {
       stream!.appendChild(child);
     }
   });
@@ -159,13 +156,19 @@ function showArticleLoading(pane: HTMLElement): void {
 
 function getNativeMainPost(nativeStream: HTMLElement | null): HTMLElement | null {
   return (
-    nativeStream?.querySelector?.<HTMLElement>('[data-post-number="1"].topic-post, .topic-post[data-post-number="1"]') ||
+    nativeStream?.querySelector?.<HTMLElement>(
+      '[data-post-number="1"].topic-post, .topic-post[data-post-number="1"]',
+    ) ||
     nativeStream?.querySelector?.<HTMLElement>('[data-post-id].topic-post, .topic-post') ||
     null
   );
 }
 
-async function ensureSplitFromTopic(wrapper: HTMLElement, nativeStream: HTMLElement, topicId: string): Promise<void> {
+async function ensureSplitFromTopic(
+  wrapper: HTMLElement,
+  nativeStream: HTMLElement,
+  topicId: string,
+): Promise<void> {
   const articlePane = ensureArticlePane(wrapper, nativeStream);
   const commentsPane = ensureCommentsPane(wrapper);
   const commentsStream = ensureCommentsStream(commentsPane);
@@ -185,7 +188,8 @@ async function ensureSplitFromTopic(wrapper: HTMLElement, nativeStream: HTMLElem
     }
 
     const firstPost = pagerState.postsById.get(Number(pagerState.postIds[0]));
-    const mainPost = getNativeMainPost(nativeStream) || (firstPost ? createPostFromJson(firstPost) : null);
+    const mainPost =
+      getNativeMainPost(nativeStream) || (firstPost ? createPostFromJson(firstPost) : null);
     if (!mainPost) throw new Error('未找到主题正文');
 
     syncArticlePane(articlePane, mainPost);
@@ -195,6 +199,7 @@ async function ensureSplitFromTopic(wrapper: HTMLElement, nativeStream: HTMLElem
     setTimeout(() => updateSplitPaneHeight(wrapper), 250);
   } catch (err) {
     // 任何接口或 DOM 适配异常都回退到站点原生布局，避免留下半初始化页面。
+    handleError(err, '分栏布局');
     restoreTopicSplitLayout();
     throw err;
   }
@@ -219,7 +224,9 @@ export function restoreTopicSplitLayout(): void {
     if (!wrapper.children.length) wrapper.remove();
     else wrapper.classList.remove(WRAPPER_CLASS);
   });
-  document.querySelectorAll(`.${COMMENTS_STREAM_CLASS}`).forEach((stream) => stream.classList.remove(COMMENTS_STREAM_CLASS));
+  document
+    .querySelectorAll(`.${COMMENTS_STREAM_CLASS}`)
+    .forEach((stream) => stream.classList.remove(COMMENTS_STREAM_CLASS));
   document.querySelectorAll<HTMLElement>(`.${ORIGINAL_MAIN_POST_CLASS}`).forEach((postEl) => {
     postEl.classList.remove(ORIGINAL_MAIN_POST_CLASS);
     postEl.removeAttribute('aria-hidden');

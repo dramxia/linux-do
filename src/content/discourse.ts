@@ -59,18 +59,17 @@ export function getTopicId(): string | null {
 }
 
 function getAllPostElements(): HTMLElement[] {
-  return Array.from(document.querySelectorAll('[data-post-id].topic-post, .topic-post'))
-    .filter((el): el is HTMLElement => isHTMLElement(el) && !el.closest('.ldtk-topic-article-pane'));
+  return Array.from(document.querySelectorAll('[data-post-id].topic-post, .topic-post')).filter(
+    (el): el is HTMLElement => isHTMLElement(el) && !el.closest('.ldtk-topic-article-pane'),
+  );
 }
 
 export function getPostElements(): HTMLElement[] {
-  return getAllPostElements()
-    .filter((postEl) => !postEl.closest('.ldtk-topic-native-stream'));
+  return getAllPostElements().filter((postEl) => !postEl.closest('.ldtk-topic-native-stream'));
 }
 
 export function getNativePostElements(): HTMLElement[] {
-  return getAllPostElements()
-    .filter((postEl) => !postEl.classList.contains('ldtk-paged-comment'));
+  return getAllPostElements().filter((postEl) => !postEl.classList.contains('ldtk-paged-comment'));
 }
 
 export function getPostMeta(postEl: HTMLElement): PostMeta {
@@ -102,10 +101,13 @@ export async function fetchTopicJson(topicId: string | null): Promise<TopicJson>
     headers: { Accept: 'application/json' },
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json() as TopicJson;
+  return (await res.json()) as TopicJson;
 }
 
-export async function fetchPostsByIds(topicId: string | null, postIds: Array<string | number>): Promise<DiscoursePost[]> {
+export async function fetchPostsByIds(
+  topicId: string | null,
+  postIds: Array<string | number>,
+): Promise<DiscoursePost[]> {
   if (!topicId) throw new Error('缺少主题 ID');
   if (!postIds.length) return [];
 
@@ -120,7 +122,7 @@ export async function fetchPostsByIds(topicId: string | null, postIds: Array<str
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-  const data = await res.json() as PostsResponse;
+  const data = (await res.json()) as PostsResponse;
   return data?.post_stream?.posts || data?.posts || [];
 }
 
@@ -139,10 +141,13 @@ export function getPostImages(postEl: HTMLElement): ImageMap {
 }
 
 export function replaceUploadUrls(rawMd: string, imageMap: ImageMap): string {
-  return rawMd.replace(/!\[([^\]]*)\]\(upload:\/\/([^)]+)\)/g, (match, alt: string, uploadFilename: string) => {
-    if (imageMap[uploadFilename]) return `![${alt}](${imageMap[uploadFilename]})`;
-    return match;
-  });
+  return rawMd.replace(
+    /!\[([^\]]*)\]\(upload:\/\/([^)]+)\)/g,
+    (match, alt: string, uploadFilename: string) => {
+      if (imageMap[uploadFilename]) return `![${alt}](${imageMap[uploadFilename]})`;
+      return match;
+    },
+  );
 }
 
 export const discourse = {

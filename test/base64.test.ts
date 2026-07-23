@@ -30,9 +30,9 @@ describe('decodeBase64Utf8', () => {
     const result = decodeBase64Utf8('//79');
     // atob('//79') returns 3 latin-1 chars with codes 0xFF 0xFE 0xFD
     expect(result.length).toBe(3);
-    expect(result.charCodeAt(0)).toBe(0xFF);
-    expect(result.charCodeAt(1)).toBe(0xFE);
-    expect(result.charCodeAt(2)).toBe(0xFD);
+    expect(result.charCodeAt(0)).toBe(0xff);
+    expect(result.charCodeAt(1)).toBe(0xfe);
+    expect(result.charCodeAt(2)).toBe(0xfd);
   });
 
   it('throws on invalid base64 input (atob rejects)', () => {

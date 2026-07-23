@@ -30,7 +30,10 @@ export interface ExportResult {
   failureCount: number;
 }
 
-export async function buildPostMarkdown(postEl: HTMLElement, settings: DiscourseSettings): Promise<BuildPostResult> {
+export async function buildPostMarkdown(
+  postEl: HTMLElement,
+  settings: DiscourseSettings,
+): Promise<BuildPostResult> {
   const topicId = discourse.getTopicId();
   const meta = discourse.getPostMeta(postEl);
   const raw = await discourse.fetchRawPost(topicId, meta.postNumber);
@@ -45,9 +48,10 @@ function buildPostMarkdownFromRaw(
   settings: DiscourseSettings,
 ): BuildPostResult {
   const normalized = markdown.normalizeDiscourseMd(raw);
-  const processedRaw = settings.replaceUploadUrls === false
-    ? normalized
-    : discourse.replaceUploadUrls(normalized, discourse.getPostImages(postEl));
+  const processedRaw =
+    settings.replaceUploadUrls === false
+      ? normalized
+      : discourse.replaceUploadUrls(normalized, discourse.getPostImages(postEl));
   const md = markdown.ensureMarkdown(processedRaw);
 
   return {

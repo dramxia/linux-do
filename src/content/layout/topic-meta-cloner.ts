@@ -10,41 +10,44 @@ import {
   TOPIC_META_SOURCE_ATTR,
   topicMetaState,
 } from './dom-queries';
+import { ManagedObserver } from '../managed-observer';
 import { syncSplitTopicMeta } from './header-title-cloner';
 
 function findTopicMetaSource(): Element | null {
-  const directMatch = Array.from(document.querySelectorAll(TOPIC_META_SELECTORS.join(','))).find((el) => (
-    !el.closest(`.${HEADER_META_CLASS}`) &&
-    !el.closest(`.${ARTICLE_PANE_CLASS}`) &&
-    !el.closest(`.${COMMENTS_PANE_CLASS}`)
-  ));
+  const directMatch = Array.from(document.querySelectorAll(TOPIC_META_SELECTORS.join(','))).find(
+    (el) =>
+      !el.closest(`.${HEADER_META_CLASS}`) &&
+      !el.closest(`.${ARTICLE_PANE_CLASS}`) &&
+      !el.closest(`.${COMMENTS_PANE_CLASS}`),
+  );
 
   if (directMatch) return directMatch;
 
-  return Array.from(document.querySelectorAll('#main-outlet .container.posts > .row > *, .topic-area > *')).find((el) => {
-    if (
-      el.closest(`.${HEADER_META_CLASS}`) ||
-      el.closest(`.${ARTICLE_PANE_CLASS}`) ||
-      el.closest(`.${COMMENTS_PANE_CLASS}`) ||
-      el.matches('#topic-title')
-    ) {
-      return false;
-    }
+  return (
+    Array.from(
+      document.querySelectorAll('#main-outlet .container.posts > .row > *, .topic-area > *'),
+    ).find((el) => {
+      if (
+        el.closest(`.${HEADER_META_CLASS}`) ||
+        el.closest(`.${ARTICLE_PANE_CLASS}`) ||
+        el.closest(`.${COMMENTS_PANE_CLASS}`) ||
+        el.matches('#topic-title')
+      ) {
+        return false;
+      }
 
-    const text = el.textContent || '';
-    const hasStatsText = ['浏览量', '赞', '链接', '用户'].filter((label) => text.includes(label)).length >= 2;
-    const hasAvatars = el.querySelectorAll('img.avatar, .avatar').length >= 2;
-    const hasSummary = Boolean(el.querySelector('[title*="总结"], button, .btn'));
-    return hasStatsText && (hasAvatars || hasSummary);
-  }) || null;
+      const text = el.textContent || '';
+      const hasStatsText =
+        ['浏览量', '赞', '链接', '用户'].filter((label) => text.includes(label)).length >= 2;
+      const hasAvatars = el.querySelectorAll('img.avatar, .avatar').length >= 2;
+      const hasSummary = Boolean(el.querySelector('[title*="总结"], button, .btn'));
+      return hasStatsText && (hasAvatars || hasSummary);
+    }) || null
+  );
 }
 
 function stripHeaderMetaCloneUnsafeNodes(clone: HTMLElement): void {
-  clone.querySelectorAll([
-    'script',
-    'style',
-    '[id]',
-  ].join(',')).forEach((el) => {
+  clone.querySelectorAll(['script', 'style', '[id]'].join(',')).forEach((el) => {
     if (el.matches('script, style')) {
       el.remove();
       return;
@@ -62,7 +65,10 @@ function buildTopicMetaClone(source: Element, innerClass: string): HTMLElement {
   return clone;
 }
 
-export function syncSplitHeaderMeta(mount: HTMLElement | null, headerTitle: HTMLElement | null): void {
+export function syncSplitHeaderMeta(
+  mount: HTMLElement | null,
+  headerTitle: HTMLElement | null,
+): void {
   const source = findTopicMetaSource();
   if (!source || !mount) return;
 
@@ -136,25 +142,28 @@ export function bindTopicMetaObserver(): void {
   if (topicMetaState.observer) return;
 
   const target = document.querySelector<HTMLElement>('#main-outlet, #main, body') || document.body;
-  topicMetaState.observer = new MutationObserver((mutations) => {
-    const shouldSync = mutations.some((mutation) => {
-      const nodes: Node[] = [
-        mutation.target,
-        ...Array.from(mutation.addedNodes || []),
-        ...Array.from(mutation.removedNodes || []),
-      ];
+  topicMetaState.observer = new ManagedObserver(
+    target,
+    {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    },
+    (mutations) => {
+      const shouldSync = mutations.some((mutation) => {
+        const nodes: Node[] = [
+          mutation.target,
+          ...Array.from(mutation.addedNodes || []),
+          ...Array.from(mutation.removedNodes || []),
+        ];
 
-      return nodes.some(isNativeTopicMetaNode);
-    });
+        return nodes.some(isNativeTopicMetaNode);
+      });
 
-    if (shouldSync) scheduleTopicMetaSync();
-  });
-
-  topicMetaState.observer.observe(target, {
-    childList: true,
-    subtree: true,
-    characterData: true,
-  });
+      if (shouldSync) scheduleTopicMetaSync();
+    },
+  );
+  topicMetaState.observer.start();
 }
 
 export function teardownTopicMetaObserver(): void {

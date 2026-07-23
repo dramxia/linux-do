@@ -1,6 +1,7 @@
 /* Linux.do 工具箱 — Base64 选择工具模块 */
 import * as output from './output';
 import { getSettings as _getSettings } from '../common/settings';
+import { handleError } from './error-handler';
 
 function decodeBase64Utf8(text: string): string {
   const normalized = text.replace(/\s+/g, '');
@@ -37,7 +38,9 @@ function styleSelectionToolButton(button: HTMLButtonElement, order: number): voi
 export async function injectBase64Button(): Promise<void> {
   const settings = await _getSettings();
   if (!settings.enableBase64Decode) {
-    document.querySelectorAll('.ldcopy-base64-btn, .ldcopy-strip-chinese-btn').forEach((el) => el.remove());
+    document
+      .querySelectorAll('.ldcopy-base64-btn, .ldcopy-strip-chinese-btn')
+      .forEach((el) => el.remove());
     return;
   }
 
@@ -49,7 +52,8 @@ export async function injectBase64Button(): Promise<void> {
     base64Btn = document.createElement('button');
     base64Btn.className = 'btn btn-flat ldcopy-base64-btn';
     base64Btn.title = 'Base64 解码并复制';
-    base64Btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="vertical-align: middle; margin-right: 2px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>base64';
+    base64Btn.innerHTML =
+      '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="vertical-align: middle; margin-right: 2px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>base64';
     styleSelectionToolButton(base64Btn, -2);
 
     base64Btn.addEventListener('click', async (event) => {
@@ -64,7 +68,7 @@ export async function injectBase64Button(): Promise<void> {
         await output.copyToClipboard(decodeBase64Utf8(selectedText));
         output.showToast('✅ Base64 解码已复制');
       } catch (err) {
-        output.showToast('❌ Base64 解码失败: ' + (err as Error).message);
+        handleError(err, 'Base64 解码');
       }
     });
 
@@ -92,7 +96,7 @@ export async function injectBase64Button(): Promise<void> {
         await output.copyToClipboard(strippedText);
         output.showToast('✅ 已去中文并复制');
       } catch (err) {
-        output.showToast('❌ 去中文失败: ' + (err as Error).message);
+        handleError(err, '去中文');
       }
     });
 

@@ -58,15 +58,24 @@ function htmlToMarkdown(html: string): string {
     const children = Array.from(el.childNodes).map(walk).join('');
 
     switch (tag) {
-      case 'h1': return `\n# ${children.trim()}\n\n`;
-      case 'h2': return `\n## ${children.trim()}\n\n`;
-      case 'h3': return `\n### ${children.trim()}\n\n`;
-      case 'h4': return `\n#### ${children.trim()}\n\n`;
-      case 'h5': return `\n##### ${children.trim()}\n\n`;
-      case 'h6': return `\n###### ${children.trim()}\n\n`;
-      case 'p': return `\n${children.trim()}\n\n`;
-      case 'br': return '\n';
-      case 'hr': return '\n---\n\n';
+      case 'h1':
+        return `\n# ${children.trim()}\n\n`;
+      case 'h2':
+        return `\n## ${children.trim()}\n\n`;
+      case 'h3':
+        return `\n### ${children.trim()}\n\n`;
+      case 'h4':
+        return `\n#### ${children.trim()}\n\n`;
+      case 'h5':
+        return `\n##### ${children.trim()}\n\n`;
+      case 'h6':
+        return `\n###### ${children.trim()}\n\n`;
+      case 'p':
+        return `\n${children.trim()}\n\n`;
+      case 'br':
+        return '\n';
+      case 'hr':
+        return '\n---\n\n';
       case 'strong':
       case 'b': {
         const text = children.trim();
@@ -89,7 +98,7 @@ function htmlToMarkdown(html: string): string {
       case 'pre': {
         const codeEl = el.querySelector('code');
         const lang = codeEl?.className?.match(/lang-(\w+)/)?.[1] || '';
-        const codeText = codeEl ? (codeEl.textContent || '') : (el.textContent || '');
+        const codeText = codeEl ? codeEl.textContent || '' : el.textContent || '';
         return `\n\`\`\`${lang}\n${codeText.trim()}\n\`\`\`\n\n`;
       }
       case 'a': {
@@ -104,38 +113,68 @@ function htmlToMarkdown(html: string): string {
         return src ? `![${alt}](${src})` : '';
       }
       case 'blockquote': {
-        const lines = children.trim().split('\n').map((line) => `> ${line}`).join('\n');
+        const lines = children
+          .trim()
+          .split('\n')
+          .map((line) => `> ${line}`)
+          .join('\n');
         return `\n${lines}\n\n`;
       }
       case 'aside': {
         if (el.classList?.contains('quote')) {
           const titleEl = el.querySelector('.quote-controls, [data-username]');
-          const quoteUser = el.getAttribute('data-username') || titleEl?.getAttribute('data-username') || '';
+          const quoteUser =
+            el.getAttribute('data-username') || titleEl?.getAttribute('data-username') || '';
           const blockquote = el.querySelector(':scope > blockquote');
-          const content = blockquote ? Array.from(blockquote.childNodes).map(walk).join('').trim() : children.trim();
+          const content = blockquote
+            ? Array.from(blockquote.childNodes).map(walk).join('').trim()
+            : children.trim();
           const attribution = quoteUser ? `**${quoteUser} said:**\n` : '';
-          const lines = (attribution + content).split('\n').map((line) => `> ${line}`).join('\n');
+          const lines = (attribution + content)
+            .split('\n')
+            .map((line) => `> ${line}`)
+            .join('\n');
           return `\n${lines}\n\n`;
         }
         return children;
       }
       case 'ul': {
-        return '\n' + Array.from(el.children).map((li) => {
-          return li.tagName?.toLowerCase() === 'li' ? `- ${walk(li).trim()}` : walk(li);
-        }).join('\n') + '\n\n';
+        return (
+          '\n' +
+          Array.from(el.children)
+            .map((li) => {
+              return li.tagName?.toLowerCase() === 'li' ? `- ${walk(li).trim()}` : walk(li);
+            })
+            .join('\n') +
+          '\n\n'
+        );
       }
       case 'ol': {
-        return '\n' + Array.from(el.children).map((li, index) => {
-          return li.tagName?.toLowerCase() === 'li' ? `${index + 1}. ${walk(li).trim()}` : walk(li);
-        }).join('\n') + '\n\n';
+        return (
+          '\n' +
+          Array.from(el.children)
+            .map((li, index) => {
+              return li.tagName?.toLowerCase() === 'li'
+                ? `${index + 1}. ${walk(li).trim()}`
+                : walk(li);
+            })
+            .join('\n') +
+          '\n\n'
+        );
       }
-      case 'li': return children;
-      case 'table': return htmlTableToMarkdown(el);
-      case 'sup': return `<sup>${children}</sup>`;
-      case 'sub': return `<sub>${children}</sub>`;
-      case 'mark': return `==${children.trim()}==`;
+      case 'li':
+        return children;
+      case 'table':
+        return htmlTableToMarkdown(el);
+      case 'sup':
+        return `<sup>${children}</sup>`;
+      case 'sub':
+        return `<sub>${children}</sub>`;
+      case 'mark':
+        return `==${children.trim()}==`;
       case 'span': {
-        if (el.classList?.contains('mention')) return children.trim() || (el.textContent?.trim() || '');
+        if (el.classList?.contains('mention'))
+          return children.trim() || el.textContent?.trim() || '';
         return children;
       }
       case 'div': {
@@ -178,7 +217,9 @@ function htmlToMarkdown(html: string): string {
     }
   }
 
-  return walk(doc.body).replace(/\n{3,}/g, '\n\n').trim();
+  return walk(doc.body)
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 export function ensureMarkdown(rawContent: string): string {

@@ -11,7 +11,12 @@ const sampleMeta: PostMeta = {
 
 describe('formatPostMd', () => {
   it('formats with metadata header by default', () => {
-    const result = formatPostMd(sampleMeta, '  hello body  ', 'My Topic', 'https://linux.do/t/topic/1');
+    const result = formatPostMd(
+      sampleMeta,
+      '  hello body  ',
+      'My Topic',
+      'https://linux.do/t/topic/1',
+    );
     expect(result).toBe(
       '<!-- 来源: https://linux.do/t/topic/1#post-3 | 作者: alice | 2024-01-15 -->\n\nhello body',
     );
@@ -62,7 +67,9 @@ describe('formatPostMd', () => {
 
   it('handles empty content (includeMetadata true) -> header only', () => {
     const result = formatPostMd(sampleMeta, '   ', 'T', 'https://linux.do/t/topic/1');
-    expect(result).toBe('<!-- 来源: https://linux.do/t/topic/1#post-3 | 作者: alice | 2024-01-15 -->\n\n');
+    expect(result).toBe(
+      '<!-- 来源: https://linux.do/t/topic/1#post-3 | 作者: alice | 2024-01-15 -->\n\n',
+    );
   });
 });
 

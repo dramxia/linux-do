@@ -1,10 +1,6 @@
 /* Linux.do 工具箱 — 从 DiscoursePost JSON 创建 post DOM 元素 */
 import type { DiscoursePost } from '../discourse';
-import {
-  PAGED_COMMENT_CLASS,
-  escapeAttr,
-  escapeHtml,
-} from './dom-queries';
+import { PAGED_COMMENT_CLASS, escapeAttr, escapeHtml } from './dom-queries';
 
 export function createPostFromJson(post: DiscoursePost): HTMLElement {
   const article = document.createElement('article');
@@ -12,9 +8,7 @@ export function createPostFromJson(post: DiscoursePost): HTMLElement {
   article.setAttribute('data-post-id', String(post.id || ''));
   article.setAttribute('data-post-number', String(post.post_number || ''));
 
-  const avatar = post.avatar_template
-    ? post.avatar_template.replace('{size}', '45')
-    : '';
+  const avatar = post.avatar_template ? post.avatar_template.replace('{size}', '45') : '';
   const createdAt = post.created_at || '';
   const cooked = post.cooked || '';
 

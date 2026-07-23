@@ -7,7 +7,11 @@ import {
   HEADER_TITLE_INNER_CLASS,
   TOPIC_META_SOURCE_ATTR,
 } from './dom-queries';
-import { syncSplitHeaderMeta, syncArticleTopicMeta, teardownTopicMetaObserver } from './topic-meta-cloner';
+import {
+  syncSplitHeaderMeta,
+  syncArticleTopicMeta,
+  teardownTopicMetaObserver,
+} from './topic-meta-cloner';
 import { syncArticleFooterActions, restoreFooterActions } from './footer-actions-cloner';
 
 function getHeaderTitleMount(): HTMLElement | null {
@@ -19,13 +23,13 @@ function getHeaderTitleMount(): HTMLElement | null {
 }
 
 function stripHeaderCloneUnsafeNodes(clone: HTMLElement): void {
-  clone.querySelectorAll([
-    'script',
-    'style',
-    '.edit-topic',
-    '.topic-statuses',
-    '.topic-notifications-button',
-  ].join(',')).forEach((el) => el.remove());
+  clone
+    .querySelectorAll(
+      ['script', 'style', '.edit-topic', '.topic-statuses', '.topic-notifications-button'].join(
+        ',',
+      ),
+    )
+    .forEach((el) => el.remove());
 
   clone.querySelectorAll('[id]').forEach((el) => {
     el.removeAttribute('id');
@@ -43,7 +47,9 @@ function syncSplitHeaderTitle(): void {
     headerTitle = document.createElement('div');
     headerTitle.className = HEADER_TITLE_CLASS;
 
-    const logoArea = mount.querySelector<HTMLElement>(':scope > .title, :scope > .home-logo-wrapper, :scope > .brand-header');
+    const logoArea = mount.querySelector<HTMLElement>(
+      ':scope > .title, :scope > .home-logo-wrapper, :scope > .brand-header',
+    );
     if (logoArea) {
       logoArea.insertAdjacentElement('afterend', headerTitle);
     } else {

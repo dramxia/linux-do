@@ -47,9 +47,7 @@ describe('replaceUploadUrls', () => {
   it('preserves empty alt text when replacing', () => {
     const input = '![](upload://no-alt.png)';
     const map = { 'no-alt.png': 'https://cdn.example.com/no-alt.png' };
-    expect(replaceUploadUrls(input, map)).toBe(
-      '![](https://cdn.example.com/no-alt.png)',
-    );
+    expect(replaceUploadUrls(input, map)).toBe('![](https://cdn.example.com/no-alt.png)');
   });
 
   it('returns empty string for empty input', () => {
@@ -59,8 +57,6 @@ describe('replaceUploadUrls', () => {
   it('handles filenames with dots and special chars in upload:// filename', () => {
     const input = '![alt](upload://my.file-v2.png)';
     const map = { 'my.file-v2.png': 'https://cdn.example.com/my.file-v2.png' };
-    expect(replaceUploadUrls(input, map)).toBe(
-      '![alt](https://cdn.example.com/my.file-v2.png)',
-    );
+    expect(replaceUploadUrls(input, map)).toBe('![alt](https://cdn.example.com/my.file-v2.png)');
   });
 });

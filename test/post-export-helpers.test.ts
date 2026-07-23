@@ -48,9 +48,9 @@ describe('assertExportResult', () => {
 
 describe('getExportToastPrefix', () => {
   it('returns ✅ when there are no failures', () => {
-    expect(
-      getExportToastPrefix(makeResult({ total: 5, successCount: 5, failureCount: 0 })),
-    ).toBe('✅');
+    expect(getExportToastPrefix(makeResult({ total: 5, successCount: 5, failureCount: 0 }))).toBe(
+      '✅',
+    );
   });
 
   it('returns ✅ even when total is zero but failureCount is zero', () => {
@@ -62,9 +62,7 @@ describe('getExportToastPrefix', () => {
   });
 
   it('returns a warning summary string when there are some failures', () => {
-    const prefix = getExportToastPrefix(
-      makeResult({ total: 4, successCount: 3, failureCount: 1 }),
-    );
+    const prefix = getExportToastPrefix(makeResult({ total: 4, successCount: 3, failureCount: 1 }));
     expect(prefix).toBe('⚠️ 已处理 3/4 个楼层，1 个失败。');
   });
 
@@ -79,9 +77,7 @@ describe('getExportToastPrefix', () => {
   it('handles all-failed case (failureCount === total)', () => {
     // Note: this would normally be preceded by assertExportResult throwing,
     // but getExportToastPrefix itself does not throw.
-    const prefix = getExportToastPrefix(
-      makeResult({ total: 5, successCount: 0, failureCount: 5 }),
-    );
+    const prefix = getExportToastPrefix(makeResult({ total: 5, successCount: 0, failureCount: 5 }));
     expect(prefix).toBe('⚠️ 已处理 0/5 个楼层，5 个失败。');
   });
 });

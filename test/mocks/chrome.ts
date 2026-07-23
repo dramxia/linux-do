@@ -91,4 +91,10 @@ function resetChromeMock(): void {
   (globalThis as { chrome?: ChromeMock }).chrome = mock;
 }
 
-export { setupChromeMock, resetChromeMock, type ChromeMock, type MessageListener, type StorageChangedListener };
+export {
+  setupChromeMock,
+  resetChromeMock,
+  type ChromeMock,
+  type MessageListener,
+  type StorageChangedListener,
+};

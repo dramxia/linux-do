@@ -10,16 +10,21 @@ import {
 } from './dom-queries';
 
 function findFooterActionsSource(): HTMLElement | null {
-  return Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find((el): el is HTMLElement => (
-    el instanceof HTMLElement &&
-    !el.closest(`.${ARTICLE_PANE_CLASS}`) &&
-    !el.closest(`.${HEADER_META_CLASS}`) &&
-    !el.closest(`.${COMMENTS_PANE_CLASS}`)
-  )) || null;
+  return (
+    Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find(
+      (el): el is HTMLElement =>
+        el instanceof HTMLElement &&
+        !el.closest(`.${ARTICLE_PANE_CLASS}`) &&
+        !el.closest(`.${HEADER_META_CLASS}`) &&
+        !el.closest(`.${COMMENTS_PANE_CLASS}`),
+    ) || null
+  );
 }
 
 function ensureFooterActionsPlaceholder(source: HTMLElement): HTMLElement {
-  const existing = document.querySelector<HTMLElement>(`[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`);
+  const existing = document.querySelector<HTMLElement>(
+    `[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`,
+  );
   if (existing) return existing;
 
   const placeholder = document.createElement('span');
@@ -32,7 +37,9 @@ function ensureFooterActionsPlaceholder(source: HTMLElement): HTMLElement {
 export function syncArticleFooterActions(pane: HTMLElement | null): void {
   if (!pane) return;
 
-  const movedSource = pane.querySelector<HTMLElement>(`:scope > .${ARTICLE_ACTIONS_CLASS} > [${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`);
+  const movedSource = pane.querySelector<HTMLElement>(
+    `:scope > .${ARTICLE_ACTIONS_CLASS} > [${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`,
+  );
   const source = movedSource || findFooterActionsSource();
   let articleActions = pane.querySelector<HTMLElement>(`:scope > .${ARTICLE_ACTIONS_CLASS}`);
 
@@ -57,7 +64,9 @@ export function syncArticleFooterActions(pane: HTMLElement | null): void {
 
 export function restoreFooterActions(): void {
   const source = document.querySelector<HTMLElement>(`[${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`);
-  const placeholder = document.querySelector<HTMLElement>(`[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`);
+  const placeholder = document.querySelector<HTMLElement>(
+    `[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`,
+  );
 
   if (source) {
     source.removeAttribute(FOOTER_ACTIONS_SOURCE_ATTR);

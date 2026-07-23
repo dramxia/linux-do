@@ -3,9 +3,7 @@ import { escapeHtml, escapeAttr } from '../src/content/layout/dom-queries';
 
 describe('escapeHtml', () => {
   it('escapes all five HTML special chars (& < > " \')', () => {
-    expect(escapeHtml('a & b < c > d " e \' f')).toBe(
-      'a &amp; b &lt; c &gt; d &quot; e &#39; f',
-    );
+    expect(escapeHtml('a & b < c > d " e \' f')).toBe('a &amp; b &lt; c &gt; d &quot; e &#39; f');
   });
 
   it('escapes ampersand first to avoid double-encoding', () => {
@@ -48,9 +46,7 @@ describe('escapeAttr', () => {
   });
 
   it('escapes HTML special chars the same as escapeHtml', () => {
-    expect(escapeAttr('a & b < c > d " e \' f')).toBe(
-      'a &amp; b &lt; c &gt; d &quot; e &#39; f',
-    );
+    expect(escapeAttr('a & b < c > d " e \' f')).toBe('a &amp; b &lt; c &gt; d &quot; e &#39; f');
   });
 
   it('escapes a mix of backticks and angle brackets', () => {

@@ -30,7 +30,9 @@ function makePostEl(postId: string, postNumber: string, author: string): HTMLEle
   return el;
 }
 
-function mockFetchSequence(responses: Array<{ status?: number; body?: string; retryAfter?: string }>): typeof fetch {
+function mockFetchSequence(
+  responses: Array<{ status?: number; body?: string; retryAfter?: string }>,
+): typeof fetch {
   let i = 0;
   return vi.fn(async () => {
     const r = responses[i] ?? responses[responses.length - 1];
@@ -55,7 +57,11 @@ describe('collectLoadedPosts', () => {
     vi.useFakeTimers();
     // jsdom provides window.location; pin to a topic URL so getTopicId() works.
     Object.defineProperty(window, 'location', {
-      value: { origin: 'https://linux.do', pathname: '/t/topic/123', href: 'https://linux.do/t/topic/123' },
+      value: {
+        origin: 'https://linux.do',
+        pathname: '/t/topic/123',
+        href: 'https://linux.do/t/topic/123',
+      },
       configurable: true,
     });
     // fancy-title for getTopicTitle
@@ -96,10 +102,7 @@ describe('collectLoadedPosts', () => {
   it('records failures for non-429 HTTP errors without retrying', async () => {
     document.body.appendChild(makePostEl('1', '1', 'alice'));
     document.body.appendChild(makePostEl('2', '2', 'bob'));
-    globalThis.fetch = mockFetchSequence([
-      { status: 500, body: '' },
-      { body: 'ok' },
-    ]);
+    globalThis.fetch = mockFetchSequence([{ status: 500, body: '' }, { body: 'ok' }]);
     const result = await collectLoadedPosts(DEFAULT_SETTINGS);
     expect(result.successCount).toBe(1);
     expect(result.failureCount).toBe(1);
@@ -109,10 +112,7 @@ describe('collectLoadedPosts', () => {
 
   it('retries on 429 with Retry-After header then succeeds', async () => {
     document.body.appendChild(makePostEl('1', '1', 'alice'));
-    globalThis.fetch = mockFetchSequence([
-      { status: 429, retryAfter: '1' },
-      { body: 'recovered' },
-    ]);
+    globalThis.fetch = mockFetchSequence([{ status: 429, retryAfter: '1' }, { body: 'recovered' }]);
     const promise = collectLoadedPosts(DEFAULT_SETTINGS);
     await vi.advanceTimersByTimeAsync(1000);
     const result = await promise;

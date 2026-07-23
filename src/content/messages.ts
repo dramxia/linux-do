@@ -3,7 +3,8 @@ import * as discourse from './discourse';
 import * as output from './output';
 import * as postExport from './post-export';
 import type { ExportResult } from './post-export';
-import { getSettings as _getSettings } from '../common/settings';
+import { getCachedSettings } from '../common/settings';
+import { handleError } from './error-handler';
 
 export type ContentMessage =
   | { action: 'getInfo' }
@@ -51,7 +52,11 @@ export function getExportToastPrefix(result: ExportResult): string {
 
 export function registerMessageHandlers(refreshEnhancements: RefreshCallback): void {
   chrome.runtime.onMessage.addListener(
-    (msg: ContentMessage, _sender: chrome.runtime.MessageSender, sendResponse: (response: MessageResponse) => void) => {
+    (
+      msg: ContentMessage,
+      _sender: chrome.runtime.MessageSender,
+      sendResponse: (response: MessageResponse) => void,
+    ) => {
       if (msg.action === 'getInfo') {
         const postEls = discourse.getPostElements();
         sendResponse({
@@ -71,17 +76,22 @@ export function registerMessageHandlers(refreshEnhancements: RefreshCallback): v
       if (msg.action === 'copyTopic') {
         (async () => {
           try {
-            const settings = await _getSettings();
+            const settings = await getCachedSettings();
             const result = await postExport.collectLoadedPosts(settings);
             assertExportResult(result);
-            const md = output.formatTopicMd(result.posts, discourse.getTopicTitle(), discourse.getTopicUrl(), settings);
+            const md = output.formatTopicMd(
+              result.posts,
+              discourse.getTopicTitle(),
+              discourse.getTopicUrl(),
+              settings,
+            );
             await output.copyToClipboard(md);
             sendResponse({ success: true, ...result });
             const prefix = getExportToastPrefix(result);
             output.showToast(result.failureCount === 0 ? '✅ 已复制整个主题' : `${prefix} 已复制`);
           } catch (err) {
             sendResponse({ success: false, error: (err as Error).message });
-            output.showToast('❌ 失败: ' + (err as Error).message);
+            handleError(err, '复制主题');
           }
         })();
         return true;
@@ -90,7 +100,7 @@ export function registerMessageHandlers(refreshEnhancements: RefreshCallback): v
       if (msg.action === 'downloadTopic') {
         (async () => {
           try {
-            const settings = await _getSettings();
+            const settings = await getCachedSettings();
             const result = await postExport.collectLoadedPosts(settings);
             assertExportResult(result);
             const title = discourse.getTopicTitle();
@@ -99,10 +109,12 @@ export function registerMessageHandlers(refreshEnhancements: RefreshCallback): v
             output.downloadFile(md, filename);
             sendResponse({ success: true, filename, ...result });
             const prefix = getExportToastPrefix(result);
-            output.showToast(result.failureCount === 0 ? `✅ 已下载 ${filename}` : `${prefix} 已下载 ${filename}`);
+            output.showToast(
+              result.failureCount === 0 ? `✅ 已下载 ${filename}` : `${prefix} 已下载 ${filename}`,
+            );
           } catch (err) {
             sendResponse({ success: false, error: (err as Error).message });
-            output.showToast('❌ 失败: ' + (err as Error).message);
+            handleError(err, '下载主题');
           }
         })();
         return true;

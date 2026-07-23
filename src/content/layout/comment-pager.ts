@@ -11,6 +11,7 @@ import {
   PAGER_INFO_CLASS,
 } from './dom-queries';
 import { createPostFromJson } from './post-renderer';
+import { handleError } from '../error-handler';
 
 // 分页状态封装为类实例。原先为模块级 const 对象 + 4 个 let 变量；
 // 现在收敛为单一 PagerState 实例，destroy() 提供显式重置入口。
@@ -84,8 +85,12 @@ function setPagerStatus(stream: HTMLElement, text: string, isError = false): voi
 
 function updatePagerButtons(stream: HTMLElement): void {
   const totalPages = getTotalPages();
-  const prevBtn = stream.parentElement?.querySelector<HTMLButtonElement>('[data-ldtk-pager-action="prev"]');
-  const nextBtn = stream.parentElement?.querySelector<HTMLButtonElement>('[data-ldtk-pager-action="next"]');
+  const prevBtn = stream.parentElement?.querySelector<HTMLButtonElement>(
+    '[data-ldtk-pager-action="prev"]',
+  );
+  const nextBtn = stream.parentElement?.querySelector<HTMLButtonElement>(
+    '[data-ldtk-pager-action="next"]',
+  );
 
   if (prevBtn) prevBtn.disabled = pagerState.loading || pagerState.page <= 1;
   if (nextBtn) nextBtn.disabled = pagerState.loading || pagerState.page >= totalPages;
@@ -193,6 +198,7 @@ async function loadPage(stream: HTMLElement, page: number): Promise<void> {
     if (shouldResetScroll) resetCommentsScroll(stream);
     emit('posts:rendered', { posts: pagerState.postIds });
   } catch (err) {
+    handleError(err, '评论加载');
     setPagerStatus(stream, `评论加载失败：${(err as Error)?.message || '未知错误'}`, true);
   } finally {
     pagerState.loading = false;
@@ -213,6 +219,7 @@ async function ensureCommentPager(stream: HTMLElement, topicId: string): Promise
         if (post?.id) pagerState.postsById.set(Number(post.id), post);
       });
     } catch (err) {
+      handleError(err, '评论初始化');
       ensurePager(stream);
       setPagerStatus(stream, `评论初始化失败：${(err as Error)?.message || '未知错误'}`, true);
       return;
@@ -247,16 +254,13 @@ async function ensureCommentPager(stream: HTMLElement, topicId: string): Promise
 export async function loadTopicSnapshot(topicId: string): Promise<TopicJson | undefined> {
   const topic = await discourse.fetchTopicJson(topicId);
   const posts = topic?.post_stream?.posts || [];
-  pagerState.postIds = topic?.post_stream?.stream || posts.map((post) => post.id).filter((id): id is number => typeof id === 'number');
+  pagerState.postIds =
+    topic?.post_stream?.stream ||
+    posts.map((post) => post.id).filter((id): id is number => typeof id === 'number');
   posts.forEach((post) => {
     if (post?.id) pagerState.postsById.set(Number(post.id), post);
   });
   return topic;
 }
 
-export {
-  pagerState,
-  resetPager,
-  ensureCommentPager,
-  createPostFromJson,
-};
+export { pagerState, resetPager, ensureCommentPager, createPostFromJson };

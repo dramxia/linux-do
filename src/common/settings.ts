@@ -42,7 +42,20 @@ export function getSettings(): Promise<DiscourseSettings> {
   });
 }
 
-export function saveSettings(partialSettings: Partial<DiscourseSettings>): Promise<DiscourseSettings> {
+// T10: 初始化期缓存。首次 getCachedSettings() 调 getSettings() 并缓存到模块变量，
+// onSettingsChanged 触发时置空，下次调用重新读取。交互期（按钮点击 handler）仍
+// 直接调 getSettings() 实时读 chrome.storage.sync 最新值，不经过此缓存。
+let cachedSettings: DiscourseSettings | null = null;
+
+export async function getCachedSettings(): Promise<DiscourseSettings> {
+  if (cachedSettings) return cachedSettings;
+  cachedSettings = await getSettings();
+  return cachedSettings;
+}
+
+export function saveSettings(
+  partialSettings: Partial<DiscourseSettings>,
+): Promise<DiscourseSettings> {
   const normalized = normalizeSettings(partialSettings);
   if (!hasChromeStorage()) {
     return Promise.resolve(normalized);
@@ -67,6 +80,9 @@ export function onSettingsChanged(callback: SettingsCallback): void {
     const changedKeys = Object.keys(changes);
     const settingsKeys = Object.keys(DEFAULT_SETTINGS);
     if (!changedKeys.some((key) => settingsKeys.includes(key))) return;
-    getSettings().then(callback).catch(() => callback(normalizeSettings()));
+    cachedSettings = null;
+    getSettings()
+      .then(callback)
+      .catch(() => callback(normalizeSettings()));
   });
 }

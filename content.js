@@ -44,10 +44,7 @@
           return;
         } catch (err) {
           if (err instanceof RateLimitError && attempt < maxRetries) {
-            const exponentialMs = Math.min(
-              initialBackoffMs * 2 ** attempt,
-              maxBackoffMs
-            );
+            const exponentialMs = Math.min(initialBackoffMs * 2 ** attempt, maxBackoffMs);
             const waitMs = Math.max(err.retryAfterMs, exponentialMs);
             await sleep(waitMs);
             attempt += 1;
@@ -104,7 +101,9 @@
     return match ? match[1] : null;
   }
   function getAllPostElements() {
-    return Array.from(document.querySelectorAll("[data-post-id].topic-post, .topic-post")).filter((el) => isHTMLElement(el) && !el.closest(".ldtk-topic-article-pane"));
+    return Array.from(document.querySelectorAll("[data-post-id].topic-post, .topic-post")).filter(
+      (el) => isHTMLElement(el) && !el.closest(".ldtk-topic-article-pane")
+    );
   }
   function getPostElements() {
     return getAllPostElements().filter((postEl) => !postEl.closest(".ldtk-topic-native-stream"));
@@ -163,10 +162,13 @@
     return images;
   }
   function replaceUploadUrls(rawMd, imageMap) {
-    return rawMd.replace(/!\[([^\]]*)\]\(upload:\/\/([^)]+)\)/g, (match, alt, uploadFilename) => {
-      if (imageMap[uploadFilename]) return `![${alt}](${imageMap[uploadFilename]})`;
-      return match;
-    });
+    return rawMd.replace(
+      /!\[([^\]]*)\]\(upload:\/\/([^)]+)\)/g,
+      (match, alt, uploadFilename) => {
+        if (imageMap[uploadFilename]) return `![${alt}](${imageMap[uploadFilename]})`;
+        return match;
+      }
+    );
   }
 
   // src/common/settings.ts
@@ -197,6 +199,12 @@
       });
     });
   }
+  var cachedSettings = null;
+  async function getCachedSettings() {
+    if (cachedSettings) return cachedSettings;
+    cachedSettings = await getSettings();
+    return cachedSettings;
+  }
   function onSettingsChanged(callback) {
     if (!hasChromeStorage() || !chrome.storage?.onChanged) return;
     chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -204,6 +212,7 @@
       const changedKeys = Object.keys(changes);
       const settingsKeys = Object.keys(DEFAULT_SETTINGS);
       if (!changedKeys.some((key) => settingsKeys.includes(key))) return;
+      cachedSettings = null;
       getSettings().then(callback).catch(() => callback(normalizeSettings()));
     });
   }
@@ -248,24 +257,62 @@
     syncTimer: null
   };
   function escapeHtml(value) {
-    return String(value ?? "").replace(/[&<>"']/g, (char) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    })[char]);
+    return String(value ?? "").replace(
+      /[&<>"']/g,
+      (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      })[char]
+    );
   }
   function escapeAttr(value) {
     return escapeHtml(value).replace(/`/g, "&#96;");
   }
 
+  // src/content/managed-observer.ts
+  var ManagedObserver = class {
+    observer = null;
+    target;
+    observerInit;
+    callback;
+    pagehideHandler = () => {
+      this.disconnect();
+    };
+    isConnected = false;
+    constructor(target, observerInit, callback) {
+      this.target = target;
+      this.observerInit = observerInit;
+      this.callback = callback;
+      window.addEventListener("pagehide", this.pagehideHandler);
+    }
+    start() {
+      if (this.observer) return;
+      this.observer = new MutationObserver(this.callback);
+      this.observer.observe(this.target, this.observerInit);
+      this.isConnected = true;
+    }
+    disconnect() {
+      if (!this.observer) return;
+      this.observer.disconnect();
+      this.observer = null;
+      this.isConnected = false;
+      window.removeEventListener("pagehide", this.pagehideHandler);
+    }
+  };
+
   // src/content/layout/footer-actions-cloner.ts
   function findFooterActionsSource() {
-    return Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find((el) => el instanceof HTMLElement && !el.closest(`.${ARTICLE_PANE_CLASS}`) && !el.closest(`.${HEADER_META_CLASS}`) && !el.closest(`.${COMMENTS_PANE_CLASS}`)) || null;
+    return Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find(
+      (el) => el instanceof HTMLElement && !el.closest(`.${ARTICLE_PANE_CLASS}`) && !el.closest(`.${HEADER_META_CLASS}`) && !el.closest(`.${COMMENTS_PANE_CLASS}`)
+    ) || null;
   }
   function ensureFooterActionsPlaceholder(source) {
-    const existing = document.querySelector(`[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`);
+    const existing = document.querySelector(
+      `[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`
+    );
     if (existing) return existing;
     const placeholder = document.createElement("span");
     placeholder.hidden = true;
@@ -275,7 +322,9 @@
   }
   function syncArticleFooterActions(pane) {
     if (!pane) return;
-    const movedSource = pane.querySelector(`:scope > .${ARTICLE_ACTIONS_CLASS} > [${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`);
+    const movedSource = pane.querySelector(
+      `:scope > .${ARTICLE_ACTIONS_CLASS} > [${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`
+    );
     const source = movedSource || findFooterActionsSource();
     let articleActions = pane.querySelector(`:scope > .${ARTICLE_ACTIONS_CLASS}`);
     if (!source) {
@@ -296,7 +345,9 @@
   }
   function restoreFooterActions() {
     const source = document.querySelector(`[${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`);
-    const placeholder = document.querySelector(`[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`);
+    const placeholder = document.querySelector(
+      `[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`
+    );
     if (source) {
       source.removeAttribute(FOOTER_ACTIONS_SOURCE_ATTR);
       if (placeholder?.parentElement) {
@@ -312,13 +363,11 @@
     return document.querySelector(".d-header .contents") || document.querySelector("header.d-header .contents") || document.querySelector(".d-header");
   }
   function stripHeaderCloneUnsafeNodes(clone) {
-    clone.querySelectorAll([
-      "script",
-      "style",
-      ".edit-topic",
-      ".topic-statuses",
-      ".topic-notifications-button"
-    ].join(",")).forEach((el) => el.remove());
+    clone.querySelectorAll(
+      ["script", "style", ".edit-topic", ".topic-statuses", ".topic-notifications-button"].join(
+        ","
+      )
+    ).forEach((el) => el.remove());
     clone.querySelectorAll("[id]").forEach((el) => {
       el.removeAttribute("id");
     });
@@ -331,7 +380,9 @@
     if (!headerTitle) {
       headerTitle = document.createElement("div");
       headerTitle.className = HEADER_TITLE_CLASS;
-      const logoArea = mount.querySelector(":scope > .title, :scope > .home-logo-wrapper, :scope > .brand-header");
+      const logoArea = mount.querySelector(
+        ":scope > .title, :scope > .home-logo-wrapper, :scope > .brand-header"
+      );
       if (logoArea) {
         logoArea.insertAdjacentElement("afterend", headerTitle);
       } else {
@@ -370,9 +421,13 @@
 
   // src/content/layout/topic-meta-cloner.ts
   function findTopicMetaSource() {
-    const directMatch = Array.from(document.querySelectorAll(TOPIC_META_SELECTORS.join(","))).find((el) => !el.closest(`.${HEADER_META_CLASS}`) && !el.closest(`.${ARTICLE_PANE_CLASS}`) && !el.closest(`.${COMMENTS_PANE_CLASS}`));
+    const directMatch = Array.from(document.querySelectorAll(TOPIC_META_SELECTORS.join(","))).find(
+      (el) => !el.closest(`.${HEADER_META_CLASS}`) && !el.closest(`.${ARTICLE_PANE_CLASS}`) && !el.closest(`.${COMMENTS_PANE_CLASS}`)
+    );
     if (directMatch) return directMatch;
-    return Array.from(document.querySelectorAll("#main-outlet .container.posts > .row > *, .topic-area > *")).find((el) => {
+    return Array.from(
+      document.querySelectorAll("#main-outlet .container.posts > .row > *, .topic-area > *")
+    ).find((el) => {
       if (el.closest(`.${HEADER_META_CLASS}`) || el.closest(`.${ARTICLE_PANE_CLASS}`) || el.closest(`.${COMMENTS_PANE_CLASS}`) || el.matches("#topic-title")) {
         return false;
       }
@@ -384,11 +439,7 @@
     }) || null;
   }
   function stripHeaderMetaCloneUnsafeNodes(clone) {
-    clone.querySelectorAll([
-      "script",
-      "style",
-      "[id]"
-    ].join(",")).forEach((el) => {
+    clone.querySelectorAll(["script", "style", "[id]"].join(",")).forEach((el) => {
       if (el.matches("script, style")) {
         el.remove();
         return;
@@ -458,22 +509,26 @@
   function bindTopicMetaObserver() {
     if (topicMetaState.observer) return;
     const target = document.querySelector("#main-outlet, #main, body") || document.body;
-    topicMetaState.observer = new MutationObserver((mutations) => {
-      const shouldSync = mutations.some((mutation) => {
-        const nodes = [
-          mutation.target,
-          ...Array.from(mutation.addedNodes || []),
-          ...Array.from(mutation.removedNodes || [])
-        ];
-        return nodes.some(isNativeTopicMetaNode);
-      });
-      if (shouldSync) scheduleTopicMetaSync();
-    });
-    topicMetaState.observer.observe(target, {
-      childList: true,
-      subtree: true,
-      characterData: true
-    });
+    topicMetaState.observer = new ManagedObserver(
+      target,
+      {
+        childList: true,
+        subtree: true,
+        characterData: true
+      },
+      (mutations) => {
+        const shouldSync = mutations.some((mutation) => {
+          const nodes = [
+            mutation.target,
+            ...Array.from(mutation.addedNodes || []),
+            ...Array.from(mutation.removedNodes || [])
+          ];
+          return nodes.some(isNativeTopicMetaNode);
+        });
+        if (shouldSync) scheduleTopicMetaSync();
+      }
+    );
+    topicMetaState.observer.start();
   }
   function teardownTopicMetaObserver() {
     if (topicMetaState.syncTimer) {
@@ -533,6 +588,133 @@
     return article;
   }
 
+  // src/content/output.ts
+  var TOAST_SHADOW_STYLE = `
+:host {
+  all: initial;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+}
+.ldcopy-toast {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  padding: 10px 20px;
+  background: #1a1a2e;
+  color: #fff;
+  border: 1px solid #333;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s, transform 0.3s;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  white-space: nowrap;
+}
+.ldcopy-toast-show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+`;
+  var ToastManager = class {
+    el = null;
+    hideTimer = null;
+    // shadow host 挂载到 document.body，shadow root 承载 toast 元素与 <style>。
+    host = null;
+    shadow = null;
+    ensureShadow() {
+      if (this.shadow) return this.shadow;
+      this.host = document.createElement("div");
+      this.host.id = "ldcopy-toast-host";
+      this.shadow = this.host.attachShadow({ mode: "closed" });
+      const styleEl = document.createElement("style");
+      styleEl.textContent = TOAST_SHADOW_STYLE;
+      this.shadow.appendChild(styleEl);
+      document.body.appendChild(this.host);
+      return this.shadow;
+    }
+    show(message, duration = 2500) {
+      const shadow = this.ensureShadow();
+      if (!this.el) {
+        this.el = document.createElement("div");
+        this.el.className = "ldcopy-toast";
+        shadow.appendChild(this.el);
+      }
+      if (this.hideTimer) clearTimeout(this.hideTimer);
+      this.el.textContent = message;
+      this.el.className = "ldcopy-toast ldcopy-toast-show";
+      this.hideTimer = setTimeout(() => {
+        this.hide();
+      }, duration);
+    }
+    hide() {
+      if (this.hideTimer) {
+        clearTimeout(this.hideTimer);
+        this.hideTimer = null;
+      }
+      if (this.el) {
+        this.el.className = "ldcopy-toast";
+      }
+    }
+  };
+  var toastManager = new ToastManager();
+  function showToast(message) {
+    toastManager.show(message);
+  }
+  function formatPostMd(meta, rawMd, title, url, options = {}) {
+    if (options.includeMetadata === false) return rawMd.trim();
+    const sourceUrl = url + (meta.postNumber ? "#post-" + meta.postNumber : "");
+    const header = `<!-- \u6765\u6E90: ${sourceUrl} | \u4F5C\u8005: ${meta.author}${meta.date ? " | " + meta.date : ""} -->`;
+    return header + "\n\n" + rawMd.trim();
+  }
+  function formatTopicMd(posts, title, url, options = {}) {
+    if (options.includeMetadata === false) {
+      return posts.map((post) => post.raw.trim()).join("\n\n---\n\n");
+    }
+    const lines = [`<!-- \u6765\u6E90: ${url} -->`, ""];
+    posts.forEach((post, index) => {
+      const postNumber = post.meta.postNumber || String(index + 1);
+      const postUrl = `${url}#post-${postNumber}`;
+      lines.push(`<!-- #${postNumber} ${post.meta.author} | ${postUrl} -->`);
+      lines.push("");
+      lines.push(post.raw.trim());
+      lines.push("");
+    });
+    return lines.join("\n");
+  }
+  function copyToClipboard(text) {
+    return navigator.clipboard.writeText(text);
+  }
+  function downloadFile(content, filename) {
+    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }
+  function sanitizeFilename(name) {
+    return name.replace(/[<>:"/\\|?*\n\r]/g, "_").replace(/\s+/g, " ").substring(0, 80);
+  }
+
+  // src/content/error-handler.ts
+  function handleError(err, context) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[LinuxDoToolkit] ${context}:`, err);
+    showToast(`${context}\u5931\u8D25: ${message}`);
+  }
+
   // src/content/layout/comment-pager.ts
   var PagerState = class {
     topicId = "";
@@ -589,8 +771,12 @@
   }
   function updatePagerButtons(stream) {
     const totalPages = getTotalPages();
-    const prevBtn = stream.parentElement?.querySelector('[data-ldtk-pager-action="prev"]');
-    const nextBtn = stream.parentElement?.querySelector('[data-ldtk-pager-action="next"]');
+    const prevBtn = stream.parentElement?.querySelector(
+      '[data-ldtk-pager-action="prev"]'
+    );
+    const nextBtn = stream.parentElement?.querySelector(
+      '[data-ldtk-pager-action="next"]'
+    );
     if (prevBtn) prevBtn.disabled = pagerState.loading || pagerState.page <= 1;
     if (nextBtn) nextBtn.disabled = pagerState.loading || pagerState.page >= totalPages;
   }
@@ -675,6 +861,7 @@
       if (shouldResetScroll) resetCommentsScroll(stream);
       emit("posts:rendered", { posts: pagerState.postIds });
     } catch (err) {
+      handleError(err, "\u8BC4\u8BBA\u52A0\u8F7D");
       setPagerStatus(stream, `\u8BC4\u8BBA\u52A0\u8F7D\u5931\u8D25\uFF1A${err?.message || "\u672A\u77E5\u9519\u8BEF"}`, true);
     } finally {
       pagerState.loading = false;
@@ -692,6 +879,7 @@
           if (post?.id) pagerState.postsById.set(Number(post.id), post);
         });
       } catch (err) {
+        handleError(err, "\u8BC4\u8BBA\u521D\u59CB\u5316");
         ensurePager(stream);
         setPagerStatus(stream, `\u8BC4\u8BBA\u521D\u59CB\u5316\u5931\u8D25\uFF1A${err?.message || "\u672A\u77E5\u9519\u8BEF"}`, true);
         return;
@@ -732,16 +920,21 @@
   // src/content/layout/resize-handler.ts
   var ResizeHandler = class {
     listener = null;
+    pagehideHandler = () => {
+      this.unbind();
+    };
     bind() {
       if (this.listener) return;
       this.listener = () => {
         document.querySelectorAll(`.${WRAPPER_CLASS}`).forEach(updateSplitPaneHeight);
       };
       window.addEventListener("resize", this.listener);
+      window.addEventListener("pagehide", this.pagehideHandler);
     }
     unbind() {
       if (!this.listener) return;
       window.removeEventListener("resize", this.listener);
+      window.removeEventListener("pagehide", this.pagehideHandler);
       this.listener = null;
     }
   };
@@ -773,13 +966,16 @@
     wrapper.style.setProperty("--ldtk-split-pane-height", `${height}px`);
   }
   function stripCloneUnsafeNodes(clone) {
-    clone.querySelectorAll([
-      ".ldcopy-actions",
-      ".topic-map",
-      ".embedded-posts",
-      "script",
-      "style"
-    ].join(",")).forEach((el) => el.remove());
+    clone.querySelectorAll(
+      [
+        ".ldcopy-actions",
+        ".ldtk-shadow-host",
+        ".topic-map",
+        ".embedded-posts",
+        "script",
+        "style"
+      ].join(",")
+    ).forEach((el) => el.remove());
     clone.querySelectorAll("[id]").forEach((el) => {
       el.removeAttribute("id");
     });
@@ -848,7 +1044,9 @@
     pane.removeAttribute("data-source-post-id");
   }
   function getNativeMainPost(nativeStream) {
-    return nativeStream?.querySelector?.('[data-post-number="1"].topic-post, .topic-post[data-post-number="1"]') || nativeStream?.querySelector?.("[data-post-id].topic-post, .topic-post") || null;
+    return nativeStream?.querySelector?.(
+      '[data-post-number="1"].topic-post, .topic-post[data-post-number="1"]'
+    ) || nativeStream?.querySelector?.("[data-post-id].topic-post, .topic-post") || null;
   }
   async function ensureSplitFromTopic(wrapper, nativeStream, topicId) {
     const articlePane = ensureArticlePane(wrapper, nativeStream);
@@ -875,6 +1073,7 @@
       updateSplitPaneHeight(wrapper);
       setTimeout(() => updateSplitPaneHeight(wrapper), 250);
     } catch (err) {
+      handleError(err, "\u5206\u680F\u5E03\u5C40");
       restoreTopicSplitLayout();
       throw err;
     }
@@ -920,76 +1119,6 @@
     applyTopicSplitLayout,
     restoreTopicSplitLayout
   };
-
-  // src/content/output.ts
-  var ToastManager = class {
-    el = null;
-    hideTimer = null;
-    show(message, duration = 2500) {
-      if (!this.el) {
-        this.el = document.createElement("div");
-        this.el.id = "ldcopy-toast";
-        document.body.appendChild(this.el);
-      }
-      if (this.hideTimer) clearTimeout(this.hideTimer);
-      this.el.textContent = message;
-      this.el.className = "ldcopy-toast ldcopy-toast-show";
-      this.hideTimer = setTimeout(() => {
-        this.hide();
-      }, duration);
-    }
-    hide() {
-      if (this.hideTimer) {
-        clearTimeout(this.hideTimer);
-        this.hideTimer = null;
-      }
-      if (this.el) {
-        this.el.className = "ldcopy-toast";
-      }
-    }
-  };
-  var toastManager = new ToastManager();
-  function showToast(message) {
-    toastManager.show(message);
-  }
-  function formatPostMd(meta, rawMd, title, url, options = {}) {
-    if (options.includeMetadata === false) return rawMd.trim();
-    const sourceUrl = url + (meta.postNumber ? "#post-" + meta.postNumber : "");
-    const header = `<!-- \u6765\u6E90: ${sourceUrl} | \u4F5C\u8005: ${meta.author}${meta.date ? " | " + meta.date : ""} -->`;
-    return header + "\n\n" + rawMd.trim();
-  }
-  function formatTopicMd(posts, title, url, options = {}) {
-    if (options.includeMetadata === false) {
-      return posts.map((post) => post.raw.trim()).join("\n\n---\n\n");
-    }
-    const lines = [`<!-- \u6765\u6E90: ${url} -->`, ""];
-    posts.forEach((post, index) => {
-      const postNumber = post.meta.postNumber || String(index + 1);
-      const postUrl = `${url}#post-${postNumber}`;
-      lines.push(`<!-- #${postNumber} ${post.meta.author} | ${postUrl} -->`);
-      lines.push("");
-      lines.push(post.raw.trim());
-      lines.push("");
-    });
-    return lines.join("\n");
-  }
-  function copyToClipboard(text) {
-    return navigator.clipboard.writeText(text);
-  }
-  function downloadFile(content, filename) {
-    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
-  }
-  function sanitizeFilename(name) {
-    return name.replace(/[<>:"/\\|?*\n\r]/g, "_").replace(/\s+/g, " ").substring(0, 80);
-  }
 
   // src/content/markdown.ts
   function isHtmlContent(text) {
@@ -1159,7 +1288,8 @@ ${lines}
         case "mark":
           return `==${children.trim()}==`;
         case "span": {
-          if (el.classList?.contains("mention")) return children.trim() || (el.textContent?.trim() || "");
+          if (el.classList?.contains("mention"))
+            return children.trim() || el.textContent?.trim() || "";
           return children;
         }
         case "div": {
@@ -1286,19 +1416,85 @@ ${lines}
   // src/content/buttons.ts
   var COPY_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
   var DOWNLOAD_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>';
+  var SHADOW_HOST_CLASS = "ldtk-shadow-host";
+  var BUTTON_SHADOW_STYLE = `
+:host {
+  all: initial;
+  display: inline-block;
+}
+.ldcopy-actions {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.ldcopy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--primary-low-mid, #ccc);
+  border-radius: 4px;
+  background: var(--secondary, #f5f5f5);
+  color: var(--primary, #333);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.ldcopy-btn:hover {
+  background: var(--highlight-bg, #e8e8e8);
+  border-color: var(--primary-medium, #999);
+}
+.ldcopy-btn:active {
+  transform: scale(0.96);
+}
+.ldcopy-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.ldcopy-btn svg {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+:host-context(html.dark) .ldcopy-btn,
+:host-context(body.dark) .ldcopy-btn {
+  background: #2a2a3e;
+  border-color: #444;
+  color: #ddd;
+}
+:host-context(html.dark) .ldcopy-btn:hover,
+:host-context(body.dark) .ldcopy-btn:hover {
+  background: #3a3a5e;
+  border-color: #666;
+}
+@media (max-width: 768px) {
+  .ldcopy-btn span {
+    display: none;
+  }
+}
+`;
   function removeInjectedActions() {
-    document.querySelectorAll(".ldcopy-actions").forEach((el) => el.remove());
+    document.querySelectorAll("." + SHADOW_HOST_CLASS).forEach((el) => el.remove());
   }
   async function injectButtons() {
-    const settings = await getSettings();
+    const settings = await getCachedSettings();
     if (!settings.enablePostActions) {
       removeInjectedActions();
       return;
     }
     getPostElements().forEach((postEl) => {
-      if (postEl.querySelector(".ldcopy-actions")) return;
+      if (postEl.querySelector("." + SHADOW_HOST_CLASS)) return;
       const actionsEl = postEl.querySelector(".post-controls, .actions");
       if (!actionsEl) return;
+      const host = document.createElement("div");
+      host.className = SHADOW_HOST_CLASS;
+      const shadow = host.attachShadow({ mode: "closed" });
+      const styleEl = document.createElement("style");
+      styleEl.textContent = BUTTON_SHADOW_STYLE;
+      shadow.appendChild(styleEl);
       const wrapper = document.createElement("div");
       wrapper.className = "ldcopy-actions";
       const copyBtn = document.createElement("button");
@@ -1315,7 +1511,7 @@ ${lines}
           await copyToClipboard(result.markdown);
           showToast("\u2705 \u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F");
         } catch (err) {
-          showToast("\u274C \u5931\u8D25: " + err.message);
+          handleError(err, "\u590D\u5236\u697C\u5C42");
         } finally {
           copyBtn.disabled = false;
         }
@@ -1332,18 +1528,21 @@ ${lines}
           const latestSettings = await getSettings();
           const result = await buildPostMarkdown(postEl, latestSettings);
           const title = getTopicTitle();
-          const filename = sanitizeFilename(`${title}_#${result.meta.postNumber || "post"}.md`);
+          const filename = sanitizeFilename(
+            `${title}_#${result.meta.postNumber || "post"}.md`
+          );
           downloadFile(result.markdown, filename);
           showToast(`\u2705 \u5DF2\u4E0B\u8F7D ${filename}`);
         } catch (err) {
-          showToast("\u274C \u5931\u8D25: " + err.message);
+          handleError(err, "\u4E0B\u8F7D\u697C\u5C42");
         } finally {
           downloadBtn.disabled = false;
         }
       });
       wrapper.appendChild(copyBtn);
       wrapper.appendChild(downloadBtn);
-      actionsEl.appendChild(wrapper);
+      shadow.appendChild(wrapper);
+      actionsEl.appendChild(host);
     });
   }
   var buttons = {
@@ -1408,7 +1607,7 @@ ${lines}
           await copyToClipboard(decodeBase64Utf8(selectedText));
           showToast("\u2705 Base64 \u89E3\u7801\u5DF2\u590D\u5236");
         } catch (err) {
-          showToast("\u274C Base64 \u89E3\u7801\u5931\u8D25: " + err.message);
+          handleError(err, "Base64 \u89E3\u7801");
         }
       });
       quoteContainer.insertBefore(base64Btn, quoteContainer.firstChild);
@@ -1432,7 +1631,7 @@ ${lines}
           await copyToClipboard(strippedText);
           showToast("\u2705 \u5DF2\u53BB\u4E2D\u6587\u5E76\u590D\u5236");
         } catch (err) {
-          showToast("\u274C \u53BB\u4E2D\u6587\u5931\u8D25: " + err.message);
+          handleError(err, "\u53BB\u4E2D\u6587");
         }
       });
       base64Btn.insertAdjacentElement("afterend", stripChineseBtn);
@@ -1473,17 +1672,22 @@ ${lines}
         if (msg.action === "copyTopic") {
           (async () => {
             try {
-              const settings = await getSettings();
+              const settings = await getCachedSettings();
               const result = await collectLoadedPosts(settings);
               assertExportResult(result);
-              const md = formatTopicMd(result.posts, getTopicTitle(), getTopicUrl(), settings);
+              const md = formatTopicMd(
+                result.posts,
+                getTopicTitle(),
+                getTopicUrl(),
+                settings
+              );
               await copyToClipboard(md);
               sendResponse({ success: true, ...result });
               const prefix = getExportToastPrefix(result);
               showToast(result.failureCount === 0 ? "\u2705 \u5DF2\u590D\u5236\u6574\u4E2A\u4E3B\u9898" : `${prefix} \u5DF2\u590D\u5236`);
             } catch (err) {
               sendResponse({ success: false, error: err.message });
-              showToast("\u274C \u5931\u8D25: " + err.message);
+              handleError(err, "\u590D\u5236\u4E3B\u9898");
             }
           })();
           return true;
@@ -1491,7 +1695,7 @@ ${lines}
         if (msg.action === "downloadTopic") {
           (async () => {
             try {
-              const settings = await getSettings();
+              const settings = await getCachedSettings();
               const result = await collectLoadedPosts(settings);
               assertExportResult(result);
               const title = getTopicTitle();
@@ -1500,10 +1704,12 @@ ${lines}
               downloadFile(md, filename);
               sendResponse({ success: true, filename, ...result });
               const prefix = getExportToastPrefix(result);
-              showToast(result.failureCount === 0 ? `\u2705 \u5DF2\u4E0B\u8F7D ${filename}` : `${prefix} \u5DF2\u4E0B\u8F7D ${filename}`);
+              showToast(
+                result.failureCount === 0 ? `\u2705 \u5DF2\u4E0B\u8F7D ${filename}` : `${prefix} \u5DF2\u4E0B\u8F7D ${filename}`
+              );
             } catch (err) {
               sendResponse({ success: false, error: err.message });
-              showToast("\u274C \u5931\u8D25: " + err.message);
+              handleError(err, "\u4E0B\u8F7D\u4E3B\u9898");
             }
           })();
           return true;
@@ -1589,19 +1795,26 @@ ${lines}
     document.addEventListener("selectionchange", () => {
       scheduleBase64ButtonRefresh();
     });
-    const observer = new MutationObserver((mutations) => {
-      const onlyToolkitChanges = mutations.every((mutation) => {
-        const target = mutation.target;
-        const addedNodes = Array.from(mutation.addedNodes || []);
-        const removedNodes = Array.from(mutation.removedNodes || []);
-        return target?.closest?.(".ldtk-topic-split-wrapper") || addedNodes.concat(removedNodes).every((node) => node.nodeType !== Node.ELEMENT_NODE || node.matches?.('[class^="ldtk-"], [id^="ldcopy-"]') || node.closest?.(".ldtk-topic-split-wrapper"));
-      });
-      if (!onlyToolkitChanges) scheduleRefreshEnhancements();
-    });
-    observer.observe(document.querySelector("#main-outlet, #main, body") || document.body, {
-      childList: true,
-      subtree: true
-    });
+    const target = document.querySelector("#main-outlet, #main, body") || document.body;
+    const managedObserver = new ManagedObserver(
+      target,
+      {
+        childList: true,
+        subtree: true
+      },
+      (mutations) => {
+        const onlyToolkitChanges = mutations.every((mutation) => {
+          const target2 = mutation.target;
+          const addedNodes = Array.from(mutation.addedNodes || []);
+          const removedNodes = Array.from(mutation.removedNodes || []);
+          return target2?.closest?.(".ldtk-topic-split-wrapper") || addedNodes.concat(removedNodes).every(
+            (node) => node.nodeType !== Node.ELEMENT_NODE || node.matches?.('[class^="ldtk-"], [id^="ldcopy-"]') || node.closest?.(".ldtk-topic-split-wrapper")
+          );
+        });
+        if (!onlyToolkitChanges) scheduleRefreshEnhancements();
+      }
+    );
+    managedObserver.start();
     window.addEventListener("discourse-navigate-completed", () => scheduleRefreshEnhancements(0));
     window.addEventListener("page:change", () => scheduleRefreshEnhancements(0));
   }

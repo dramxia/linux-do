@@ -1,9 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import {
-  getSettings,
-  saveSettings,
-  DEFAULT_SETTINGS,
-} from '../src/common/settings';
+import { getSettings, saveSettings, DEFAULT_SETTINGS } from '../src/common/settings';
 import { setupChromeMock, resetChromeMock, type ChromeMock } from './mocks/chrome';
 
 let chromeMock: ChromeMock;

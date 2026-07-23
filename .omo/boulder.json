@@ -6,9 +6,9 @@
       "work_id": "refactor-toolkit-16f6b97d",
       "active_plan": "/Users/misemo/project/my/plugin/linux-do-toolkit/.omo/plans/refactor-toolkit.md",
       "plan_name": "refactor-toolkit",
-      "status": "active",
+      "status": "completed",
       "started_at": "2026-07-22T09:31:06.433Z",
-      "updated_at": "2026-07-22T11:44:29.382Z",
+      "updated_at": "2026-07-23T02:07:54.332Z",
       "session_ids": [
         "opencode:ses_07714537dffe1eI7BYbqvMFq6f"
       ],
@@ -106,14 +106,27 @@
           "status": "completed",
           "ended_at": "2026-07-22T11:44:29.381Z",
           "elapsed_ms": 31757
+        },
+        "todo:8": {
+          "task_key": "todo:8",
+          "task_label": "8",
+          "task_title": "ManagedObserver 封装所有 observer + resize",
+          "session_id": "opencode:ses_0765b18b6ffeGwhFPlLF5yggsj",
+          "agent": "Sisyphus-Junior",
+          "category": "deep",
+          "updated_at": "2026-07-23T01:34:27.199Z",
+          "started_at": "2026-07-23T01:34:27.199Z",
+          "status": "running"
         }
-      }
+      },
+      "ended_at": "2026-07-23T02:07:54.331Z",
+      "elapsed_ms": 59807898
     }
   },
   "active_plan": "/Users/misemo/project/my/plugin/linux-do-toolkit/.omo/plans/refactor-toolkit.md",
   "started_at": "2026-07-22T09:31:06.433Z",
-  "status": "active",
-  "updated_at": "2026-07-22T11:44:29.382Z",
+  "status": "completed",
+  "updated_at": "2026-07-23T02:07:54.332Z",
   "session_ids": [
     "opencode:ses_07714537dffe1eI7BYbqvMFq6f"
   ],
@@ -211,7 +224,20 @@
       "status": "completed",
       "ended_at": "2026-07-22T11:44:29.381Z",
       "elapsed_ms": 31757
+    },
+    "todo:8": {
+      "task_key": "todo:8",
+      "task_label": "8",
+      "task_title": "ManagedObserver 封装所有 observer + resize",
+      "session_id": "opencode:ses_0765b18b6ffeGwhFPlLF5yggsj",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-07-23T01:34:27.199Z",
+      "started_at": "2026-07-23T01:34:27.199Z",
+      "status": "running"
     }
   },
-  "agent": "atlas"
+  "agent": "atlas",
+  "ended_at": "2026-07-23T02:07:54.331Z",
+  "elapsed_ms": 59807898
 }
