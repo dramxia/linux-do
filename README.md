@@ -1,138 +1,146 @@
 # Linux.do 工具箱
 
-Chrome 浏览器插件，用于一键复制或下载 linux.do 帖子内容为 Markdown 文件，并提供 Base64 解码等阅读辅助能力。
+Linux.do 的 Chrome Manifest V3 扩展，用于把帖子楼层复制或下载为 Markdown，并提供选中文本处理、评论分栏等阅读辅助功能。
 
-## 功能
+扩展脚本只匹配以下页面：
 
-- **页面内按钮**：每个楼层旁边自动出现「复制」和「下载」按钮
-  - 复制：将当前楼层转为 Markdown，复制到剪贴板
-  - 下载：将当前楼层保存为 `.md` 文件
-- **工具栏弹窗**：点击浏览器工具栏图标
-  - 复制当前已加载楼层：按页面 DOM 中已加载楼层范围，调用 Discourse `/raw/...` 接口获取内容并合并为 Markdown
-  - 下载当前已加载楼层：保存为 `.md` 文件；若部分楼层获取失败，会提示成功 / 失败数量
-- **Base64 解码**：选中文本后，在 Discourse 选择浮层中注入 `base64` 按钮
-- **正文 / 评论分栏**：帖子页自动将 1 楼正文固定在左侧，评论区显示在右侧，窄屏自动恢复单列
-- **功能开关**：支持在 popup 中启用 / 关闭常用能力
-  - 显示楼层复制 / 下载按钮
-  - 启用 Base64 解码
-  - 帖子页正文 / 评论分栏
-  - 导出时保留来源元信息
-  - 替换 `upload://` 图片链接
+- `https://linux.do/*`
+- `https://www.linux.do/*`
 
-## 安装方法
+## 功能概览
 
-### 直接加载源码目录
+- **楼层操作**：在每个已渲染楼层的操作区添加“复制”和“下载”按钮。
+- **已加载楼层导出**：从工具栏弹窗复制或下载当前页面已经加载的楼层，逐楼保留作者、时间和来源链接（可关闭元信息）。
+- **选中文本工具**：在 Discourse 的选中文本工具条中提供 `base64` 解码和“去中文”，处理结果会复制到剪贴板。
+- **正文 / 评论分栏**：将主题正文固定在左侧，评论显示在右侧并提供分页；窄屏会自动恢复单列布局。
+- **图片链接处理**：导出 Markdown 时，可将当前楼层中匹配到的 `upload://` 图片链接替换为实际图片地址。
+- **设置持久化**：弹窗中的设置保存在 Chrome 的同步存储中，并自动应用到当前页面。
 
-1. 执行构建：
+## 安装
 
-   ```bash
-   npm run build
-   ```
+### 构建环境
 
-2. 打开 Chrome，地址栏输入 `chrome://extensions/`
-3. 右上角打开「开发者模式」
-4. 点击「加载已解压的扩展程序」
-5. 选择当前 `linux-do-toolkit` 文件夹
-6. 完成！
+从源码安装需要：
 
-### 加载发布目录
+- Chrome 或其他支持 Manifest V3 的 Chromium 浏览器
+- Node.js 和 npm
 
-也可以执行构建后选择 `dist/` 目录加载：
+### 构建并加载
+
+在项目根目录执行：
 
 ```bash
+npm install
 npm run build
 ```
+
+然后在 Chrome 中完成以下操作：
+
+1. 打开 `chrome://extensions/`。
+2. 开启右上角的“开发者模式”。
+3. 点击“加载已解压的扩展程序”。
+4. 选择构建生成的 `dist/` 目录。
+
+也可以选择项目根目录加载。构建脚本会同时更新根目录中的 `content.js`、`popup.js`、`background.js` 和 `dist/`，但不要直接加载 `src/` 目录。
+
+### 更新扩展
+
+源码更新后重新执行 `npm run build`，回到扩展管理页点击扩展的“重新加载”，再刷新已经打开的 Linux.do 页面。若 `package-lock.json` 或开发依赖有变化，先重新执行 `npm install`。
+
+## 使用
+
+### 复制或下载单个楼层
+
+1. 打开一个 Linux.do 主题页面，并等待楼层加载完成。
+2. 在目标楼层操作区点击“复制”或“下载”。
+3. “复制”会把该楼层转换后的 Markdown 写入剪贴板；“下载”会生成类似 `主题标题_#3.md` 的文件。
+
+按钮只会出现在当前已经渲染的楼层中。关闭“显示楼层复制 / 下载按钮”后，页面上的按钮会被移除。
+
+### 复制或下载当前已加载楼层
+
+1. 在 Linux.do 主题页点击浏览器工具栏中的“Linux.do 工具箱”图标。
+2. 弹窗会显示主题标题和当前已加载的楼层数量。
+3. 点击“复制当前已加载楼层”或“下载当前已加载楼层 (.md)”。
+
+这里的“已加载”指页面 DOM 中当前可检测到的楼层，不等于服务器上的全部回复。插件会逐楼请求 Linux.do 的同源 `/raw/{主题 ID}/{楼层号}` 接口；遇到限流会自动重试，部分楼层失败时仍会输出成功的楼层并提示成功 / 失败数量。
+
+### 解码 Base64 或去除中文
+
+1. 在帖子中选中要处理的文本。
+2. 在出现的 Discourse 选中文本工具条中点击 `base64` 或“去中文”。
+3. 处理结果会自动复制到剪贴板。
+
+`base64` 会先忽略空白并按 UTF-8 解码；“去中文”会去除中文字符及常见中文标点。没有选中文本、文本不是有效 Base64 或剪贴板写入失败时，页面会显示错误提示。
+
+### 开启正文 / 评论分栏
+
+1. 打开工具栏弹窗。
+2. 在“功能开关”中开启“帖子页正文 / 评论分栏”。
+3. 回到主题页，左侧查看 1 楼正文，右侧查看评论。
+
+分栏模式从主题 JSON 加载评论，每页最多显示 20 条，并提供“上一页 / 下一页”。评论区和正文各自滚动；视口宽度不适合双栏时会自动切换为单列。分栏请求失败时会恢复 Linux.do 原生布局。
+
+## 功能开关
+
+| 选项 | 默认值 | 作用 |
+| --- | --- | --- |
+| 显示楼层复制 / 下载按钮 | 开启 | 在已渲染楼层的操作区添加单楼层操作按钮 |
+| 启用选中文本 Base64 解码 | 开启 | 在选中文本工具条中添加 `base64` 和“去中文” |
+| 帖子页正文 / 评论分栏 | 关闭 | 启用正文与评论双栏及评论分页 |
+| 导出时保留来源元信息 | 开启 | 在 Markdown 中写入来源 URL、楼层号、作者和时间 |
+| 替换 `upload://` 图片链接 | 开启 | 用当前楼层中找到的实际图片地址替换匹配的 `upload://` 链接 |
+
+修改开关后会立即通知当前页面；设置也会写入 `chrome.storage.sync`，因此会随浏览器配置同步。
+
+## Markdown 输出
+
+开启“导出时保留来源元信息”时，单个楼层大致如下：
+
+```markdown
+<!-- 来源: https://linux.do/t/example/123#post-3 | 作者: user | 2024-01-01T12:00:00Z -->
+
+正文内容...
+```
+
+导出多个已加载楼层时，文件会先写入主题来源，再为每个楼层写入楼层号、作者和链接。关闭元信息后，只保留正文，并用 Markdown 分隔线分隔楼层。
+
+导出范围由当前页面已渲染楼层决定，不会主动遍历服务器上的所有回复。开启分栏时，当前实现只会收集评论栏当前分页已渲染的楼层，不包含左侧正文克隆，也不会包含尚未切换到其他分页的评论；如需导出正文和其他已加载楼层，请关闭分栏后再执行导出。
+
+## 常见问题
+
+- **弹窗按钮不可用**：确认当前标签页是 `https://linux.do/` 或 `https://www.linux.do/` 下的页面。扩展刚加载或刚更新后，刷新主题页。
+- **提示“页面未加载完成”**：关闭弹窗，等待页面完成加载后再打开；必要时刷新页面。
+- **看不到楼层按钮**：检查“显示楼层复制 / 下载按钮”是否开启，并确认目标楼层已经滚动加载出来。
+- **导出楼层不全**：弹窗导出只处理当前已加载楼层；先在页面中加载需要的楼层再执行导出。分栏模式下只收集当前评论页，且不包含左侧 1 楼，建议关闭分栏后重试。
+- **出现部分失败或 HTTP 429**：插件会对限流请求进行退避重试；仍失败时会提示成功 / 失败数量，可稍后重试。
 
 ## 开发
 
 ```bash
-npm install          # 安装开发依赖
-npm run build        # 构建扩展（esbuild 打包到根目录 + dist/）
-npm run check        # 构建 + 类型检查 + 语法验证
-npm test             # 运行测试（Vitest + jsdom）
+npm install
+npm run build        # esbuild 打包，清空并重建 dist/，同步更新根目录产物
+npm run check        # 构建、TypeScript 类型检查、生成脚本语法和 manifest 校验
+npm test             # Vitest + jsdom 测试
 npm run test:watch   # 测试 watch 模式
-npm run lint         # ESLint 代码检查
-npm run format       # Prettier 格式化
+npm run lint         # ESLint
+npm run format       # Prettier 格式化 src/ 和 test/
 npm run format:check # 检查格式化
 ```
 
-当前项目采用**零运行时依赖**（开发依赖：esbuild、typescript、vitest 等，不进发布包）：
-
-- 源码位于 `src/`（TypeScript + ES modules）
-- `scripts/build.mjs` 使用 esbuild 打包，生成根目录 `content.js` / `popup.js` / `background.js`
-- 同时复制完整扩展到 `dist/`
-- shipped 扩展本身仍为零运行时依赖
-
-## 文件结构
+源码入口和职责：
 
 ```text
-linux-do-toolkit/
-├── src/
-│   ├── common/
-│   │   └── settings.ts          # 功能开关设置
-│   ├── content/
-│   │   ├── layout/               # 分栏布局模块（T4 拆分）
-│   │   │   ├── dom-queries.ts
-│   │   │   ├── resize-handler.ts
-│   │   │   ├── footer-actions-cloner.ts
-│   │   │   ├── header-title-cloner.ts
-│   │   │   ├── topic-meta-cloner.ts
-│   │   │   ├── comment-pager.ts
-│   │   │   ├── post-renderer.ts
-│   │   │   └── split-pane-layout.ts
-│   │   ├── index.ts              # 入口
-│   │   ├── buttons.ts            # 复制/下载按钮（Shadow DOM）
-│   │   ├── base64.ts             # Base64 解码
-│   │   ├── discourse.ts          # Discourse API 适配
-│   │   ├── markdown.ts           # HTML→Markdown 转换
-│   │   ├── output.ts             # 输出/Toast（Shadow DOM）
-│   │   ├── post-export.ts        # 帖子导出
-│   │   ├── messages.ts           # 消息处理
-│   │   ├── event-bus.ts          # 事件总线
-│   │   ├── managed-observer.ts   # Observer 封装
-│   │   ├── refresh-state.ts      # 刷新状态管理
-│   │   ├── error-handler.ts      # 统一错误处理
-│   │   └── api-rate-limiter.ts   # API 速率限制
-│   ├── popup/
-│   │   └── index.ts
-│   └── background.ts
-├── test/                         # 测试目录
-│   ├── mocks/
-│   │   └── chrome.ts
-│   ├── fixtures/
-│   │   └── *.html
-│   └── *.test.ts
-├── scripts/
-│   ├── build.mjs                 # esbuild 构建脚本
-│   └── probe-discourse-css.mjs   # CSS 探针
-├── tsconfig.json
-├── vitest.config.ts
-├── .eslintrc.cjs
-├── .prettierrc
-├── manifest.json
-├── styles.css
-├── popup.html
-└── package.json
+src/
+├── background.ts             # MV3 Service Worker 生命周期入口
+├── common/settings.ts        # 设置、默认值和同步存储
+├── content/index.ts          # 页面增强入口
+├── content/buttons.ts        # 楼层复制 / 下载按钮
+├── content/base64.ts         # Base64 与“去中文”工具
+├── content/post-export.ts    # 单楼层和批量导出
+├── content/markdown.ts       # Markdown 规范化与转换
+├── content/layout/           # 正文 / 评论分栏与评论分页
+└── popup/index.ts            # 工具栏弹窗
 ```
 
-## Markdown 输出格式
-
-单个楼层默认输出：
-
-```markdown
-<!-- 来源: https://linux.do/t/xxx/1#post-1 | 作者: xxx | 2024-01-01 -->
-
-正文内容...
-```
-
-当前已加载楼层默认输出：
-
-```markdown
-<!-- 来源: https://linux.do/t/xxx -->
-
-<!-- #1 作者名 | https://linux.do/t/xxx#post-1 -->
-
-正文内容...
-```
-
-> 注意：整帖导出基于页面当前 DOM 中已加载楼层决定范围，并逐楼调用 `/raw/{topicId}/{postNumber}` 获取内容；不会主动拉取服务器上的全部回复。若部分楼层获取失败，插件会提示已成功与失败数量。
+构建脚本会把 TypeScript 入口打包为浏览器可直接加载的 IIFE，并生成 source map；发布扩展本身不包含运行时 npm 依赖。扩展声明的主要权限为 `activeTab`、`clipboardWrite` 和 `storage`，导出请求使用当前 Linux.do 页面的登录态访问同源接口。
