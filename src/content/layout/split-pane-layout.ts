@@ -1,257 +1,344 @@
-/* Linux.do 工具箱 — split-pane 容器/高度/文章面板克隆/顶层编排/拆除恢复/原生主帖探测 */
+/* Linux.do 工具箱 — 原生正文/评论分栏生命周期 */
 import * as discourse from '../discourse';
-import { getSettings as _getSettings } from '../../common/settings';
+import { getCachedSettings, type DiscourseSettings } from '../../common/settings';
 import {
-  ARTICLE_CLONE_CLASS,
   ARTICLE_PANE_CLASS,
   BODY_CLASS,
-  COMMENTS_PANE_CLASS,
   COMMENTS_STREAM_CLASS,
   NATIVE_STREAM_CLASS,
   ORIGINAL_MAIN_POST_CLASS,
-  PAGED_COMMENT_CLASS,
-  PAGER_CLASS,
+  PREPARING_ROOT_CLASS,
+  SIDEBAR_GUARD_CLASS,
   WRAPPER_CLASS,
 } from './dom-queries';
-import { bindTopicMetaObserver, syncArticleTopicMeta } from './topic-meta-cloner';
 import { restoreSplitHeaderTitle, scheduleSplitHeaderSync } from './header-title-cloner';
-import {
-  createPostFromJson,
-  ensureCommentPager,
-  loadTopicSnapshot,
-  pagerState,
-  resetPager,
-} from './comment-pager';
 import { restoreFooterActions, syncArticleFooterActions } from './footer-actions-cloner';
 import { bindResizeHandler } from './resize-handler';
 import { handleError } from '../error-handler';
+import { markLayoutMutation } from './layout-mutation-tracker';
 
-function getSplitWrapper(stream: HTMLElement | null): HTMLElement | null {
-  if (!stream?.parentElement) return null;
-  if (stream.parentElement.classList.contains(WRAPPER_CLASS)) {
-    return stream.parentElement;
-  }
-
-  const wrapper = document.createElement('div');
-  wrapper.className = WRAPPER_CLASS;
-  stream.parentElement.insertBefore(wrapper, stream);
-  wrapper.appendChild(stream);
-  return wrapper;
+interface ActiveLayoutState {
+  generation: number;
+  active: boolean;
+  splitSessionActive: boolean;
+  topicId: string;
+  wrapper: HTMLElement | null;
+  stream: HTMLElement | null;
+  articlePane: HTMLElement | null;
+  mainPost: HTMLElement | null;
+  mainPostNextSibling: ChildNode | null;
+  previousStreamAriaLabel: string | null;
+  revealTimer: ReturnType<typeof setTimeout> | null;
+  sidebarGuardTimer: ReturnType<typeof setTimeout> | null;
 }
 
+const layoutState: ActiveLayoutState = {
+  generation: 0,
+  active: false,
+  splitSessionActive: false,
+  topicId: '',
+  wrapper: null,
+  stream: null,
+  articlePane: null,
+  mainPost: null,
+  mainPostNextSibling: null,
+  previousStreamAriaLabel: null,
+  revealTimer: null,
+  sidebarGuardTimer: null,
+};
+
 function getNativeStream(): HTMLElement | null {
+  if (layoutState.stream?.isConnected) return layoutState.stream;
   return (
     document.querySelector<HTMLElement>(`.${NATIVE_STREAM_CLASS}`) ||
     document.querySelector<HTMLElement>('#post_stream') ||
+    document.querySelector<HTMLElement>('#post-stream') ||
     document.querySelector<HTMLElement>('.post-stream') ||
     document.querySelector<HTMLElement>('.topic-posts')
   );
 }
 
-export function updateSplitPaneHeight(wrapper: HTMLElement | null): void {
-  if (!wrapper) return;
-
-  const viewportHeight = window.visualViewport?.height || window.innerHeight;
-  const wrapperTop = Math.max(0, wrapper.getBoundingClientRect().top);
-  const height = Math.max(320, viewportHeight - wrapperTop - 8);
-  wrapper.style.setProperty('--ldtk-split-pane-height', `${height}px`);
-}
-
-function stripCloneUnsafeNodes(clone: HTMLElement): void {
-  clone
-    .querySelectorAll(
-      [
-        '.ldcopy-actions',
-        '.ldtk-shadow-host',
-        '.topic-map',
-        '.embedded-posts',
-        'script',
-        'style',
-      ].join(','),
-    )
-    .forEach((el) => el.remove());
-
-  clone.querySelectorAll('[id]').forEach((el) => {
-    el.removeAttribute('id');
-  });
-}
-
-function buildArticleClone(mainPost: HTMLElement): HTMLElement {
-  const clone = mainPost.cloneNode(true) as HTMLElement;
-  clone.classList.add(ARTICLE_CLONE_CLASS);
-  clone.classList.remove(ORIGINAL_MAIN_POST_CLASS);
-  clone.removeAttribute('id');
-  stripCloneUnsafeNodes(clone);
-  return clone;
-}
-
-function ensureArticlePane(wrapper: HTMLElement, stream: HTMLElement): HTMLElement {
-  let pane = wrapper.querySelector<HTMLElement>(`:scope > .${ARTICLE_PANE_CLASS}`);
-
-  if (!pane) {
-    pane = document.createElement('aside');
-    pane.className = ARTICLE_PANE_CLASS;
-    pane.setAttribute('aria-label', '文章内容');
-    wrapper.insertBefore(pane, stream);
-  }
-
-  return pane;
-}
-
-function ensureCommentsPane(wrapper: HTMLElement): HTMLElement {
-  let pane = wrapper.querySelector<HTMLElement>(`:scope > .${COMMENTS_PANE_CLASS}`);
-
-  if (!pane) {
-    pane = document.createElement('section');
-    pane.className = COMMENTS_PANE_CLASS;
-    pane.setAttribute('aria-label', '评论分页');
-    wrapper.appendChild(pane);
-  }
-
-  pane.classList.remove(COMMENTS_STREAM_CLASS);
-  return pane;
-}
-
-function ensureCommentsStream(pane: HTMLElement): HTMLElement {
-  let stream = pane.querySelector<HTMLElement>(`:scope > .${COMMENTS_STREAM_CLASS}`);
-
-  if (!stream) {
-    stream = document.createElement('div');
-    stream.className = COMMENTS_STREAM_CLASS;
-    pane.insertBefore(stream, pane.firstChild);
-  }
-
-  Array.from(pane.children).forEach((child) => {
-    if (child !== stream && !child.classList.contains(PAGER_CLASS)) {
-      stream!.appendChild(child);
-    }
-  });
-
-  return stream;
-}
-
-function syncArticlePane(pane: HTMLElement, mainPost: HTMLElement): void {
-  const postId = mainPost.getAttribute('data-post-id') || '';
-  const currentPostId = pane.getAttribute('data-source-post-id') || '';
-
-  if (currentPostId !== postId || !pane.querySelector(`.${ARTICLE_CLONE_CLASS}`)) {
-    restoreFooterActions();
-    pane.replaceChildren(buildArticleClone(mainPost));
-    pane.setAttribute('data-source-post-id', postId);
-  }
-
-  syncArticleTopicMeta(pane);
-  syncArticleFooterActions(pane);
-}
-
-function showArticleLoading(pane: HTMLElement): void {
-  if (pane.querySelector(`.${ARTICLE_CLONE_CLASS}`)) return;
-  restoreFooterActions();
-  const placeholder = document.createElement('div');
-  placeholder.className = ARTICLE_CLONE_CLASS;
-  placeholder.textContent = '正在加载正文...';
-  pane.replaceChildren(placeholder);
-  pane.removeAttribute('data-source-post-id');
-}
-
-function getNativeMainPost(nativeStream: HTMLElement | null): HTMLElement | null {
-  return (
-    nativeStream?.querySelector?.<HTMLElement>(
-      '[data-post-number="1"].topic-post, .topic-post[data-post-number="1"]',
-    ) ||
-    nativeStream?.querySelector?.<HTMLElement>('[data-post-id].topic-post, .topic-post') ||
-    null
+function getNativeMainPost(stream: HTMLElement | null): HTMLElement | null {
+  const numberedMainPost = stream?.querySelector<HTMLElement>(
+    ':scope > [data-post-number="1"].topic-post, :scope > .topic-post[data-post-number="1"]',
   );
+  if (numberedMainPost) return numberedMainPost;
+
+  const firstPost = stream?.querySelector<HTMLElement>(
+    ':scope > [data-post-id].topic-post, :scope > .topic-post',
+  );
+  if (!firstPost || firstPost.getAttribute('data-post-number')) return null;
+  return firstPost;
 }
 
-async function ensureSplitFromTopic(
-  wrapper: HTMLElement,
-  nativeStream: HTMLElement,
-  topicId: string,
-): Promise<void> {
-  const articlePane = ensureArticlePane(wrapper, nativeStream);
-  const commentsPane = ensureCommentsPane(wrapper);
-  const commentsStream = ensureCommentsStream(commentsPane);
-
-  document.body.classList.add(BODY_CLASS);
-  scheduleSplitHeaderSync();
-  bindTopicMetaObserver();
-  nativeStream.classList.add(NATIVE_STREAM_CLASS);
-  nativeStream.setAttribute('aria-hidden', 'true');
-  showArticleLoading(articlePane);
-  updateSplitPaneHeight(wrapper);
-
-  try {
-    if (pagerState.topicId !== topicId || !pagerState.postIds.length) {
-      resetPager(topicId);
-      await loadTopicSnapshot(topicId);
-    }
-
-    const firstPost = pagerState.postsById.get(Number(pagerState.postIds[0]));
-    const mainPost =
-      getNativeMainPost(nativeStream) || (firstPost ? createPostFromJson(firstPost) : null);
-    if (!mainPost) throw new Error('未找到主题正文');
-
-    syncArticlePane(articlePane, mainPost);
-    updateSplitPaneHeight(wrapper);
-    await ensureCommentPager(commentsStream, topicId);
-    updateSplitPaneHeight(wrapper);
-    setTimeout(() => updateSplitPaneHeight(wrapper), 250);
-  } catch (err) {
-    // 任何接口或 DOM 适配异常都回退到站点原生布局，避免留下半初始化页面。
-    handleError(err, '分栏布局');
-    restoreTopicSplitLayout();
-    throw err;
+function revealPreparedLayout(): void {
+  document.documentElement.classList.remove(PREPARING_ROOT_CLASS);
+  if (layoutState.revealTimer) {
+    clearTimeout(layoutState.revealTimer);
+    layoutState.revealTimer = null;
   }
 }
 
-export function restoreTopicSplitLayout(): void {
-  document.body.classList.remove(BODY_CLASS);
-  restoreSplitHeaderTitle();
-
-  document.querySelectorAll(`.${ARTICLE_PANE_CLASS}`).forEach((pane) => pane.remove());
-  document.querySelectorAll(`.${COMMENTS_PANE_CLASS}`).forEach((pane) => pane.remove());
-  document.querySelectorAll(`.${PAGER_CLASS}`).forEach((pager) => pager.remove());
-  document.querySelectorAll(`.${PAGED_COMMENT_CLASS}`).forEach((postEl) => postEl.remove());
-  document.querySelectorAll<HTMLElement>(`.${NATIVE_STREAM_CLASS}`).forEach((stream) => {
-    stream.classList.remove(NATIVE_STREAM_CLASS);
-    stream.removeAttribute('aria-hidden');
-    if (stream.parentElement?.classList.contains(WRAPPER_CLASS)) {
-      stream.parentElement.parentElement?.insertBefore(stream, stream.parentElement);
-    }
-  });
-  document.querySelectorAll<HTMLElement>(`.${WRAPPER_CLASS}`).forEach((wrapper) => {
-    if (!wrapper.children.length) wrapper.remove();
-    else wrapper.classList.remove(WRAPPER_CLASS);
-  });
-  document
-    .querySelectorAll(`.${COMMENTS_STREAM_CLASS}`)
-    .forEach((stream) => stream.classList.remove(COMMENTS_STREAM_CLASS));
-  document.querySelectorAll<HTMLElement>(`.${ORIGINAL_MAIN_POST_CLASS}`).forEach((postEl) => {
-    postEl.classList.remove(ORIGINAL_MAIN_POST_CLASS);
-    postEl.removeAttribute('aria-hidden');
-  });
+export function prepareTopicSplitLayout(): void {
+  if (!discourse.getTopicId()) return;
+  document.documentElement.classList.add(PREPARING_ROOT_CLASS);
+  if (layoutState.revealTimer) clearTimeout(layoutState.revealTimer);
+  layoutState.revealTimer = setTimeout(revealPreparedLayout, 2000);
 }
 
-export async function applyTopicSplitLayout(): Promise<void> {
-  const settings = await _getSettings();
-  const topicId = discourse.getTopicId();
-
-  if (!settings.enableSplitLayout || !topicId) {
-    restoreTopicSplitLayout();
+function releaseSidebarGuard(toggle: HTMLElement, attempt = 0): void {
+  if (toggle.getAttribute('aria-expanded') === 'false' || attempt >= 12) {
+    document.body?.classList.remove(SIDEBAR_GUARD_CLASS, 'sidebar-animate');
+    layoutState.sidebarGuardTimer = null;
     return;
   }
 
-  const stream = getNativeStream();
-  const wrapper = getSplitWrapper(stream);
-  if (!stream || !wrapper) return;
+  layoutState.sidebarGuardTimer = setTimeout(() => releaseSidebarGuard(toggle, attempt + 1), 16);
+}
 
-  await ensureSplitFromTopic(wrapper, stream, topicId);
+function collapseSidebarOnce(): void {
+  if (layoutState.splitSessionActive) return;
+
+  const toggle = document.querySelector<HTMLElement>(
+    'button.btn-sidebar-toggle[aria-controls], button.btn-sidebar-toggle',
+  );
+  const expanded = toggle?.getAttribute('aria-expanded');
+  if (!toggle || (expanded !== 'true' && expanded !== 'false')) return;
+
+  layoutState.splitSessionActive = true;
+  if (expanded === 'false') return;
+
+  document.body.classList.add(SIDEBAR_GUARD_CLASS);
+  toggle.click();
+  releaseSidebarGuard(toggle);
+}
+
+function createSplitShell(stream: HTMLElement): {
+  wrapper: HTMLElement;
+  articlePane: HTMLElement;
+} {
+  const parent = stream.parentElement;
+  if (!parent) throw new Error('评论列表尚未挂载');
+
+  const wrapper = document.createElement('div');
+  wrapper.className = WRAPPER_CLASS;
+
+  const articlePane = document.createElement('aside');
+  articlePane.className = ARTICLE_PANE_CLASS;
+  articlePane.setAttribute('aria-label', '文章内容');
+
+  markLayoutMutation(wrapper, articlePane, stream);
+  parent.insertBefore(wrapper, stream);
+  wrapper.append(articlePane, stream);
+  return { wrapper, articlePane };
+}
+
+function restoreMainPost(): void {
+  const { stream, mainPost, mainPostNextSibling } = layoutState;
+  if (!stream?.isConnected || !mainPost) return;
+
+  const replacement = getNativeMainPost(stream);
+  if (replacement && replacement !== mainPost) {
+    markLayoutMutation(mainPost);
+    mainPost.remove();
+    return;
+  }
+  mainPost.classList.remove(ORIGINAL_MAIN_POST_CLASS);
+  if (mainPost.parentElement === stream) return;
+
+  const anchor =
+    mainPostNextSibling?.parentNode === stream ? mainPostNextSibling : stream.firstChild;
+  markLayoutMutation(mainPost);
+  stream.insertBefore(mainPost, anchor);
+}
+
+function clearLayoutState(endSession: boolean): void {
+  layoutState.active = false;
+  if (endSession) layoutState.splitSessionActive = false;
+  layoutState.topicId = '';
+  layoutState.wrapper = null;
+  layoutState.stream = null;
+  layoutState.articlePane = null;
+  layoutState.mainPost = null;
+  layoutState.mainPostNextSibling = null;
+  layoutState.previousStreamAriaLabel = null;
+}
+
+function restoreOrphanedLayout(): void {
+  const wrapper = document.querySelector<HTMLElement>(`.${WRAPPER_CLASS}`);
+  const stream = wrapper?.querySelector<HTMLElement>(
+    `:scope > .${NATIVE_STREAM_CLASS}, :scope > .post-stream, :scope > #post_stream`,
+  );
+  const articlePane = wrapper?.querySelector<HTMLElement>(`:scope > .${ARTICLE_PANE_CLASS}`);
+  const movedMain = articlePane?.querySelector<HTMLElement>(`.${ORIGINAL_MAIN_POST_CLASS}`);
+
+  restoreFooterActions();
+  if (stream && movedMain && !getNativeMainPost(stream)) {
+    movedMain.classList.remove(ORIGINAL_MAIN_POST_CLASS);
+    markLayoutMutation(movedMain);
+    stream.insertBefore(movedMain, stream.firstChild);
+  }
+  markLayoutMutation(articlePane);
+  articlePane?.remove();
+  const legacyCommentsPane = wrapper?.querySelector(':scope > .ldtk-topic-comments-pane');
+  markLayoutMutation(legacyCommentsPane);
+  legacyCommentsPane?.remove();
+  wrapper
+    ?.querySelectorAll(':scope > .ldtk-paged-comment, :scope > .ldtk-comments-pager')
+    .forEach((el) => {
+      markLayoutMutation(el);
+      el.remove();
+    });
+
+  if (wrapper?.parentElement && stream) {
+    markLayoutMutation(stream, wrapper);
+    wrapper.parentElement.insertBefore(stream, wrapper);
+    wrapper.remove();
+  }
+
+  stream?.classList.remove(NATIVE_STREAM_CLASS, COMMENTS_STREAM_CLASS);
+  stream?.removeAttribute('aria-hidden');
+  stream?.removeAttribute('aria-label');
+  restoreSplitHeaderTitle();
+  document.body?.classList.remove(BODY_CLASS, SIDEBAR_GUARD_CLASS, 'sidebar-animate');
+}
+
+function teardownCurrentLayout(endSession: boolean): void {
+  if (!layoutState.active) {
+    if (document.body?.classList.contains(BODY_CLASS)) restoreOrphanedLayout();
+    if (endSession) layoutState.splitSessionActive = false;
+    revealPreparedLayout();
+    return;
+  }
+
+  const { wrapper, stream, articlePane, previousStreamAriaLabel } = layoutState;
+  restoreFooterActions();
+  restoreMainPost();
+  markLayoutMutation(articlePane);
+  articlePane?.remove();
+
+  if (stream) {
+    stream.classList.remove(NATIVE_STREAM_CLASS, COMMENTS_STREAM_CLASS);
+    stream.removeAttribute('aria-hidden');
+    if (previousStreamAriaLabel === null) stream.removeAttribute('aria-label');
+    else stream.setAttribute('aria-label', previousStreamAriaLabel);
+  }
+
+  if (wrapper?.parentElement && stream?.parentElement === wrapper) {
+    markLayoutMutation(stream, wrapper);
+    wrapper.parentElement.insertBefore(stream, wrapper);
+    wrapper.remove();
+  } else if (wrapper && !wrapper.children.length) {
+    wrapper.remove();
+  }
+
+  restoreSplitHeaderTitle();
+  document.body.classList.remove(BODY_CLASS, SIDEBAR_GUARD_CLASS, 'sidebar-animate');
+  if (layoutState.sidebarGuardTimer) {
+    clearTimeout(layoutState.sidebarGuardTimer);
+    layoutState.sidebarGuardTimer = null;
+  }
+  clearLayoutState(endSession);
+  revealPreparedLayout();
+}
+
+function isCurrentLayoutIntact(topicId: string): boolean {
+  return Boolean(
+    layoutState.active &&
+    layoutState.topicId === topicId &&
+    layoutState.wrapper?.isConnected &&
+    layoutState.stream?.isConnected &&
+    layoutState.articlePane?.isConnected &&
+    layoutState.mainPost?.parentElement === layoutState.articlePane &&
+    !getNativeMainPost(layoutState.stream),
+  );
+}
+
+function activateLayout(stream: HTMLElement, mainPost: HTMLElement, topicId: string): void {
+  collapseSidebarOnce();
+  const mainPostNextSibling = mainPost.nextSibling;
+  const previousStreamAriaLabel = stream.getAttribute('aria-label');
+  const { wrapper, articlePane } = createSplitShell(stream);
+
+  layoutState.active = true;
+  layoutState.topicId = topicId;
+  layoutState.wrapper = wrapper;
+  layoutState.stream = stream;
+  layoutState.articlePane = articlePane;
+  layoutState.mainPost = mainPost;
+  layoutState.mainPostNextSibling = mainPostNextSibling;
+  layoutState.previousStreamAriaLabel = previousStreamAriaLabel;
+
+  mainPost.classList.add(ORIGINAL_MAIN_POST_CLASS);
+  markLayoutMutation(mainPost);
+  articlePane.appendChild(mainPost);
+  stream.classList.add(NATIVE_STREAM_CLASS, COMMENTS_STREAM_CLASS);
+  stream.removeAttribute('aria-hidden');
+  stream.setAttribute('aria-label', '评论列表');
+  syncArticleFooterActions(articlePane);
+
+  document.body.classList.add(BODY_CLASS);
+  scheduleSplitHeaderSync();
+  updateSplitPaneHeight(wrapper);
+  revealPreparedLayout();
+}
+
+export function updateSplitPaneHeight(wrapper: HTMLElement | null): void {
+  if (!wrapper?.isConnected) return;
+  const viewportHeight = window.visualViewport?.height || window.innerHeight;
+  const wrapperTop = wrapper.getBoundingClientRect().top;
+  const headerBottom =
+    document.querySelector<HTMLElement>('.d-header')?.getBoundingClientRect().bottom || 0;
+  const paneTop = Math.max(0, wrapperTop, headerBottom);
+  const height = Math.max(320, viewportHeight - paneTop - 8);
+  wrapper.style.setProperty('--ldtk-topic-top-offset', `${paneTop}px`);
+  wrapper.style.setProperty('--ldtk-split-pane-height', `${height}px`);
+}
+
+export function restoreTopicSplitLayout(): void {
+  layoutState.generation += 1;
+  teardownCurrentLayout(true);
+}
+
+export async function applyTopicSplitLayout(settings?: DiscourseSettings): Promise<void> {
+  const generation = ++layoutState.generation;
+  const currentSettings = settings || (await getCachedSettings());
+  if (generation !== layoutState.generation) return;
+
+  const topicId = discourse.getTopicId();
+  if (!currentSettings.enableSplitLayout || !topicId) {
+    teardownCurrentLayout(true);
+    return;
+  }
+
+  try {
+    if (isCurrentLayoutIntact(topicId)) {
+      collapseSidebarOnce();
+      syncArticleFooterActions(layoutState.articlePane);
+      updateSplitPaneHeight(layoutState.wrapper);
+      revealPreparedLayout();
+      return;
+    }
+
+    if (layoutState.active) {
+      prepareTopicSplitLayout();
+      teardownCurrentLayout(false);
+    } else if (document.body.classList.contains(BODY_CLASS)) restoreOrphanedLayout();
+
+    const stream = getNativeStream();
+    const mainPost = getNativeMainPost(stream);
+    if (!stream || !mainPost) return;
+    activateLayout(stream, mainPost, topicId);
+  } catch (err) {
+    handleError(err, '分栏布局');
+    teardownCurrentLayout(false);
+  }
 }
 
 bindResizeHandler();
 
 export const layout = {
   applyTopicSplitLayout,
+  prepareTopicSplitLayout,
   restoreTopicSplitLayout,
 };

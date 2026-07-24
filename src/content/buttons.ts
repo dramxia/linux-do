@@ -9,7 +9,6 @@
 import * as discourse from './discourse';
 import * as output from './output';
 import * as postExport from './post-export';
-import { on } from './event-bus';
 import {
   getSettings as _getSettings,
   getCachedSettings,
@@ -181,11 +180,3 @@ export const buttons = {
   injectButtons,
   removeInjectedActions,
 };
-
-// 订阅 layout 的 posts:rendered 事件，触发按钮注入。
-// emit 同步执行，等价于原先 comment-pager 直接调用 buttons.injectButtons()。
-// injectButtons 内部通过 .ldtk-shadow-host 存在性检查保证幂等，与 index.ts refreshEnhancements
-// 的初始加载调用不冲突（两者都调用 injectButtons，重复调用为 no-op）。
-on('posts:rendered', () => {
-  void injectButtons();
-});

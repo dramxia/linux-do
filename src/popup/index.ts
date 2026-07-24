@@ -35,14 +35,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   async function saveSetting(key: SettingKey, checked: boolean): Promise<void> {
     await _saveSettings({ [key]: checked });
-    if (tabId !== undefined) {
-      chrome.tabs.sendMessage(
-        tabId,
-        { action: 'refreshEnhancements' } satisfies ContentMessage,
-        {},
-        () => {},
-      );
-    }
   }
 
   (Object.entries(settingInputs) as Array<[SettingKey, HTMLInputElement | null]>).forEach(

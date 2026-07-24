@@ -24,7 +24,7 @@
       "matches": ["https://linux.do/*", "https://www.linux.do/*"],
       "js": ["content.js"],
       "css": ["styles.css"],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ]
 }

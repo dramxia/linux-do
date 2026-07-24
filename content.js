@@ -102,11 +102,11 @@
   }
   function getAllPostElements() {
     return Array.from(document.querySelectorAll("[data-post-id].topic-post, .topic-post")).filter(
-      (el) => isHTMLElement(el) && !el.closest(".ldtk-topic-article-pane")
+      (el) => isHTMLElement(el)
     );
   }
   function getPostElements() {
-    return getAllPostElements().filter((postEl) => !postEl.closest(".ldtk-topic-native-stream"));
+    return getAllPostElements();
   }
   function getPostMeta(postEl) {
     const postId = postEl.getAttribute("data-post-id") || "";
@@ -124,30 +124,6 @@
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.text();
-  }
-  async function fetchTopicJson(topicId) {
-    if (!topicId) throw new Error("\u7F3A\u5C11\u4E3B\u9898 ID");
-    const res = await fetch(`/t/${topicId}.json`, {
-      credentials: "same-origin",
-      headers: { Accept: "application/json" }
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  }
-  async function fetchPostsByIds(topicId, postIds) {
-    if (!topicId) throw new Error("\u7F3A\u5C11\u4E3B\u9898 ID");
-    if (!postIds.length) return [];
-    const url = new URL(`/t/${topicId}/posts.json`, window.location.origin);
-    postIds.forEach((postId) => {
-      url.searchParams.append("post_ids[]", String(postId));
-    });
-    const res = await fetch(url.pathname + url.search, {
-      credentials: "same-origin",
-      headers: { Accept: "application/json" }
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return data?.post_stream?.posts || data?.posts || [];
   }
   function getPostImages(postEl) {
     const images = {};
@@ -213,152 +189,32 @@
       const settingsKeys = Object.keys(DEFAULT_SETTINGS);
       if (!changedKeys.some((key) => settingsKeys.includes(key))) return;
       cachedSettings = null;
-      getSettings().then(callback).catch(() => callback(normalizeSettings()));
+      getSettings().then((settings) => {
+        cachedSettings = settings;
+        callback(settings);
+      }).catch(() => callback(normalizeSettings()));
     });
   }
 
   // src/content/layout/dom-queries.ts
   var BODY_CLASS = "ldtk-topic-split-active";
+  var PREPARING_ROOT_CLASS = "ldtk-topic-split-preparing";
+  var SIDEBAR_GUARD_CLASS = "ldtk-topic-sidebar-collapsing";
   var WRAPPER_CLASS = "ldtk-topic-split-wrapper";
   var ARTICLE_PANE_CLASS = "ldtk-topic-article-pane";
-  var ARTICLE_CLONE_CLASS = "ldtk-topic-article-clone";
-  var COMMENTS_PANE_CLASS = "ldtk-topic-comments-pane";
   var COMMENTS_STREAM_CLASS = "ldtk-topic-comments-stream";
   var HEADER_TITLE_CLASS = "ldtk-topic-header-title";
   var HEADER_TITLE_INNER_CLASS = "ldtk-topic-header-title-inner";
-  var HEADER_META_CLASS = "ldtk-topic-header-meta";
-  var HEADER_META_INNER_CLASS = "ldtk-topic-header-meta-inner";
-  var ARTICLE_META_CLASS = "ldtk-topic-article-meta";
-  var ARTICLE_META_INNER_CLASS = "ldtk-topic-article-meta-inner";
   var ARTICLE_ACTIONS_CLASS = "ldtk-topic-article-actions";
   var FOOTER_ACTIONS_SOURCE_ATTR = "data-ldtk-footer-actions-source";
+  var FOOTER_ACTIONS_TOPIC_ATTR = "data-ldtk-footer-actions-topic";
   var FOOTER_ACTIONS_PLACEHOLDER_ATTR = "data-ldtk-footer-actions-placeholder";
-  var TOPIC_META_SOURCE_ATTR = "data-ldtk-topic-meta-source";
+  var FOOTER_ACTIONS_SELECTORS = "#topic-footer-buttons, .topic-footer-main-buttons";
   var NATIVE_STREAM_CLASS = "ldtk-topic-native-stream";
   var ORIGINAL_MAIN_POST_CLASS = "ldtk-topic-original-main-post";
-  var PAGED_COMMENT_CLASS = "ldtk-paged-comment";
-  var PAGER_CLASS = "ldtk-comments-pager";
-  var PAGER_INFO_CLASS = "ldtk-comments-pager-info";
-  var PAGER_BUTTON_CLASS = "ldtk-comments-pager-button";
-  var PAGE_SIZE = 20;
-  var TOPIC_META_SELECTORS = [
-    ".topic-map",
-    ".topic-map-expanded",
-    ".topic-map__contents",
-    ".topic-map-section",
-    ".topic-map-summary",
-    ".topic-map-stats",
-    ".topic-map__stats",
-    ".topic-stats"
-  ];
-  var FOOTER_ACTIONS_SELECTORS = "#topic-footer-buttons, .topic-footer-main-buttons";
-  var topicMetaState = {
-    observer: null,
-    syncTimer: null
-  };
-  function escapeHtml(value) {
-    return String(value ?? "").replace(
-      /[&<>"']/g,
-      (char) => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;"
-      })[char]
-    );
-  }
-  function escapeAttr(value) {
-    return escapeHtml(value).replace(/`/g, "&#96;");
-  }
-
-  // src/content/managed-observer.ts
-  var ManagedObserver = class {
-    observer = null;
-    target;
-    observerInit;
-    callback;
-    pagehideHandler = () => {
-      this.disconnect();
-    };
-    isConnected = false;
-    constructor(target, observerInit, callback) {
-      this.target = target;
-      this.observerInit = observerInit;
-      this.callback = callback;
-      window.addEventListener("pagehide", this.pagehideHandler);
-    }
-    start() {
-      if (this.observer) return;
-      this.observer = new MutationObserver(this.callback);
-      this.observer.observe(this.target, this.observerInit);
-      this.isConnected = true;
-    }
-    disconnect() {
-      if (!this.observer) return;
-      this.observer.disconnect();
-      this.observer = null;
-      this.isConnected = false;
-      window.removeEventListener("pagehide", this.pagehideHandler);
-    }
-  };
-
-  // src/content/layout/footer-actions-cloner.ts
-  function findFooterActionsSource() {
-    return Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find(
-      (el) => el instanceof HTMLElement && !el.closest(`.${ARTICLE_PANE_CLASS}`) && !el.closest(`.${HEADER_META_CLASS}`) && !el.closest(`.${COMMENTS_PANE_CLASS}`)
-    ) || null;
-  }
-  function ensureFooterActionsPlaceholder(source) {
-    const existing = document.querySelector(
-      `[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`
-    );
-    if (existing) return existing;
-    const placeholder = document.createElement("span");
-    placeholder.hidden = true;
-    placeholder.setAttribute(FOOTER_ACTIONS_PLACEHOLDER_ATTR, "true");
-    source.parentElement?.insertBefore(placeholder, source);
-    return placeholder;
-  }
-  function syncArticleFooterActions(pane) {
-    if (!pane) return;
-    const movedSource = pane.querySelector(
-      `:scope > .${ARTICLE_ACTIONS_CLASS} > [${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`
-    );
-    const source = movedSource || findFooterActionsSource();
-    let articleActions = pane.querySelector(`:scope > .${ARTICLE_ACTIONS_CLASS}`);
-    if (!source) {
-      articleActions?.remove();
-      return;
-    }
-    if (!articleActions) {
-      articleActions = document.createElement("section");
-      articleActions.className = ARTICLE_ACTIONS_CLASS;
-      articleActions.setAttribute("aria-label", "\u4E3B\u9898\u64CD\u4F5C");
-      pane.appendChild(articleActions);
-    }
-    if (!movedSource) {
-      ensureFooterActionsPlaceholder(source);
-      source.setAttribute(FOOTER_ACTIONS_SOURCE_ATTR, "true");
-      articleActions.appendChild(source);
-    }
-  }
-  function restoreFooterActions() {
-    const source = document.querySelector(`[${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`);
-    const placeholder = document.querySelector(
-      `[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`
-    );
-    if (source) {
-      source.removeAttribute(FOOTER_ACTIONS_SOURCE_ATTR);
-      if (placeholder?.parentElement) {
-        placeholder.parentElement.insertBefore(source, placeholder);
-      }
-    }
-    placeholder?.remove();
-    document.querySelectorAll(`.${ARTICLE_ACTIONS_CLASS}`).forEach((el) => el.remove());
-  }
 
   // src/content/layout/header-title-cloner.ts
+  var pendingTimers = /* @__PURE__ */ new Set();
   function getHeaderTitleMount() {
     return document.querySelector(".d-header .contents") || document.querySelector("header.d-header .contents") || document.querySelector(".d-header");
   }
@@ -368,11 +224,10 @@
         ","
       )
     ).forEach((el) => el.remove());
-    clone.querySelectorAll("[id]").forEach((el) => {
-      el.removeAttribute("id");
-    });
+    clone.querySelectorAll("[id]").forEach((el) => el.removeAttribute("id"));
   }
   function syncSplitHeaderTitle() {
+    if (!document.body?.classList.contains(BODY_CLASS)) return;
     const source = document.querySelector("#topic-title");
     const mount = getHeaderTitleMount();
     if (!source || !mount) return;
@@ -383,209 +238,224 @@
       const logoArea = mount.querySelector(
         ":scope > .title, :scope > .home-logo-wrapper, :scope > .brand-header"
       );
-      if (logoArea) {
-        logoArea.insertAdjacentElement("afterend", headerTitle);
-      } else {
-        mount.insertBefore(headerTitle, mount.children[1] || null);
-      }
+      if (logoArea) logoArea.insertAdjacentElement("afterend", headerTitle);
+      else mount.insertBefore(headerTitle, mount.children[1] || null);
     }
     const clone = source.cloneNode(true);
     clone.className = HEADER_TITLE_INNER_CLASS;
     stripHeaderCloneUnsafeNodes(clone);
     headerTitle.replaceChildren(clone);
-    syncSplitHeaderMeta(mount, headerTitle);
   }
-  function syncSplitTopicMeta() {
-    syncSplitHeaderTitle();
-    document.querySelectorAll(`.${ARTICLE_PANE_CLASS}`).forEach((pane) => {
-      syncArticleTopicMeta(pane);
-      syncArticleFooterActions(pane);
-    });
+  function clearPendingTimers() {
+    pendingTimers.forEach((timer) => clearTimeout(timer));
+    pendingTimers.clear();
   }
   function scheduleSplitHeaderSync() {
-    syncSplitTopicMeta();
-    [100, 350, 800, 1500, 3e3].forEach((delay) => {
-      setTimeout(syncSplitTopicMeta, delay);
+    clearPendingTimers();
+    syncSplitHeaderTitle();
+    [250, 1e3].forEach((delay) => {
+      const timer = setTimeout(() => {
+        pendingTimers.delete(timer);
+        syncSplitHeaderTitle();
+      }, delay);
+      pendingTimers.add(timer);
     });
   }
   function restoreSplitHeaderTitle() {
-    teardownTopicMetaObserver();
+    clearPendingTimers();
     document.querySelectorAll(`.${HEADER_TITLE_CLASS}`).forEach((el) => el.remove());
-    document.querySelectorAll(`.${HEADER_META_CLASS}`).forEach((el) => el.remove());
-    document.querySelectorAll(`.${ARTICLE_META_CLASS}`).forEach((el) => el.remove());
-    restoreFooterActions();
-    document.querySelectorAll(`[${TOPIC_META_SOURCE_ATTR}]`).forEach((el) => {
-      el.removeAttribute(TOPIC_META_SOURCE_ATTR);
-    });
   }
 
-  // src/content/layout/topic-meta-cloner.ts
-  function findTopicMetaSource() {
-    const directMatch = Array.from(document.querySelectorAll(TOPIC_META_SELECTORS.join(","))).find(
-      (el) => !el.closest(`.${HEADER_META_CLASS}`) && !el.closest(`.${ARTICLE_PANE_CLASS}`) && !el.closest(`.${COMMENTS_PANE_CLASS}`)
+  // src/content/layout/layout-mutation-tracker.ts
+  var expectedNodes = /* @__PURE__ */ new Set();
+  var clearTimer = null;
+  function markLayoutMutation(...nodes) {
+    nodes.forEach((node) => {
+      if (node) expectedNodes.add(node);
+    });
+    if (clearTimer) return;
+    clearTimer = setTimeout(() => {
+      expectedNodes.clear();
+      clearTimer = null;
+    }, 0);
+  }
+  function isExpectedLayoutMutation(node) {
+    return expectedNodes.has(node);
+  }
+
+  // src/content/layout/footer-actions-cloner.ts
+  var footerPortalState = {
+    source: null,
+    placeholder: null,
+    host: null,
+    originalParent: null,
+    originalNextSibling: null,
+    topicId: ""
+  };
+  function findFooterActionsSource() {
+    return Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find(
+      (el) => el instanceof HTMLElement && !el.closest(`.${ARTICLE_PANE_CLASS}`) && !el.hasAttribute(FOOTER_ACTIONS_PLACEHOLDER_ATTR)
+    ) || null;
+  }
+  function findFooterActionsHostReplacement() {
+    const candidate = footerPortalState.host?.querySelector(
+      ":scope > #topic-footer-buttons, :scope > .topic-footer-main-buttons"
     );
-    if (directMatch) return directMatch;
-    return Array.from(
-      document.querySelectorAll("#main-outlet .container.posts > .row > *, .topic-area > *")
-    ).find((el) => {
-      if (el.closest(`.${HEADER_META_CLASS}`) || el.closest(`.${ARTICLE_PANE_CLASS}`) || el.closest(`.${COMMENTS_PANE_CLASS}`) || el.matches("#topic-title")) {
-        return false;
-      }
-      const text = el.textContent || "";
-      const hasStatsText = ["\u6D4F\u89C8\u91CF", "\u8D5E", "\u94FE\u63A5", "\u7528\u6237"].filter((label) => text.includes(label)).length >= 2;
-      const hasAvatars = el.querySelectorAll("img.avatar, .avatar").length >= 2;
-      const hasSummary = Boolean(el.querySelector('[title*="\u603B\u7ED3"], button, .btn'));
-      return hasStatsText && (hasAvatars || hasSummary);
-    }) || null;
+    return candidate instanceof HTMLElement && candidate !== footerPortalState.source ? candidate : null;
   }
-  function stripHeaderMetaCloneUnsafeNodes(clone) {
-    clone.querySelectorAll(["script", "style", "[id]"].join(",")).forEach((el) => {
-      if (el.matches("script, style")) {
-        el.remove();
-        return;
-      }
-      el.removeAttribute("id");
-    });
+  function createFooterActionsPlaceholder(source) {
+    const placeholder = document.createElement("span");
+    placeholder.hidden = true;
+    placeholder.setAttribute(FOOTER_ACTIONS_PLACEHOLDER_ATTR, "true");
+    markLayoutMutation(placeholder);
+    source.parentElement?.insertBefore(placeholder, source);
+    return placeholder;
   }
-  function buildTopicMetaClone(source, innerClass) {
-    const clone = source.cloneNode(true);
-    clone.classList.add(innerClass);
-    clone.removeAttribute("id");
-    clone.removeAttribute(TOPIC_META_SOURCE_ATTR);
-    stripHeaderMetaCloneUnsafeNodes(clone);
-    return clone;
+  function clearPortalState() {
+    footerPortalState.source = null;
+    footerPortalState.placeholder = null;
+    footerPortalState.host = null;
+    footerPortalState.originalParent = null;
+    footerPortalState.originalNextSibling = null;
+    footerPortalState.topicId = "";
   }
-  function syncSplitHeaderMeta(mount, headerTitle) {
-    const source = findTopicMetaSource();
-    if (!source || !mount) return;
-    document.querySelectorAll(`[${TOPIC_META_SOURCE_ATTR}]`).forEach((el) => {
-      if (el !== source) el.removeAttribute(TOPIC_META_SOURCE_ATTR);
-    });
-    source.setAttribute(TOPIC_META_SOURCE_ATTR, "true");
-    let headerMeta = mount.querySelector(`:scope > .${HEADER_META_CLASS}`);
-    if (!headerMeta) {
-      headerMeta = document.createElement("div");
-      headerMeta.className = HEADER_META_CLASS;
-      if (headerTitle?.parentElement === mount) {
-        headerTitle.insertAdjacentElement("afterend", headerMeta);
-      } else {
-        mount.insertBefore(headerMeta, mount.children[2] || null);
-      }
-    }
-    headerMeta.replaceChildren(buildTopicMetaClone(source, HEADER_META_INNER_CLASS));
-  }
-  function syncArticleTopicMeta(pane) {
-    if (!pane) return;
-    const source = findTopicMetaSource();
-    let articleMeta = pane.querySelector(`:scope > .${ARTICLE_META_CLASS}`);
-    if (!source) {
-      articleMeta?.remove();
+  function restoreSource(source, placeholder, originalParent, originalNextSibling, sourceTopicId) {
+    source.removeAttribute(FOOTER_ACTIONS_SOURCE_ATTR);
+    source.removeAttribute(FOOTER_ACTIONS_TOPIC_ATTR);
+    markLayoutMutation(source);
+    const currentTopicId = getTopicId();
+    if (!currentTopicId || sourceTopicId && sourceTopicId !== currentTopicId) {
+      source.remove();
       return;
     }
-    if (!articleMeta) {
-      articleMeta = document.createElement("section");
-      articleMeta.className = ARTICLE_META_CLASS;
-      articleMeta.setAttribute("aria-label", "\u4E3B\u9898\u7EDF\u8BA1\u4E0E\u64CD\u4F5C");
-      pane.appendChild(articleMeta);
+    if (placeholder?.parentElement?.isConnected) {
+      placeholder.parentElement.insertBefore(source, placeholder);
+      return;
     }
-    articleMeta.replaceChildren(buildTopicMetaClone(source, ARTICLE_META_INNER_CLASS));
-  }
-  function scheduleTopicMetaSync(delay = 80) {
-    if (topicMetaState.syncTimer) clearTimeout(topicMetaState.syncTimer);
-    topicMetaState.syncTimer = setTimeout(() => {
-      topicMetaState.syncTimer = null;
-      syncSplitTopicMeta();
-    }, delay);
-  }
-  function isNativeTopicMetaNode(node) {
-    if (node.nodeType !== Node.ELEMENT_NODE) return false;
-    const el = node;
-    if (el.closest?.(`.${HEADER_META_CLASS}`) || el.closest?.(`.${ARTICLE_PANE_CLASS}`) || el.closest?.(`.${COMMENTS_PANE_CLASS}`)) {
-      return false;
+    if (originalParent?.isConnected) {
+      const anchor = originalNextSibling?.parentNode === originalParent ? originalNextSibling : null;
+      originalParent.insertBefore(source, anchor);
+      return;
     }
-    const selectors = TOPIC_META_SELECTORS.join(",");
-    return el.matches?.(selectors) || Boolean(el.querySelector?.(selectors));
+    const replacement = findFooterActionsSource();
+    if (replacement && replacement !== source) {
+      source.remove();
+      return;
+    }
+    const fallback = document.querySelector(".topic-area, .container.posts, #main-outlet") || document.body;
+    fallback.appendChild(source);
   }
-  function bindTopicMetaObserver() {
-    if (topicMetaState.observer) return;
-    const target = document.querySelector("#main-outlet, #main, body") || document.body;
-    topicMetaState.observer = new ManagedObserver(
-      target,
-      {
-        childList: true,
-        subtree: true,
-        characterData: true
-      },
-      (mutations) => {
-        const shouldSync = mutations.some((mutation) => {
-          const nodes = [
-            mutation.target,
-            ...Array.from(mutation.addedNodes || []),
-            ...Array.from(mutation.removedNodes || [])
-          ];
-          return nodes.some(isNativeTopicMetaNode);
-        });
-        if (shouldSync) scheduleTopicMetaSync();
-      }
+  function syncArticleFooterActions(pane) {
+    if (!pane) return;
+    const hostReplacement = findFooterActionsHostReplacement();
+    const nextSource = findFooterActionsSource();
+    const currentSource = footerPortalState.source;
+    if (hostReplacement) {
+      markLayoutMutation(currentSource);
+      currentSource?.remove();
+      footerPortalState.source = hostReplacement;
+      hostReplacement.setAttribute(FOOTER_ACTIONS_SOURCE_ATTR, "true");
+      hostReplacement.setAttribute(FOOTER_ACTIONS_TOPIC_ATTR, footerPortalState.topicId);
+    } else if (nextSource && nextSource !== currentSource) {
+      markLayoutMutation(currentSource, footerPortalState.placeholder);
+      currentSource?.remove();
+      footerPortalState.placeholder?.remove();
+      footerPortalState.source = nextSource;
+      footerPortalState.originalParent = nextSource.parentElement;
+      footerPortalState.originalNextSibling = nextSource.nextSibling;
+      footerPortalState.topicId = getTopicId() || "";
+      footerPortalState.placeholder = createFooterActionsPlaceholder(nextSource);
+      nextSource.setAttribute(FOOTER_ACTIONS_SOURCE_ATTR, "true");
+      nextSource.setAttribute(FOOTER_ACTIONS_TOPIC_ATTR, footerPortalState.topicId);
+    } else if (currentSource && !currentSource.isConnected) {
+      markLayoutMutation(footerPortalState.placeholder, footerPortalState.host);
+      footerPortalState.placeholder?.remove();
+      footerPortalState.host?.remove();
+      clearPortalState();
+    }
+    const source = footerPortalState.source;
+    let articleActions = footerPortalState.host;
+    if (!source) {
+      articleActions?.remove();
+      footerPortalState.host = null;
+      return;
+    }
+    if (!articleActions?.isConnected || articleActions.parentElement !== pane) {
+      articleActions = document.createElement("section");
+      articleActions.className = ARTICLE_ACTIONS_CLASS;
+      articleActions.setAttribute("aria-label", "\u4E3B\u9898\u64CD\u4F5C");
+      markLayoutMutation(articleActions);
+      pane.appendChild(articleActions);
+      footerPortalState.host = articleActions;
+    }
+    if (source.parentElement !== articleActions) {
+      markLayoutMutation(source);
+      articleActions.appendChild(source);
+    }
+  }
+  function restoreFooterActions() {
+    const { source, placeholder, host, originalParent, originalNextSibling, topicId } = footerPortalState;
+    if (source) {
+      restoreSource(source, placeholder, originalParent, originalNextSibling, topicId);
+    }
+    markLayoutMutation(placeholder, host);
+    placeholder?.remove();
+    host?.remove();
+    clearPortalState();
+    const orphanedSource = document.querySelector(
+      `[${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`
     );
-    topicMetaState.observer.start();
-  }
-  function teardownTopicMetaObserver() {
-    if (topicMetaState.syncTimer) {
-      clearTimeout(topicMetaState.syncTimer);
-      topicMetaState.syncTimer = null;
+    const orphanedPlaceholder = document.querySelector(
+      `[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`
+    );
+    if (orphanedSource) {
+      restoreSource(
+        orphanedSource,
+        orphanedPlaceholder,
+        null,
+        null,
+        orphanedSource.getAttribute(FOOTER_ACTIONS_TOPIC_ATTR) || ""
+      );
     }
-    if (topicMetaState.observer) {
-      topicMetaState.observer.disconnect();
-      topicMetaState.observer = null;
-    }
-  }
-
-  // src/content/event-bus.ts
-  var handlers = /* @__PURE__ */ new Map();
-  function on(event, handler) {
-    let set = handlers.get(event);
-    if (!set) {
-      set = /* @__PURE__ */ new Set();
-      handlers.set(event, set);
-    }
-    set.add(handler);
-  }
-  function emit(event, data) {
-    const set = handlers.get(event);
-    if (!set) return;
-    for (const handler of Array.from(set)) {
-      handler(data);
-    }
+    markLayoutMutation(orphanedPlaceholder);
+    orphanedPlaceholder?.remove();
+    document.querySelectorAll(`.${ARTICLE_ACTIONS_CLASS}`).forEach((el) => {
+      markLayoutMutation(el);
+      el.remove();
+    });
   }
 
-  // src/content/layout/post-renderer.ts
-  function createPostFromJson(post) {
-    const article = document.createElement("article");
-    article.className = `topic-post ${PAGED_COMMENT_CLASS}`;
-    article.setAttribute("data-post-id", String(post.id || ""));
-    article.setAttribute("data-post-number", String(post.post_number || ""));
-    const avatar = post.avatar_template ? post.avatar_template.replace("{size}", "45") : "";
-    const createdAt = post.created_at || "";
-    const cooked = post.cooked || "";
-    article.innerHTML = `
-    <div class="topic-avatar">
-      ${avatar ? `<img class="avatar" width="45" height="45" src="${escapeAttr(avatar)}" alt="">` : ""}
-    </div>
-    <div class="topic-body">
-      <div class="topic-meta-data">
-        <span class="names">
-          <span class="username">${escapeHtml(post.username || "Unknown")}</span>
-        </span>
-        ${createdAt ? `<a class="post-date" href="#post-${escapeAttr(post.post_number || "")}"><time datetime="${escapeAttr(createdAt)}">${escapeHtml(createdAt.slice(0, 10))}</time></a>` : ""}
-      </div>
-      <div class="cooked">${cooked}</div>
-      <section class="post-menu-area">
-        <nav class="post-controls"></nav>
-      </section>
-    </div>
-  `;
-    return article;
+  // src/content/layout/resize-handler.ts
+  var ResizeHandler = class {
+    listener = null;
+    pagehideHandler = () => {
+      if (this.listener) window.removeEventListener("resize", this.listener);
+    };
+    pageshowHandler = (event) => {
+      if (!event.persisted || !this.listener) return;
+      window.addEventListener("resize", this.listener);
+      this.listener();
+    };
+    bind() {
+      if (this.listener) return;
+      this.listener = () => {
+        document.querySelectorAll(`.${WRAPPER_CLASS}`).forEach(updateSplitPaneHeight);
+      };
+      window.addEventListener("resize", this.listener);
+      window.addEventListener("pagehide", this.pagehideHandler);
+      window.addEventListener("pageshow", this.pageshowHandler);
+    }
+    unbind() {
+      if (!this.listener) return;
+      window.removeEventListener("resize", this.listener);
+      window.removeEventListener("pagehide", this.pagehideHandler);
+      window.removeEventListener("pageshow", this.pageshowHandler);
+      this.listener = null;
+    }
+  };
+  var resizeHandler = new ResizeHandler();
+  function bindResizeHandler() {
+    resizeHandler.bind();
   }
 
   // src/content/output.ts
@@ -715,408 +585,254 @@
     showToast(`${context}\u5931\u8D25: ${message}`);
   }
 
-  // src/content/layout/comment-pager.ts
-  var PagerState = class {
-    topicId = "";
-    page = 1;
-    postIds = [];
-    postsById = /* @__PURE__ */ new Map();
-    loading = false;
-    reset(topicId) {
-      this.topicId = topicId || "";
-      this.page = 1;
-      this.postIds = [];
-      this.postsById.clear();
-      this.loading = false;
-      document.querySelectorAll(`.${COMMENTS_PANE_CLASS}`).forEach((stream) => {
-        stream.removeAttribute("data-ldtk-pager-topic-id");
-        stream.removeAttribute("data-ldtk-pager-page");
-        stream.removeAttribute("data-ldtk-pager-key");
-      });
-    }
-    destroy() {
-      this.topicId = "";
-      this.page = 1;
-      this.postIds = [];
-      this.postsById.clear();
-      this.loading = false;
-    }
-  };
-  var pagerState = new PagerState();
-  function resetPager(topicId) {
-    pagerState.reset(topicId);
-  }
-  function getTotalPages() {
-    return Math.max(1, Math.ceil(Math.max(0, pagerState.postIds.length - 1) / PAGE_SIZE));
-  }
-  function shouldShowPager() {
-    return getTotalPages() > 1;
-  }
-  function getPagePostIds(page) {
-    const commentIds = pagerState.postIds.slice(1);
-    const start = (page - 1) * PAGE_SIZE;
-    return commentIds.slice(start, start + PAGE_SIZE);
-  }
-  function getPageKey(page = pagerState.page) {
-    return getPagePostIds(page).join(",");
-  }
-  function isCurrentPageRendered(stream) {
-    return stream.getAttribute("data-ldtk-pager-topic-id") === pagerState.topicId && stream.getAttribute("data-ldtk-pager-page") === String(pagerState.page) && stream.getAttribute("data-ldtk-pager-key") === getPageKey();
-  }
-  function setPagerStatus(stream, text, isError = false) {
-    const infoEl = stream.parentElement?.querySelector(`.${PAGER_INFO_CLASS}`);
-    if (!infoEl) return;
-    infoEl.textContent = text;
-    infoEl.classList.toggle("is-error", isError);
-  }
-  function updatePagerButtons(stream) {
-    const totalPages = getTotalPages();
-    const prevBtn = stream.parentElement?.querySelector(
-      '[data-ldtk-pager-action="prev"]'
-    );
-    const nextBtn = stream.parentElement?.querySelector(
-      '[data-ldtk-pager-action="next"]'
-    );
-    if (prevBtn) prevBtn.disabled = pagerState.loading || pagerState.page <= 1;
-    if (nextBtn) nextBtn.disabled = pagerState.loading || pagerState.page >= totalPages;
-  }
-  function removePager(stream) {
-    stream.parentElement?.querySelector(`:scope > .${PAGER_CLASS}`)?.remove();
-  }
-  function resetCommentsScroll(stream) {
-    stream.scrollTop = 0;
-  }
-  function removePagedComments(stream) {
-    stream.querySelectorAll(`:scope > .${PAGED_COMMENT_CLASS}`).forEach((postEl) => postEl.remove());
-  }
-  function renderCurrentPage(stream) {
-    removePagedComments(stream);
-    const postIds = getPagePostIds(pagerState.page);
-    const fragment = document.createDocumentFragment();
-    postIds.forEach((postId) => {
-      const post = pagerState.postsById.get(Number(postId));
-      if (post) fragment.appendChild(createPostFromJson(post));
-    });
-    stream.appendChild(fragment);
-    const totalPages = getTotalPages();
-    const commentCount = Math.max(0, pagerState.postIds.length - 1);
-    stream.setAttribute("data-ldtk-pager-topic-id", pagerState.topicId);
-    stream.setAttribute("data-ldtk-pager-page", String(pagerState.page));
-    stream.setAttribute("data-ldtk-pager-key", getPageKey());
-    if (!shouldShowPager()) {
-      removePager(stream);
-      return;
-    }
-    ensurePager(stream);
-    setPagerStatus(stream, `\u7B2C ${pagerState.page} / ${totalPages} \u9875\uFF0C\u5171 ${commentCount} \u6761\u8BC4\u8BBA`);
-    updatePagerButtons(stream);
-  }
-  function ensurePager(stream) {
-    const pane = stream.parentElement;
-    if (!pane) return null;
-    let pager = pane.querySelector(`:scope > .${PAGER_CLASS}`);
-    if (!pager) {
-      pager = document.createElement("nav");
-      pager.className = PAGER_CLASS;
-      pager.setAttribute("aria-label", "\u8BC4\u8BBA\u5206\u9875");
-      pager.innerHTML = `
-      <button class="${PAGER_BUTTON_CLASS}" type="button" data-ldtk-pager-action="prev">\u4E0A\u4E00\u9875</button>
-      <span class="${PAGER_INFO_CLASS}">\u6B63\u5728\u52A0\u8F7D\u8BC4\u8BBA...</span>
-      <button class="${PAGER_BUTTON_CLASS}" type="button" data-ldtk-pager-action="next">\u4E0B\u4E00\u9875</button>
-    `;
-      pager.addEventListener("click", (event) => {
-        const target = event.target;
-        const button = target.closest("[data-ldtk-pager-action]");
-        if (!button || pagerState.loading) return;
-        const action = button.getAttribute("data-ldtk-pager-action");
-        loadPage(stream, pagerState.page + (action === "next" ? 1 : -1));
-      });
-      pane.appendChild(pager);
-    }
-    return pager;
-  }
-  async function loadPage(stream, page) {
-    const totalPages = getTotalPages();
-    const nextPage = Math.min(Math.max(1, page), totalPages);
-    const shouldResetScroll = nextPage !== pagerState.page;
-    const postIds = getPagePostIds(nextPage);
-    const missingIds = postIds.filter((postId) => !pagerState.postsById.has(Number(postId)));
-    pagerState.loading = true;
-    if (shouldShowPager()) {
-      ensurePager(stream);
-      updatePagerButtons(stream);
-      setPagerStatus(stream, "\u6B63\u5728\u52A0\u8F7D\u8BC4\u8BBA...");
-    } else {
-      removePager(stream);
-    }
-    try {
-      if (missingIds.length) {
-        const posts = await fetchPostsByIds(pagerState.topicId, missingIds);
-        posts.forEach((post) => {
-          if (post?.id) pagerState.postsById.set(Number(post.id), post);
-        });
-      }
-      pagerState.page = nextPage;
-      renderCurrentPage(stream);
-      if (shouldResetScroll) resetCommentsScroll(stream);
-      emit("posts:rendered", { posts: pagerState.postIds });
-    } catch (err) {
-      handleError(err, "\u8BC4\u8BBA\u52A0\u8F7D");
-      setPagerStatus(stream, `\u8BC4\u8BBA\u52A0\u8F7D\u5931\u8D25\uFF1A${err?.message || "\u672A\u77E5\u9519\u8BEF"}`, true);
-    } finally {
-      pagerState.loading = false;
-      updatePagerButtons(stream);
-    }
-  }
-  async function ensureCommentPager(stream, topicId) {
-    if (pagerState.topicId !== topicId) resetPager(topicId);
-    if (!pagerState.postIds.length && !pagerState.loading) {
-      pagerState.loading = true;
-      try {
-        const topic = await fetchTopicJson(topicId);
-        pagerState.postIds = topic?.post_stream?.stream || [];
-        (topic?.post_stream?.posts || []).forEach((post) => {
-          if (post?.id) pagerState.postsById.set(Number(post.id), post);
-        });
-      } catch (err) {
-        handleError(err, "\u8BC4\u8BBA\u521D\u59CB\u5316");
-        ensurePager(stream);
-        setPagerStatus(stream, `\u8BC4\u8BBA\u521D\u59CB\u5316\u5931\u8D25\uFF1A${err?.message || "\u672A\u77E5\u9519\u8BEF"}`, true);
-        return;
-      } finally {
-        pagerState.loading = false;
-      }
-    }
-    if (!pagerState.postIds.length) {
-      removePager(stream);
-      return;
-    }
-    if (!stream.querySelector(`:scope > .${PAGED_COMMENT_CLASS}`)) {
-      await loadPage(stream, pagerState.page);
-    } else if (isCurrentPageRendered(stream)) {
-      const totalPages = getTotalPages();
-      const commentCount = Math.max(0, pagerState.postIds.length - 1);
-      if (!shouldShowPager()) {
-        removePager(stream);
-        return;
-      }
-      ensurePager(stream);
-      setPagerStatus(stream, `\u7B2C ${pagerState.page} / ${totalPages} \u9875\uFF0C\u5171 ${commentCount} \u6761\u8BC4\u8BBA`);
-      updatePagerButtons(stream);
-    } else {
-      renderCurrentPage(stream);
-    }
-  }
-  async function loadTopicSnapshot(topicId) {
-    const topic = await fetchTopicJson(topicId);
-    const posts = topic?.post_stream?.posts || [];
-    pagerState.postIds = topic?.post_stream?.stream || posts.map((post) => post.id).filter((id) => typeof id === "number");
-    posts.forEach((post) => {
-      if (post?.id) pagerState.postsById.set(Number(post.id), post);
-    });
-    return topic;
-  }
-
-  // src/content/layout/resize-handler.ts
-  var ResizeHandler = class {
-    listener = null;
-    pagehideHandler = () => {
-      this.unbind();
-    };
-    bind() {
-      if (this.listener) return;
-      this.listener = () => {
-        document.querySelectorAll(`.${WRAPPER_CLASS}`).forEach(updateSplitPaneHeight);
-      };
-      window.addEventListener("resize", this.listener);
-      window.addEventListener("pagehide", this.pagehideHandler);
-    }
-    unbind() {
-      if (!this.listener) return;
-      window.removeEventListener("resize", this.listener);
-      window.removeEventListener("pagehide", this.pagehideHandler);
-      this.listener = null;
-    }
-  };
-  var resizeHandler = new ResizeHandler();
-  function bindResizeHandler() {
-    resizeHandler.bind();
-  }
-
   // src/content/layout/split-pane-layout.ts
-  function getSplitWrapper(stream) {
-    if (!stream?.parentElement) return null;
-    if (stream.parentElement.classList.contains(WRAPPER_CLASS)) {
-      return stream.parentElement;
+  var layoutState = {
+    generation: 0,
+    active: false,
+    splitSessionActive: false,
+    topicId: "",
+    wrapper: null,
+    stream: null,
+    articlePane: null,
+    mainPost: null,
+    mainPostNextSibling: null,
+    previousStreamAriaLabel: null,
+    revealTimer: null,
+    sidebarGuardTimer: null
+  };
+  function getNativeStream() {
+    if (layoutState.stream?.isConnected) return layoutState.stream;
+    return document.querySelector(`.${NATIVE_STREAM_CLASS}`) || document.querySelector("#post_stream") || document.querySelector("#post-stream") || document.querySelector(".post-stream") || document.querySelector(".topic-posts");
+  }
+  function getNativeMainPost(stream) {
+    const numberedMainPost = stream?.querySelector(
+      ':scope > [data-post-number="1"].topic-post, :scope > .topic-post[data-post-number="1"]'
+    );
+    if (numberedMainPost) return numberedMainPost;
+    const firstPost = stream?.querySelector(
+      ":scope > [data-post-id].topic-post, :scope > .topic-post"
+    );
+    if (!firstPost || firstPost.getAttribute("data-post-number")) return null;
+    return firstPost;
+  }
+  function revealPreparedLayout() {
+    document.documentElement.classList.remove(PREPARING_ROOT_CLASS);
+    if (layoutState.revealTimer) {
+      clearTimeout(layoutState.revealTimer);
+      layoutState.revealTimer = null;
     }
+  }
+  function prepareTopicSplitLayout() {
+    if (!getTopicId()) return;
+    document.documentElement.classList.add(PREPARING_ROOT_CLASS);
+    if (layoutState.revealTimer) clearTimeout(layoutState.revealTimer);
+    layoutState.revealTimer = setTimeout(revealPreparedLayout, 2e3);
+  }
+  function releaseSidebarGuard(toggle, attempt = 0) {
+    if (toggle.getAttribute("aria-expanded") === "false" || attempt >= 12) {
+      document.body?.classList.remove(SIDEBAR_GUARD_CLASS, "sidebar-animate");
+      layoutState.sidebarGuardTimer = null;
+      return;
+    }
+    layoutState.sidebarGuardTimer = setTimeout(() => releaseSidebarGuard(toggle, attempt + 1), 16);
+  }
+  function collapseSidebarOnce() {
+    if (layoutState.splitSessionActive) return;
+    const toggle = document.querySelector(
+      "button.btn-sidebar-toggle[aria-controls], button.btn-sidebar-toggle"
+    );
+    const expanded = toggle?.getAttribute("aria-expanded");
+    if (!toggle || expanded !== "true" && expanded !== "false") return;
+    layoutState.splitSessionActive = true;
+    if (expanded === "false") return;
+    document.body.classList.add(SIDEBAR_GUARD_CLASS);
+    toggle.click();
+    releaseSidebarGuard(toggle);
+  }
+  function createSplitShell(stream) {
+    const parent = stream.parentElement;
+    if (!parent) throw new Error("\u8BC4\u8BBA\u5217\u8868\u5C1A\u672A\u6302\u8F7D");
     const wrapper = document.createElement("div");
     wrapper.className = WRAPPER_CLASS;
-    stream.parentElement.insertBefore(wrapper, stream);
-    wrapper.appendChild(stream);
-    return wrapper;
+    const articlePane = document.createElement("aside");
+    articlePane.className = ARTICLE_PANE_CLASS;
+    articlePane.setAttribute("aria-label", "\u6587\u7AE0\u5185\u5BB9");
+    markLayoutMutation(wrapper, articlePane, stream);
+    parent.insertBefore(wrapper, stream);
+    wrapper.append(articlePane, stream);
+    return { wrapper, articlePane };
   }
-  function getNativeStream() {
-    return document.querySelector(`.${NATIVE_STREAM_CLASS}`) || document.querySelector("#post_stream") || document.querySelector(".post-stream") || document.querySelector(".topic-posts");
-  }
-  function updateSplitPaneHeight(wrapper) {
-    if (!wrapper) return;
-    const viewportHeight = window.visualViewport?.height || window.innerHeight;
-    const wrapperTop = Math.max(0, wrapper.getBoundingClientRect().top);
-    const height = Math.max(320, viewportHeight - wrapperTop - 8);
-    wrapper.style.setProperty("--ldtk-split-pane-height", `${height}px`);
-  }
-  function stripCloneUnsafeNodes(clone) {
-    clone.querySelectorAll(
-      [
-        ".ldcopy-actions",
-        ".ldtk-shadow-host",
-        ".topic-map",
-        ".embedded-posts",
-        "script",
-        "style"
-      ].join(",")
-    ).forEach((el) => el.remove());
-    clone.querySelectorAll("[id]").forEach((el) => {
-      el.removeAttribute("id");
-    });
-  }
-  function buildArticleClone(mainPost) {
-    const clone = mainPost.cloneNode(true);
-    clone.classList.add(ARTICLE_CLONE_CLASS);
-    clone.classList.remove(ORIGINAL_MAIN_POST_CLASS);
-    clone.removeAttribute("id");
-    stripCloneUnsafeNodes(clone);
-    return clone;
-  }
-  function ensureArticlePane(wrapper, stream) {
-    let pane = wrapper.querySelector(`:scope > .${ARTICLE_PANE_CLASS}`);
-    if (!pane) {
-      pane = document.createElement("aside");
-      pane.className = ARTICLE_PANE_CLASS;
-      pane.setAttribute("aria-label", "\u6587\u7AE0\u5185\u5BB9");
-      wrapper.insertBefore(pane, stream);
-    }
-    return pane;
-  }
-  function ensureCommentsPane(wrapper) {
-    let pane = wrapper.querySelector(`:scope > .${COMMENTS_PANE_CLASS}`);
-    if (!pane) {
-      pane = document.createElement("section");
-      pane.className = COMMENTS_PANE_CLASS;
-      pane.setAttribute("aria-label", "\u8BC4\u8BBA\u5206\u9875");
-      wrapper.appendChild(pane);
-    }
-    pane.classList.remove(COMMENTS_STREAM_CLASS);
-    return pane;
-  }
-  function ensureCommentsStream(pane) {
-    let stream = pane.querySelector(`:scope > .${COMMENTS_STREAM_CLASS}`);
-    if (!stream) {
-      stream = document.createElement("div");
-      stream.className = COMMENTS_STREAM_CLASS;
-      pane.insertBefore(stream, pane.firstChild);
-    }
-    Array.from(pane.children).forEach((child) => {
-      if (child !== stream && !child.classList.contains(PAGER_CLASS)) {
-        stream.appendChild(child);
-      }
-    });
-    return stream;
-  }
-  function syncArticlePane(pane, mainPost) {
-    const postId = mainPost.getAttribute("data-post-id") || "";
-    const currentPostId = pane.getAttribute("data-source-post-id") || "";
-    if (currentPostId !== postId || !pane.querySelector(`.${ARTICLE_CLONE_CLASS}`)) {
-      restoreFooterActions();
-      pane.replaceChildren(buildArticleClone(mainPost));
-      pane.setAttribute("data-source-post-id", postId);
-    }
-    syncArticleTopicMeta(pane);
-    syncArticleFooterActions(pane);
-  }
-  function showArticleLoading(pane) {
-    if (pane.querySelector(`.${ARTICLE_CLONE_CLASS}`)) return;
-    restoreFooterActions();
-    const placeholder = document.createElement("div");
-    placeholder.className = ARTICLE_CLONE_CLASS;
-    placeholder.textContent = "\u6B63\u5728\u52A0\u8F7D\u6B63\u6587...";
-    pane.replaceChildren(placeholder);
-    pane.removeAttribute("data-source-post-id");
-  }
-  function getNativeMainPost(nativeStream) {
-    return nativeStream?.querySelector?.(
-      '[data-post-number="1"].topic-post, .topic-post[data-post-number="1"]'
-    ) || nativeStream?.querySelector?.("[data-post-id].topic-post, .topic-post") || null;
-  }
-  async function ensureSplitFromTopic(wrapper, nativeStream, topicId) {
-    const articlePane = ensureArticlePane(wrapper, nativeStream);
-    const commentsPane = ensureCommentsPane(wrapper);
-    const commentsStream = ensureCommentsStream(commentsPane);
-    document.body.classList.add(BODY_CLASS);
-    scheduleSplitHeaderSync();
-    bindTopicMetaObserver();
-    nativeStream.classList.add(NATIVE_STREAM_CLASS);
-    nativeStream.setAttribute("aria-hidden", "true");
-    showArticleLoading(articlePane);
-    updateSplitPaneHeight(wrapper);
-    try {
-      if (pagerState.topicId !== topicId || !pagerState.postIds.length) {
-        resetPager(topicId);
-        await loadTopicSnapshot(topicId);
-      }
-      const firstPost = pagerState.postsById.get(Number(pagerState.postIds[0]));
-      const mainPost = getNativeMainPost(nativeStream) || (firstPost ? createPostFromJson(firstPost) : null);
-      if (!mainPost) throw new Error("\u672A\u627E\u5230\u4E3B\u9898\u6B63\u6587");
-      syncArticlePane(articlePane, mainPost);
-      updateSplitPaneHeight(wrapper);
-      await ensureCommentPager(commentsStream, topicId);
-      updateSplitPaneHeight(wrapper);
-      setTimeout(() => updateSplitPaneHeight(wrapper), 250);
-    } catch (err) {
-      handleError(err, "\u5206\u680F\u5E03\u5C40");
-      restoreTopicSplitLayout();
-      throw err;
-    }
-  }
-  function restoreTopicSplitLayout() {
-    document.body.classList.remove(BODY_CLASS);
-    restoreSplitHeaderTitle();
-    document.querySelectorAll(`.${ARTICLE_PANE_CLASS}`).forEach((pane) => pane.remove());
-    document.querySelectorAll(`.${COMMENTS_PANE_CLASS}`).forEach((pane) => pane.remove());
-    document.querySelectorAll(`.${PAGER_CLASS}`).forEach((pager) => pager.remove());
-    document.querySelectorAll(`.${PAGED_COMMENT_CLASS}`).forEach((postEl) => postEl.remove());
-    document.querySelectorAll(`.${NATIVE_STREAM_CLASS}`).forEach((stream) => {
-      stream.classList.remove(NATIVE_STREAM_CLASS);
-      stream.removeAttribute("aria-hidden");
-      if (stream.parentElement?.classList.contains(WRAPPER_CLASS)) {
-        stream.parentElement.parentElement?.insertBefore(stream, stream.parentElement);
-      }
-    });
-    document.querySelectorAll(`.${WRAPPER_CLASS}`).forEach((wrapper) => {
-      if (!wrapper.children.length) wrapper.remove();
-      else wrapper.classList.remove(WRAPPER_CLASS);
-    });
-    document.querySelectorAll(`.${COMMENTS_STREAM_CLASS}`).forEach((stream) => stream.classList.remove(COMMENTS_STREAM_CLASS));
-    document.querySelectorAll(`.${ORIGINAL_MAIN_POST_CLASS}`).forEach((postEl) => {
-      postEl.classList.remove(ORIGINAL_MAIN_POST_CLASS);
-      postEl.removeAttribute("aria-hidden");
-    });
-  }
-  async function applyTopicSplitLayout() {
-    const settings = await getSettings();
-    const topicId = getTopicId();
-    if (!settings.enableSplitLayout || !topicId) {
-      restoreTopicSplitLayout();
+  function restoreMainPost() {
+    const { stream, mainPost, mainPostNextSibling } = layoutState;
+    if (!stream?.isConnected || !mainPost) return;
+    const replacement = getNativeMainPost(stream);
+    if (replacement && replacement !== mainPost) {
+      markLayoutMutation(mainPost);
+      mainPost.remove();
       return;
     }
-    const stream = getNativeStream();
-    const wrapper = getSplitWrapper(stream);
-    if (!stream || !wrapper) return;
-    await ensureSplitFromTopic(wrapper, stream, topicId);
+    mainPost.classList.remove(ORIGINAL_MAIN_POST_CLASS);
+    if (mainPost.parentElement === stream) return;
+    const anchor = mainPostNextSibling?.parentNode === stream ? mainPostNextSibling : stream.firstChild;
+    markLayoutMutation(mainPost);
+    stream.insertBefore(mainPost, anchor);
+  }
+  function clearLayoutState(endSession) {
+    layoutState.active = false;
+    if (endSession) layoutState.splitSessionActive = false;
+    layoutState.topicId = "";
+    layoutState.wrapper = null;
+    layoutState.stream = null;
+    layoutState.articlePane = null;
+    layoutState.mainPost = null;
+    layoutState.mainPostNextSibling = null;
+    layoutState.previousStreamAriaLabel = null;
+  }
+  function restoreOrphanedLayout() {
+    const wrapper = document.querySelector(`.${WRAPPER_CLASS}`);
+    const stream = wrapper?.querySelector(
+      `:scope > .${NATIVE_STREAM_CLASS}, :scope > .post-stream, :scope > #post_stream`
+    );
+    const articlePane = wrapper?.querySelector(`:scope > .${ARTICLE_PANE_CLASS}`);
+    const movedMain = articlePane?.querySelector(`.${ORIGINAL_MAIN_POST_CLASS}`);
+    restoreFooterActions();
+    if (stream && movedMain && !getNativeMainPost(stream)) {
+      movedMain.classList.remove(ORIGINAL_MAIN_POST_CLASS);
+      markLayoutMutation(movedMain);
+      stream.insertBefore(movedMain, stream.firstChild);
+    }
+    markLayoutMutation(articlePane);
+    articlePane?.remove();
+    const legacyCommentsPane = wrapper?.querySelector(":scope > .ldtk-topic-comments-pane");
+    markLayoutMutation(legacyCommentsPane);
+    legacyCommentsPane?.remove();
+    wrapper?.querySelectorAll(":scope > .ldtk-paged-comment, :scope > .ldtk-comments-pager").forEach((el) => {
+      markLayoutMutation(el);
+      el.remove();
+    });
+    if (wrapper?.parentElement && stream) {
+      markLayoutMutation(stream, wrapper);
+      wrapper.parentElement.insertBefore(stream, wrapper);
+      wrapper.remove();
+    }
+    stream?.classList.remove(NATIVE_STREAM_CLASS, COMMENTS_STREAM_CLASS);
+    stream?.removeAttribute("aria-hidden");
+    stream?.removeAttribute("aria-label");
+    restoreSplitHeaderTitle();
+    document.body?.classList.remove(BODY_CLASS, SIDEBAR_GUARD_CLASS, "sidebar-animate");
+  }
+  function teardownCurrentLayout(endSession) {
+    if (!layoutState.active) {
+      if (document.body?.classList.contains(BODY_CLASS)) restoreOrphanedLayout();
+      if (endSession) layoutState.splitSessionActive = false;
+      revealPreparedLayout();
+      return;
+    }
+    const { wrapper, stream, articlePane, previousStreamAriaLabel } = layoutState;
+    restoreFooterActions();
+    restoreMainPost();
+    markLayoutMutation(articlePane);
+    articlePane?.remove();
+    if (stream) {
+      stream.classList.remove(NATIVE_STREAM_CLASS, COMMENTS_STREAM_CLASS);
+      stream.removeAttribute("aria-hidden");
+      if (previousStreamAriaLabel === null) stream.removeAttribute("aria-label");
+      else stream.setAttribute("aria-label", previousStreamAriaLabel);
+    }
+    if (wrapper?.parentElement && stream?.parentElement === wrapper) {
+      markLayoutMutation(stream, wrapper);
+      wrapper.parentElement.insertBefore(stream, wrapper);
+      wrapper.remove();
+    } else if (wrapper && !wrapper.children.length) {
+      wrapper.remove();
+    }
+    restoreSplitHeaderTitle();
+    document.body.classList.remove(BODY_CLASS, SIDEBAR_GUARD_CLASS, "sidebar-animate");
+    if (layoutState.sidebarGuardTimer) {
+      clearTimeout(layoutState.sidebarGuardTimer);
+      layoutState.sidebarGuardTimer = null;
+    }
+    clearLayoutState(endSession);
+    revealPreparedLayout();
+  }
+  function isCurrentLayoutIntact(topicId) {
+    return Boolean(
+      layoutState.active && layoutState.topicId === topicId && layoutState.wrapper?.isConnected && layoutState.stream?.isConnected && layoutState.articlePane?.isConnected && layoutState.mainPost?.parentElement === layoutState.articlePane && !getNativeMainPost(layoutState.stream)
+    );
+  }
+  function activateLayout(stream, mainPost, topicId) {
+    collapseSidebarOnce();
+    const mainPostNextSibling = mainPost.nextSibling;
+    const previousStreamAriaLabel = stream.getAttribute("aria-label");
+    const { wrapper, articlePane } = createSplitShell(stream);
+    layoutState.active = true;
+    layoutState.topicId = topicId;
+    layoutState.wrapper = wrapper;
+    layoutState.stream = stream;
+    layoutState.articlePane = articlePane;
+    layoutState.mainPost = mainPost;
+    layoutState.mainPostNextSibling = mainPostNextSibling;
+    layoutState.previousStreamAriaLabel = previousStreamAriaLabel;
+    mainPost.classList.add(ORIGINAL_MAIN_POST_CLASS);
+    markLayoutMutation(mainPost);
+    articlePane.appendChild(mainPost);
+    stream.classList.add(NATIVE_STREAM_CLASS, COMMENTS_STREAM_CLASS);
+    stream.removeAttribute("aria-hidden");
+    stream.setAttribute("aria-label", "\u8BC4\u8BBA\u5217\u8868");
+    syncArticleFooterActions(articlePane);
+    document.body.classList.add(BODY_CLASS);
+    scheduleSplitHeaderSync();
+    updateSplitPaneHeight(wrapper);
+    revealPreparedLayout();
+  }
+  function updateSplitPaneHeight(wrapper) {
+    if (!wrapper?.isConnected) return;
+    const viewportHeight = window.visualViewport?.height || window.innerHeight;
+    const wrapperTop = wrapper.getBoundingClientRect().top;
+    const headerBottom = document.querySelector(".d-header")?.getBoundingClientRect().bottom || 0;
+    const paneTop = Math.max(0, wrapperTop, headerBottom);
+    const height = Math.max(320, viewportHeight - paneTop - 8);
+    wrapper.style.setProperty("--ldtk-topic-top-offset", `${paneTop}px`);
+    wrapper.style.setProperty("--ldtk-split-pane-height", `${height}px`);
+  }
+  function restoreTopicSplitLayout() {
+    layoutState.generation += 1;
+    teardownCurrentLayout(true);
+  }
+  async function applyTopicSplitLayout(settings) {
+    const generation = ++layoutState.generation;
+    const currentSettings = settings || await getCachedSettings();
+    if (generation !== layoutState.generation) return;
+    const topicId = getTopicId();
+    if (!currentSettings.enableSplitLayout || !topicId) {
+      teardownCurrentLayout(true);
+      return;
+    }
+    try {
+      if (isCurrentLayoutIntact(topicId)) {
+        collapseSidebarOnce();
+        syncArticleFooterActions(layoutState.articlePane);
+        updateSplitPaneHeight(layoutState.wrapper);
+        revealPreparedLayout();
+        return;
+      }
+      if (layoutState.active) {
+        prepareTopicSplitLayout();
+        teardownCurrentLayout(false);
+      } else if (document.body.classList.contains(BODY_CLASS)) restoreOrphanedLayout();
+      const stream = getNativeStream();
+      const mainPost = getNativeMainPost(stream);
+      if (!stream || !mainPost) return;
+      activateLayout(stream, mainPost, topicId);
+    } catch (err) {
+      handleError(err, "\u5206\u680F\u5E03\u5C40");
+      teardownCurrentLayout(false);
+    }
   }
   bindResizeHandler();
   var layout = {
     applyTopicSplitLayout,
+    prepareTopicSplitLayout,
     restoreTopicSplitLayout
   };
 
@@ -1506,8 +1222,8 @@ ${lines}
         event.stopPropagation();
         copyBtn.disabled = true;
         try {
-          const latestSettings = await getSettings();
-          const result = await buildPostMarkdown(postEl, latestSettings);
+          const latestSettings2 = await getSettings();
+          const result = await buildPostMarkdown(postEl, latestSettings2);
           await copyToClipboard(result.markdown);
           showToast("\u2705 \u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F");
         } catch (err) {
@@ -1525,8 +1241,8 @@ ${lines}
         event.stopPropagation();
         downloadBtn.disabled = true;
         try {
-          const latestSettings = await getSettings();
-          const result = await buildPostMarkdown(postEl, latestSettings);
+          const latestSettings2 = await getSettings();
+          const result = await buildPostMarkdown(postEl, latestSettings2);
           const title = getTopicTitle();
           const filename = sanitizeFilename(
             `${title}_#${result.meta.postNumber || "post"}.md`
@@ -1549,9 +1265,6 @@ ${lines}
     injectButtons,
     removeInjectedActions
   };
-  on("posts:rendered", () => {
-    void injectButtons();
-  });
 
   // src/content/base64.ts
   function decodeBase64Utf8(text) {
@@ -1763,15 +1476,59 @@ ${lines}
     }
   };
 
+  // src/content/managed-observer.ts
+  var ManagedObserver = class {
+    observer = null;
+    target;
+    observerInit;
+    callback;
+    pagehideHandler = () => {
+      this.pause();
+    };
+    pageshowHandler = (event) => {
+      if (event.persisted) this.start();
+    };
+    isConnected = false;
+    constructor(target, observerInit, callback) {
+      this.target = target;
+      this.observerInit = observerInit;
+      this.callback = callback;
+      window.addEventListener("pagehide", this.pagehideHandler);
+      window.addEventListener("pageshow", this.pageshowHandler);
+    }
+    start() {
+      if (this.observer) return;
+      this.observer = new MutationObserver(this.callback);
+      this.observer.observe(this.target, this.observerInit);
+      this.isConnected = true;
+    }
+    disconnect() {
+      this.pause();
+      window.removeEventListener("pagehide", this.pagehideHandler);
+      window.removeEventListener("pageshow", this.pageshowHandler);
+    }
+    pause() {
+      if (!this.observer) return;
+      this.observer.disconnect();
+      this.observer = null;
+      this.isConnected = false;
+    }
+  };
+
   // src/content/index.ts
   var refreshState = new RefreshState();
-  async function refreshEnhancements() {
+  var latestSettings = null;
+  async function refreshEnhancements(settings) {
+    if (settings) {
+      latestSettings = settings;
+      if (settings.enableSplitLayout) layout.prepareTopicSplitLayout();
+    }
     if (!refreshState.tryAcquire()) {
       refreshState.markPending();
       return;
     }
     Promise.resolve().then(async () => {
-      await layout.applyTopicSplitLayout();
+      await layout.applyTopicSplitLayout(settings);
       await buttons.injectButtons();
       await base64.injectBase64Button();
     }).catch(() => {
@@ -1795,35 +1552,85 @@ ${lines}
     document.addEventListener("selectionchange", () => {
       scheduleBase64ButtonRefresh();
     });
-    const target = document.querySelector("#main-outlet, #main, body") || document.body;
+    const target = document.body;
     const managedObserver = new ManagedObserver(
       target,
       {
         childList: true,
-        subtree: true
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["aria-expanded"]
       },
       (mutations) => {
-        const onlyToolkitChanges = mutations.every((mutation) => {
-          const target2 = mutation.target;
-          const addedNodes = Array.from(mutation.addedNodes || []);
-          const removedNodes = Array.from(mutation.removedNodes || []);
-          return target2?.closest?.(".ldtk-topic-split-wrapper") || addedNodes.concat(removedNodes).every(
-            (node) => node.nodeType !== Node.ELEMENT_NODE || node.matches?.('[class^="ldtk-"], [id^="ldcopy-"]') || node.closest?.(".ldtk-topic-split-wrapper")
+        const relevantMutations = mutations.filter(
+          (mutation) => mutation.type !== "attributes" || mutation.target instanceof Element && mutation.target.matches("button.btn-sidebar-toggle")
+        );
+        if (!relevantMutations.length) return;
+        const requiresLayoutRebuild = relevantMutations.some(
+          (mutation) => Array.from(mutation.addedNodes || []).concat(Array.from(mutation.removedNodes || [])).some(
+            (node) => node.nodeType === Node.ELEMENT_NODE && !isExpectedLayoutMutation(node) && (node.matches(".post-stream, #post_stream, #post-stream") || node.matches('.topic-post[data-post-number="1"]') || Boolean(node.querySelector('.topic-post[data-post-number="1"]')))
+          )
+        );
+        const onlyToolkitChanges = relevantMutations.every((mutation) => {
+          if (mutation.type === "attributes") return false;
+          const changedNodes = Array.from(mutation.addedNodes || []).concat(
+            Array.from(mutation.removedNodes || [])
           );
+          if (!changedNodes.length) return false;
+          return changedNodes.every((node) => {
+            if (isExpectedLayoutMutation(node)) return true;
+            if (node.nodeType !== Node.ELEMENT_NODE) return true;
+            const element = node;
+            if (element.matches(
+              '.ldtk-shadow-host, [id^="ldcopy-"], .ldtk-topic-split-wrapper, .ldtk-topic-article-pane, .ldtk-topic-article-actions, .ldtk-topic-header-title'
+            )) {
+              return true;
+            }
+            return Boolean(element.closest(".ldtk-shadow-host, .ldtk-topic-header-title"));
+          });
         });
-        if (!onlyToolkitChanges) scheduleRefreshEnhancements();
+        if (!onlyToolkitChanges) {
+          if (requiresLayoutRebuild && latestSettings?.enableSplitLayout) {
+            layout.prepareTopicSplitLayout();
+          }
+          scheduleRefreshEnhancements(requiresLayoutRebuild ? 0 : 150);
+        }
       }
     );
     managedObserver.start();
-    window.addEventListener("discourse-navigate-completed", () => scheduleRefreshEnhancements(0));
-    window.addEventListener("page:change", () => scheduleRefreshEnhancements(0));
+    const handleNavigation = () => {
+      if (latestSettings?.enableSplitLayout) layout.prepareTopicSplitLayout();
+      scheduleRefreshEnhancements(0);
+    };
+    window.addEventListener("discourse-navigate-completed", handleNavigation);
+    window.addEventListener("page:change", handleNavigation);
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) handleNavigation();
+    });
   }
-  function init() {
+  function init(initialSettings) {
     messages.registerMessageHandlers(refreshEnhancements);
-    refreshEnhancements();
     bindDynamicPageEvents();
-    onSettingsChanged(refreshEnhancements);
+    onSettingsChanged((settings) => {
+      latestSettings = settings;
+      void refreshEnhancements(settings);
+    });
+    void refreshEnhancements(initialSettings);
   }
-  init();
+  function waitForDomReady() {
+    if (document.readyState !== "loading") return Promise.resolve();
+    return new Promise((resolve) => {
+      document.addEventListener("DOMContentLoaded", () => resolve(), { once: true });
+    });
+  }
+  async function bootstrap() {
+    layout.prepareTopicSplitLayout();
+    const initialSettings = await getCachedSettings();
+    latestSettings = initialSettings;
+    if (!initialSettings.enableSplitLayout) layout.restoreTopicSplitLayout();
+    await waitForDomReady();
+    init(initialSettings);
+  }
+  void bootstrap();
 })();
 //# sourceMappingURL=content.js.map

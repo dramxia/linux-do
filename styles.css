@@ -1,60 +1,62 @@
-/* Linux.do 文章复制 & 下载 — 注入样式
- *
- * T9 CSS 隔离重构：
- *   - 按钮（.ldcopy-actions / .ldcopy-btn）和 Toast（.ldcopy-toast）样式已迁入
- *     Shadow DOM 内 <style> 标签（见 buttons.ts / output.ts），不再出现在本文件。
- *   - 分栏布局规则：用 all: revert 重置继承属性 + ldtk- 命名空间前缀提高特异性
- *     替代原先的强制声明。对确实需要覆盖 Discourse 强制声明的规则保留并附注释
- *     `/* Discourse !important conflict *​/`（按 AC 要求的标记文本）。
- *   - 探针降级（沙箱无法访问 linux.do），阈值保守设为 ≤30。
- */
+/* Linux.do 工具箱 — 页面注入样式 */
 
 /* ============================================================
- * 帖子页正文 / 评论分栏
+ * 分栏准备态与页面骨架
  * ============================================================ */
+
+html.ldtk-topic-split-preparing #main-outlet {
+  visibility: hidden !important;
+}
+
+body.ldtk-topic-sidebar-collapsing #main-outlet-wrapper > .sidebar-wrapper {
+  visibility: hidden !important;
+}
+
+body.ldtk-topic-sidebar-collapsing #main-outlet-wrapper,
+body.ldtk-topic-sidebar-collapsing #main-outlet-wrapper > *,
+body.ldtk-topic-sidebar-collapsing.sidebar-animate #main-outlet-wrapper,
+body.ldtk-topic-sidebar-collapsing.sidebar-animate #main-outlet-wrapper > * {
+  transition: none !important;
+  animation: none !important;
+}
 
 body.ldtk-topic-split-active {
   --ldtk-layout-gap: 16px;
   --ldtk-topic-top-offset: 72px;
-  --ldtk-split-pane-height: calc(100dvh - var(--ldtk-topic-top-offset) - 16px);
-  --ldtk-page-padding: 0px;
-  overflow: hidden !important; /* Discourse !important conflict */
+  --ldtk-split-pane-height: calc(100dvh - var(--ldtk-topic-top-offset) - 8px);
+  --ldtk-post-avatar-width: 64px;
 }
 
-html:has(body.ldtk-topic-split-active) {
-  overflow: hidden !important; /* Discourse !important conflict */
+body.ldtk-topic-split-active .d-header .wrap,
+body.ldtk-topic-split-active .d-header .contents,
+body.ldtk-topic-split-active #main-outlet-wrapper.wrap,
+body.ldtk-topic-split-active #main-outlet,
+body.ldtk-topic-split-active #main-outlet > .container,
+body.ldtk-topic-split-active .container.posts,
+body.ldtk-topic-split-active .container.posts > .row,
+body.ldtk-topic-split-active .topic-area,
+body.ldtk-topic-split-active .posts-wrapper {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none !important;
 }
 
-/* 分栏模式需要吃满视口：Discourse 的 .wrap/.container 默认有 max-width。
- * 用 body.ldtk-topic-split-active 前缀提高特异性（0,3,0 > 0,1,0），
- * 对 Discourse 未用强制声明的属性可直接覆盖；对 Discourse 用了强制声明的
- * max-width 保留 !important。 */
 body.ldtk-topic-split-active .d-header .wrap,
 body.ldtk-topic-split-active .d-header .contents {
-  box-sizing: border-box;
-  justify-content: flex-start;
-  width: 100%;
-  max-width: none !important; /* Discourse !important conflict */
-  margin-left: 0;
-  margin-right: 0;
+  margin-inline: 0;
 }
 
 body.ldtk-topic-split-active .d-header .contents {
-  padding-left: 16px;
-  padding-right: 16px;
+  justify-content: flex-start;
+  padding-inline: 16px;
 }
 
 body.ldtk-topic-split-active #main-outlet-wrapper.wrap {
-  box-sizing: border-box;
   display: flex;
   align-items: stretch;
-  width: 100%;
-  max-width: none !important; /* Discourse !important conflict */
+  margin-inline: 0;
+  padding-inline: 0;
   overflow-x: clip;
-  margin-left: 0;
-  margin-right: 0;
-  padding-left: 0;
-  padding-right: 0;
 }
 
 body.ldtk-topic-split-active #main-outlet-wrapper > .sidebar-wrapper {
@@ -62,70 +64,31 @@ body.ldtk-topic-split-active #main-outlet-wrapper > .sidebar-wrapper {
 }
 
 body.ldtk-topic-split-active #main-outlet {
-  box-sizing: border-box;
   flex: 1 1 auto;
   min-width: 0;
-  width: auto;
-  max-width: none !important; /* Discourse !important conflict */
   overflow-x: clip;
 }
 
 body.ldtk-topic-split-active #main-outlet > .container,
-body.ldtk-topic-split-active #topic-title,
+body.ldtk-topic-split-active .container.posts {
+  margin-inline: 0;
+  padding-inline: 0;
+}
+
 body.ldtk-topic-split-active .container.posts,
-body.ldtk-topic-split-active .topic-area,
-body.ldtk-topic-split-active .posts-wrapper {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: none !important; /* Discourse !important conflict */
-  overflow: visible;
-}
-
-body.ldtk-topic-split-active #main-outlet > .container,
-body.ldtk-topic-split-active #topic-title,
-body.ldtk-topic-split-active .container.posts {
-  margin-left: var(--ldtk-page-padding);
-  margin-right: var(--ldtk-page-padding);
-  padding-left: 0;
-  padding-right: 0;
-}
-
-body.ldtk-topic-split-active .container.posts {
+body.ldtk-topic-split-active .container.posts > .row,
+body.ldtk-topic-split-active .topic-area {
   display: block;
 }
 
 body.ldtk-topic-split-active .container.posts::before,
-body.ldtk-topic-split-active .container.posts::after {
-  content: none;
-  display: none;
-}
-
-body.ldtk-topic-split-active .container.posts > .row {
-  box-sizing: border-box;
-  display: block;
-  width: 100%;
-  max-width: none;
-  margin-left: 0;
-  margin-right: 0;
-}
-
+body.ldtk-topic-split-active .container.posts::after,
 body.ldtk-topic-split-active .container.posts > .row::before,
 body.ldtk-topic-split-active .container.posts > .row::after {
   content: none;
   display: none;
 }
 
-body.ldtk-topic-split-active .topic-area {
-  display: block;
-  width: 100%;
-}
-
-body.ldtk-topic-split-active .posts-wrapper {
-  width: 100%;
-}
-
-/* 分栏模式下把标题移到顶部导航，正文区只保留双栏阅读内容。
- * 用 body.ldtk-topic-split-active 前缀提高特异性。 */
 body.ldtk-topic-split-active #topic-title,
 body.ldtk-topic-split-active #banner,
 body.ldtk-topic-split-active .banner,
@@ -133,36 +96,46 @@ body.ldtk-topic-split-active .discourse-banner,
 body.ldtk-topic-split-active .global-notice,
 body.ldtk-topic-split-active .site-notice,
 body.ldtk-topic-split-active .alert.alert-info,
-body.ldtk-topic-split-active .alert-info {
-  display: none !important; /* Discourse !important conflict */
+body.ldtk-topic-split-active .alert-info,
+body.ldtk-topic-split-active .timeline-container,
+body.ldtk-topic-split-active .topic-navigation,
+body.ldtk-topic-split-active .topic-timeline,
+body.ldtk-topic-split-active #suggested-topics,
+body.ldtk-topic-split-active .suggested-topics,
+body.ldtk-topic-split-active .suggested-topics-wrapper,
+body.ldtk-topic-split-active .more-topics,
+body.ldtk-topic-split-active .more-topics__container,
+body.ldtk-topic-split-active .related-topics,
+body.ldtk-topic-split-active .topic-list-bottom {
+  display: none !important;
+}
+
+body.ldtk-topic-split-active .container.posts > :where(.topic-map, .topic-map-expanded) {
+  display: none !important;
 }
 
 /* ============================================================
- * 头部标题克隆（.ldtk-topic-header-title*）
- * 这些是 toolkit 注入的元素，Discourse 不会对它们设强制声明。
- * 用 .ldtk-topic-split-wrapper 父级 + 多重 class 提高特异性即可。
+ * 顶栏标题
  * ============================================================ */
 
 .ldtk-topic-header-title {
   display: flex;
   flex: 0 1 auto;
-  justify-content: flex-start;
-  min-width: 0;
-  max-width: min(760px, 42vw);
-  margin-left: 14px;
-  margin-right: 0;
   align-self: stretch;
   align-items: center;
+  min-width: 0;
+  max-width: min(760px, 50vw);
+  margin-left: 14px;
   color: var(--header_primary, var(--primary, #eee));
 }
 
 .ldtk-topic-header-title-inner {
   display: flex;
-  min-width: 0;
   flex-direction: column;
   justify-content: center;
   align-items: flex-start;
   gap: 2px;
+  min-width: 0;
   text-align: left;
 }
 
@@ -186,117 +159,30 @@ body.ldtk-topic-split-active .alert-info {
   white-space: nowrap;
 }
 
-.ldtk-topic-header-title-inner .title-wrapper,
-.ldtk-topic-header-title-inner .topic-category,
-.ldtk-topic-header-title-inner .discourse-tags,
-.ldtk-topic-header-title-inner .list-tags,
-.ldtk-topic-header-title-inner .category-name {
-  max-width: 100%;
-}
-
 .ldtk-topic-header-title-inner .title-wrapper {
   display: flex;
-  min-width: 0;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
+  min-width: 0;
+  max-width: 100%;
 }
 
-.ldtk-topic-header-title-inner .topic-category,
-.ldtk-topic-header-title-inner .discourse-tags,
-.ldtk-topic-header-title-inner .list-tags {
+.ldtk-topic-header-title-inner :where(.topic-category, .discourse-tags, .list-tags) {
   display: flex;
-  min-width: 0;
   align-items: center;
   justify-content: flex-start;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   font-size: 12px;
   line-height: 1.2;
   white-space: nowrap;
 }
 
-.ldtk-topic-header-title-inner .badge-wrapper,
-.ldtk-topic-header-title-inner .discourse-tag {
-  flex: 0 1 auto;
-}
-
-.ldtk-topic-header-meta {
-  display: flex;
-  flex: 0 0 auto;
-  min-width: 0;
-  max-width: min(520px, 34vw);
-  margin-left: 16px;
-  margin-right: 18px;
-  align-self: stretch;
-  align-items: center;
-}
-
-/* .ldtk-topic-header-meta-inner 是 toolkit 注入的克隆容器。
- * 用 all: revert 重置 Discourse 对 .topic-map 等源元素的继承属性干扰，
- * 再用命名空间前缀提高特异性替代原先的强制声明。 */
-.ldtk-topic-header-meta-inner {
-  all: revert;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  max-width: 100%;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  white-space: nowrap;
-}
-
-.ldtk-topic-header-meta-inner * {
-  box-sizing: border-box;
-}
-
-.ldtk-topic-header-meta-inner .buttons,
-.ldtk-topic-header-meta-inner .participants,
-.ldtk-topic-header-meta-inner .avatars,
-.ldtk-topic-header-meta-inner .topic-map-users,
-.ldtk-topic-header-meta-inner .topic-map__users,
-.ldtk-topic-header-meta-inner .topic-map__stats,
-.ldtk-topic-header-meta-inner .topic-map-stats,
-.ldtk-topic-header-meta-inner .stats {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  margin: 0;
-}
-
-.ldtk-topic-header-meta-inner .number,
-.ldtk-topic-header-meta-inner .value {
-  color: var(--tertiary, #2aa8ee);
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.ldtk-topic-header-meta-inner .label {
-  font-size: 11px;
-  line-height: 1;
-}
-
-.ldtk-topic-header-meta-inner img.avatar,
-.ldtk-topic-header-meta-inner .avatar {
-  width: 28px !important; /* Discourse !important conflict */
-  height: 28px !important; /* Discourse !important conflict */
-}
-
-body.ldtk-topic-split-active [data-ldtk-topic-meta-source="true"],
-body.ldtk-topic-split-active .container.posts > .row > :where(.topic-map, .topic-map-expanded, .topic-map__contents, .topic-map-section, .topic-map-summary, .topic-map-stats, .topic-map__stats, .topic-stats),
-body.ldtk-topic-split-active .topic-area > :where(.topic-map, .topic-map-expanded, .topic-map__contents, .topic-map-section, .topic-map-summary, .topic-map-stats, .topic-map__stats, .topic-stats) {
-  display: none !important; /* Discourse !important conflict */
-}
-
 /* ============================================================
- * 分栏布局核心容器
+ * 双栏容器
  * ============================================================ */
 
 .ldtk-topic-split-wrapper {
@@ -307,9 +193,19 @@ body.ldtk-topic-split-active .topic-area > :where(.topic-map, .topic-map-expande
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
-  height: var(--ldtk-split-pane-height);
+  min-height: var(--ldtk-split-pane-height);
+  height: auto;
+  overflow: visible;
+}
+
+.ldtk-topic-article-pane,
+.ldtk-topic-comments-stream {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 0;
-  overflow-x: clip;
+  margin-inline: 0;
 }
 
 .ldtk-topic-article-pane {
@@ -317,109 +213,128 @@ body.ldtk-topic-split-active .topic-area > :where(.topic-map, .topic-map-expande
   top: var(--ldtk-topic-top-offset);
   display: flex;
   flex-direction: column;
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
   height: var(--ldtk-split-pane-height);
-  max-height: var(--ldtk-split-pane-height);
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: clip;
-  overscroll-behavior: contain;
-  padding-right: 6px;
-}
-
-.ldtk-topic-comments-pane,
-.ldtk-topic-comments-stream {
-  min-width: 0;
-  width: 100%;
-  max-width: 100%;
-}
-
-.ldtk-topic-comments-pane {
-  position: sticky;
-  top: var(--ldtk-topic-top-offset);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  box-sizing: border-box;
-  height: var(--ldtk-split-pane-height);
-  max-height: var(--ldtk-split-pane-height);
-  min-height: 0;
   overflow: hidden;
-  overflow-x: clip;
-  overscroll-behavior: contain;
   padding-right: 6px;
 }
 
 .ldtk-topic-comments-stream {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  gap: 0;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: clip;
-  overscroll-behavior: contain;
+  display: block;
+  height: auto;
+  overflow: visible;
+  padding-right: 6px;
 }
 
-/* 原生楼层流只作为站点运行时状态保留，不参与可见布局与滚动。 */
-.ldtk-topic-native-stream {
-  display: none !important; /* Discourse !important conflict */
+.ldtk-topic-comments-stream > .topic-post[data-post-number='1'] {
+  display: none !important;
 }
 
-body.ldtk-topic-split-active .timeline-container,
-body.ldtk-topic-split-active .topic-navigation,
-body.ldtk-topic-split-active .topic-timeline {
-  display: none !important; /* Discourse !important conflict */
-}
-
-/* 分栏模式只保留正文与评论，隐藏 Discourse 底部推荐/相关列表。 */
-body.ldtk-topic-split-active #suggested-topics,
-body.ldtk-topic-split-active .suggested-topics,
-body.ldtk-topic-split-active .suggested-topics-wrapper,
-body.ldtk-topic-split-active .more-topics,
-body.ldtk-topic-split-active .more-topics__container,
-body.ldtk-topic-split-active .related-topics,
-body.ldtk-topic-split-active .topic-list-bottom {
-  display: none !important; /* Discourse !important conflict */
-}
-
-/* 分栏模式下把原生操作区移动到文章栏底部，直接展开显示。 */
-.ldtk-topic-article-actions {
+.ldtk-topic-comments-stream > :where(.topic-post, .post-stream--cloaked) {
   box-sizing: border-box;
   width: 100%;
-  margin: -6px 0 20px;
-  padding-left: 64px;
+  max-width: 100%;
+}
+
+/* ============================================================
+ * 左栏：原生正文节点 + 独立正文滚动 + 固定操作区
+ * ============================================================ */
+
+.ldtk-topic-article-pane > .ldtk-topic-original-main-post {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.ldtk-topic-original-main-post > :where(article.boxed, .boxed) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ldtk-topic-original-main-post
+  > :where(article.boxed, .boxed)
+  > :where(.post__row, .row) {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin-inline: 0;
+}
+
+.ldtk-topic-original-main-post .topic-avatar {
+  box-sizing: border-box;
+  flex: 0 0 var(--ldtk-post-avatar-width);
+  width: var(--ldtk-post-avatar-width);
+  padding-right: 12px;
+}
+
+.ldtk-topic-original-main-post :where(.post__body, .topic-body) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ldtk-topic-original-main-post :where(.post__regular, .post__contents, .regular.contents) {
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  min-height: 0;
+  overflow-x: clip;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 6px;
+}
+
+.ldtk-topic-original-main-post :where(.post__actions, .post-actions, .post-menu-area),
+.ldtk-topic-original-main-post .post__topic-map {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+.ldtk-topic-original-main-post .post__topic-map {
+  max-height: 25%;
+  overflow-y: auto;
+}
+
+.ldtk-topic-article-actions {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 8px 0 8px var(--ldtk-post-avatar-width);
 }
 
 body.ldtk-topic-split-active .ldtk-topic-article-actions #topic-footer-buttons,
 body.ldtk-topic-split-active .ldtk-topic-article-actions .topic-footer-main-buttons {
-  position: static !important; /* Discourse !important conflict */
-  z-index: auto;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+  position: static !important;
+  inset: auto !important;
   box-sizing: border-box;
   width: 100%;
-  max-width: 100% !important; /* Discourse !important conflict */
+  max-width: 100% !important;
   height: auto;
   max-height: none;
   margin: 0;
-  padding: 10px !important; /* Discourse !important conflict */
   overflow: visible;
-  border: 1px solid var(--primary-low-mid, #555);
-  border-radius: 12px;
-  background: transparent;
-  box-shadow: none;
   opacity: 1;
-}
-
-body.ldtk-topic-split-active .ldtk-topic-article-actions #topic-footer-buttons::before,
-body.ldtk-topic-split-active .ldtk-topic-article-actions .topic-footer-main-buttons::before {
-  content: none;
 }
 
 body.ldtk-topic-split-active .ldtk-topic-article-actions #topic-footer-buttons > *,
@@ -428,265 +343,62 @@ body.ldtk-topic-split-active .ldtk-topic-article-actions .topic-footer-main-butt
   pointer-events: auto;
 }
 
-body.ldtk-topic-split-active .ldtk-topic-article-actions :where(.topic-notifications-options, .topic-notifications-button, .select-kit, .select-kit-header, .btn) {
+.ldtk-topic-split-wrapper :where(img, video, table) {
   max-width: 100%;
 }
 
-/* ============================================================
- * 评论分页器（toolkit 注入，无需强制声明）
- * ============================================================ */
-
-.ldtk-comments-pager {
-  order: 9999;
-  flex: 0 0 auto;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin: 18px 0 8px;
-  padding: 12px;
-  border: 1px solid var(--primary-low-mid, #ddd);
-  border-radius: 10px;
-  background: var(--secondary, #fff);
-}
-
-.ldtk-comments-pager-info {
-  min-width: 180px;
-  color: var(--primary-medium, #666);
-  font-size: 13px;
-  text-align: center;
-}
-
-.ldtk-comments-pager-info.is-error {
-  color: var(--danger, #b00020);
-}
-
-.ldtk-comments-pager-button {
-  padding: 6px 12px;
-  border: 1px solid var(--primary-low-mid, #ccc);
-  border-radius: 6px;
-  background: var(--primary-low, #f2f2f2);
-  color: var(--primary, #333);
-  cursor: pointer;
-}
-
-.ldtk-comments-pager-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-/* ============================================================
- * 文章克隆 / 分页评论（.ldtk-topic-article-clone / .ldtk-paged-comment）
- * 这些是 toolkit 注入的元素，用 .ldtk-topic-split-wrapper 父级提高特异性。
- * ============================================================ */
-
-.ldtk-topic-article-clone,
-.ldtk-paged-comment {
-  display: flex;
-  align-items: flex-start;
-  box-sizing: border-box;
-  width: 100%;
-  max-width: none;
-  margin: 0 0 18px;
-  padding: 0;
-  clear: both;
-}
-
-.ldtk-topic-article-clone {
-  margin-top: 0;
-  flex: 1 1 auto;
-}
-
-.ldtk-topic-article-clone .topic-body {
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
-}
-
-.ldtk-topic-article-clone .post-menu-area,
-.ldtk-topic-article-clone .embedded-posts {
-  margin-top: auto;
-}
-
-.ldtk-topic-article-meta {
-  box-sizing: border-box;
-  width: 100%;
-  margin: 8px 0 18px;
-  padding-left: 64px;
-}
-
-/* .ldtk-topic-article-meta-inner 是 toolkit 注入的克隆容器。
- * 用 all: revert 重置 Discourse 对源 .topic-map 元素的继承属性干扰。 */
-.ldtk-topic-article-meta-inner {
-  all: revert;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px 14px;
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
-  margin: 0;
-  padding: 12px 0 0;
-  border-top: 1px solid var(--primary-low, rgba(128, 128, 128, 0.22));
-  background: transparent;
-  box-shadow: none;
-}
-
-.ldtk-topic-article-meta-inner * {
-  box-sizing: border-box;
-}
-
-.ldtk-topic-article-meta-inner > :where(.buttons, .topic-map__buttons),
-.ldtk-topic-article-meta-inner > :has(> button, > .btn) {
-  flex: 0 0 auto;
-  order: 2;
-  margin-left: auto;
-}
-
-.ldtk-topic-article-meta-inner :where(.buttons, .topic-map__buttons),
-.ldtk-topic-article-meta-inner :where(.participants, .avatars, .topic-map-users, .topic-map__users, .topic-map__stats, .topic-map-stats, .stats),
-.ldtk-topic-article-meta-inner > :not(.buttons):not(.topic-map__buttons) {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 10px;
-  min-width: 0;
-  margin-top: 0;
-  margin-bottom: 0;
-}
-
-.ldtk-topic-article-meta-inner > :where(.participants, .avatars, .topic-map-users, .topic-map__users, .topic-map__stats, .topic-map-stats, .stats),
-.ldtk-topic-article-meta-inner > :not(.buttons):not(.topic-map__buttons):not(:has(> button, > .btn)) {
-  flex: 1 1 auto;
-  order: 1;
-}
-
-.ldtk-topic-article-meta-inner :where(.number, .value) {
-  color: var(--tertiary, #2aa8ee);
-  font-weight: 700;
-}
-
-.ldtk-topic-article-meta-inner img.avatar,
-.ldtk-topic-article-meta-inner .avatar {
-  width: 32px !important; /* Discourse !important conflict */
-  height: 32px !important; /* Discourse !important conflict */
-}
-
-.ldtk-topic-article-clone .topic-body,
-.ldtk-topic-comments-stream .topic-body {
-  box-sizing: border-box;
-  flex: 1 1 0;
-  width: auto;
-  max-width: none;
-  min-width: 0;
-}
-
-.ldtk-topic-article-clone .cooked,
-.ldtk-topic-comments-stream .cooked {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: none;
-  overflow-wrap: anywhere;
-}
-
-.ldtk-topic-article-clone .lightbox-wrapper,
-.ldtk-topic-comments-stream .lightbox-wrapper,
-.ldtk-topic-comments-stream .post-menu-area,
-.ldtk-topic-comments-stream .post-controls {
-  box-sizing: border-box;
-  max-width: 100%;
-}
-
-.ldtk-topic-split-wrapper img,
-.ldtk-topic-split-wrapper video,
-.ldtk-topic-split-wrapper table {
-  max-width: 100%;
-}
-
-.ldtk-topic-split-wrapper pre,
-.ldtk-topic-split-wrapper table {
+.ldtk-topic-split-wrapper :where(pre, table) {
   overflow: auto;
-}
-
-.ldtk-topic-article-clone .topic-avatar,
-.ldtk-topic-comments-stream .topic-avatar {
-  box-sizing: border-box;
-  flex: 0 0 64px;
-  width: 64px;
-  padding-right: 12px;
-}
-
-.ldtk-topic-comments-stream .topic-meta-data {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 28px;
-}
-
-.ldtk-topic-comments-stream .post-menu-area {
-  display: block;
-  margin-top: 8px;
 }
 
 /* ============================================================
  * 窄屏回退
  * ============================================================ */
 
-@media (max-width: 1280px) {
-  html:has(body.ldtk-topic-split-active),
-  body.ldtk-topic-split-active {
-    overflow: auto !important; /* Discourse !important conflict */
-  }
-
+@media (max-width: 980px) {
   body.ldtk-topic-split-active #main-outlet-wrapper.wrap {
     display: block;
-    width: 100%;
-  }
-
-  body.ldtk-topic-split-active #main-outlet > .container,
-  body.ldtk-topic-split-active #topic-title,
-  body.ldtk-topic-split-active .container.posts {
-    margin-left: var(--ldtk-page-padding);
-    margin-right: var(--ldtk-page-padding);
   }
 
   .ldtk-topic-split-wrapper {
     grid-template-columns: minmax(0, 1fr);
     height: auto;
     min-height: 0;
+    overflow: visible;
   }
 
-  .ldtk-topic-article-pane,
-  .ldtk-topic-comments-pane {
+  .ldtk-topic-article-pane {
     position: static;
-    max-height: none;
+    height: var(--ldtk-split-pane-height);
+    min-height: 520px;
+    padding-right: 0;
+  }
+
+  .ldtk-topic-comments-stream {
     height: auto;
     overflow: visible;
     padding-right: 0;
   }
+}
 
-  .ldtk-topic-comments-pane,
-  .ldtk-topic-comments-stream {
-    display: flex;
-    overflow: visible;
+@media (max-width: 600px) {
+  body.ldtk-topic-split-active {
+    --ldtk-post-avatar-width: 48px;
   }
 
-  .ldtk-topic-article-meta,
+  .ldtk-topic-header-title {
+    max-width: 58vw;
+    margin-left: 8px;
+  }
+
+  .ldtk-topic-header-title-inner h1,
+  .ldtk-topic-header-title-inner .fancy-title {
+    font-size: 16px;
+  }
+
   .ldtk-topic-article-actions {
     padding-left: 0;
   }
-
-  .ldtk-topic-native-stream {
-    display: none !important; /* Discourse !important conflict */
-  }
 }
 
-/* ============================================================
- * 按钮（.ldcopy-actions / .ldcopy-btn）与 Toast（.ldcopy-toast）样式
- * 已迁入 Shadow DOM 内 <style> 标签（见 buttons.ts / output.ts）。
- * 本文件不再定义这些规则，避免 light DOM 样式泄漏到 shadow root。
- * 暗色模式适配（html.dark / body.dark）也由 Shadow DOM 内 <style> 处理。
- * ============================================================ */
+/* 楼层复制/下载按钮和 Toast 的样式位于各自的 Shadow DOM 中。 */

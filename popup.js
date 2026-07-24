@@ -66,15 +66,6 @@
     }
     async function saveSetting(key, checked) {
       await saveSettings({ [key]: checked });
-      if (tabId !== void 0) {
-        chrome.tabs.sendMessage(
-          tabId,
-          { action: "refreshEnhancements" },
-          {},
-          () => {
-          }
-        );
-      }
     }
     Object.entries(settingInputs).forEach(
       ([key, input]) => {

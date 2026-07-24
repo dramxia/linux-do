@@ -8,7 +8,12 @@ import { updateSplitPaneHeight } from './split-pane-layout';
 class ResizeHandler {
   private listener: (() => void) | null = null;
   private readonly pagehideHandler = (): void => {
-    this.unbind();
+    if (this.listener) window.removeEventListener('resize', this.listener);
+  };
+  private readonly pageshowHandler = (event: PageTransitionEvent): void => {
+    if (!event.persisted || !this.listener) return;
+    window.addEventListener('resize', this.listener);
+    this.listener();
   };
 
   bind(): void {
@@ -18,12 +23,14 @@ class ResizeHandler {
     };
     window.addEventListener('resize', this.listener);
     window.addEventListener('pagehide', this.pagehideHandler);
+    window.addEventListener('pageshow', this.pageshowHandler);
   }
 
   unbind(): void {
     if (!this.listener) return;
     window.removeEventListener('resize', this.listener);
     window.removeEventListener('pagehide', this.pagehideHandler);
+    window.removeEventListener('pageshow', this.pageshowHandler);
     this.listener = null;
   }
 }

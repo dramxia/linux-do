@@ -60,16 +60,16 @@ export function getTopicId(): string | null {
 
 function getAllPostElements(): HTMLElement[] {
   return Array.from(document.querySelectorAll('[data-post-id].topic-post, .topic-post')).filter(
-    (el): el is HTMLElement => isHTMLElement(el) && !el.closest('.ldtk-topic-article-pane'),
+    (el): el is HTMLElement => isHTMLElement(el),
   );
 }
 
 export function getPostElements(): HTMLElement[] {
-  return getAllPostElements().filter((postEl) => !postEl.closest('.ldtk-topic-native-stream'));
+  return getAllPostElements();
 }
 
 export function getNativePostElements(): HTMLElement[] {
-  return getAllPostElements().filter((postEl) => !postEl.classList.contains('ldtk-paged-comment'));
+  return getAllPostElements();
 }
 
 export function getPostMeta(postEl: HTMLElement): PostMeta {

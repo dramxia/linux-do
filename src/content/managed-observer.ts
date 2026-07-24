@@ -1,14 +1,14 @@
-/* Linux.do 工具箱 — ManagedObserver
- * 封装 MutationObserver 生命周期：构造时注册 pagehide 自动 disconnect，
- * 避免页面进入 bfcache 时观察器与监听器残留。disconnect 时同步移除 pagehide
- * 监听，保持单次使用语义——需要重启时新建实例。 */
+/* Linux.do 工具箱 — 可在 bfcache 往返后恢复的 MutationObserver */
 export class ManagedObserver {
   private observer: MutationObserver | null = null;
   private readonly target: Node;
   private readonly observerInit: MutationObserverInit;
   private readonly callback: MutationCallback;
   private readonly pagehideHandler = (): void => {
-    this.disconnect();
+    this.pause();
+  };
+  private readonly pageshowHandler = (event: PageTransitionEvent): void => {
+    if (event.persisted) this.start();
   };
 
   isConnected = false;
@@ -18,6 +18,7 @@ export class ManagedObserver {
     this.observerInit = observerInit;
     this.callback = callback;
     window.addEventListener('pagehide', this.pagehideHandler);
+    window.addEventListener('pageshow', this.pageshowHandler);
   }
 
   start(): void {
@@ -28,10 +29,15 @@ export class ManagedObserver {
   }
 
   disconnect(): void {
+    this.pause();
+    window.removeEventListener('pagehide', this.pagehideHandler);
+    window.removeEventListener('pageshow', this.pageshowHandler);
+  }
+
+  private pause(): void {
     if (!this.observer) return;
     this.observer.disconnect();
     this.observer = null;
     this.isConnected = false;
-    window.removeEventListener('pagehide', this.pagehideHandler);
   }
 }

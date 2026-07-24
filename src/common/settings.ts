@@ -82,7 +82,10 @@ export function onSettingsChanged(callback: SettingsCallback): void {
     if (!changedKeys.some((key) => settingsKeys.includes(key))) return;
     cachedSettings = null;
     getSettings()
-      .then(callback)
+      .then((settings) => {
+        cachedSettings = settings;
+        callback(settings);
+      })
       .catch(() => callback(normalizeSettings()));
   });
 }
