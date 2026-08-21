@@ -7,7 +7,6 @@ import { RateLimitError } from '../src/content/api-rate-limiter';
 const DEFAULT_SETTINGS: DiscourseSettings = {
   enablePostActions: true,
   enableBase64Decode: true,
-  enableSplitLayout: false,
   includeMetadata: true,
   replaceUploadUrls: true,
 };

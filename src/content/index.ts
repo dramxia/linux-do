@@ -1,58 +1,61 @@
 /* Linux.do 工具箱 — Content Script 入口 */
-import { layout } from './layout/split-pane-layout';
-import { buttons } from './buttons';
-import { base64 } from './base64';
-import { messages } from './messages';
-import { getCachedSettings, onSettingsChanged, type DiscourseSettings } from '../common/settings';
-import { RefreshState } from './refresh-state';
+import { injectButtons } from './buttons';
+import { injectBase64Button } from './base64';
+import { registerMessageHandlers } from './messages';
+import { getCachedSettings, onSettingsChanged } from '../common/settings';
+import type { DiscourseSettings } from '../common/settings';
+import { RefreshScheduler } from './refresh-state';
 import { ManagedObserver } from './managed-observer';
-import { isExpectedLayoutMutation } from './layout/layout-mutation-tracker';
 
-const refreshState = new RefreshState();
-let latestSettings: DiscourseSettings | null = null;
-
-async function refreshEnhancements(settings?: DiscourseSettings): Promise<void> {
-  if (settings) {
-    latestSettings = settings;
-    if (settings.enableSplitLayout) layout.prepareTopicSplitLayout();
-  }
-
-  if (!refreshState.tryAcquire()) {
-    refreshState.markPending();
-    return;
-  }
-
-  Promise.resolve()
-    .then(async () => {
-      await layout.applyTopicSplitLayout(settings);
-      await buttons.injectButtons();
-      await base64.injectBase64Button();
-    })
-    .catch(() => {
-      // 页面增强失败不应影响宿主页面，后续 DOM 变化会再次触发刷新。
-    })
-    .finally(() => {
-      refreshState.release();
-      if (refreshState.hasPending()) {
-        refreshState.clearPending();
-        scheduleRefreshEnhancements();
-      }
-    });
+interface Enhancement {
+  refresh: (settings: DiscourseSettings) => void | Promise<void>;
+  ownedSelectors: readonly string[];
 }
 
-function scheduleRefreshEnhancements(delay = 150): void {
-  refreshState.scheduleRefresh(refreshEnhancements, delay);
+const selectionToolsEnhancement: Enhancement = {
+  refresh: injectBase64Button,
+  ownedSelectors: ['.ldcopy-base64-btn', '.ldcopy-strip-chinese-btn'],
+};
+
+const enhancements: readonly Enhancement[] = [
+  {
+    refresh: injectButtons,
+    ownedSelectors: ['.ldtk-shadow-host'],
+  },
+  selectionToolsEnhancement,
+];
+
+const toolkitSelector = [
+  '#ldcopy-toast-host',
+  ...enhancements.flatMap((enhancement) => enhancement.ownedSelectors),
+].join(', ');
+
+async function runEnhancements(items: readonly Enhancement[]): Promise<void> {
+  const settings = await getCachedSettings();
+  await Promise.allSettled(
+    items.map(({ refresh }) => Promise.resolve().then(() => refresh(settings))),
+  );
 }
 
-function scheduleBase64ButtonRefresh(delay = 100): void {
-  refreshState.scheduleBase64(() => {
-    base64.injectBase64Button();
-  }, delay);
+const enhancementScheduler = new RefreshScheduler(() => runEnhancements(enhancements), 150);
+const selectionToolsScheduler = new RefreshScheduler(
+  () => runEnhancements([selectionToolsEnhancement]),
+  100,
+);
+
+function isToolkitMutation(mutation: MutationRecord): boolean {
+  const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+  if (changedNodes.length === 0) return false;
+
+  return changedNodes.every((node) => {
+    if (!(node instanceof Element)) return false;
+    return node.matches(toolkitSelector) || Boolean(node.closest(toolkitSelector));
+  });
 }
 
 function bindDynamicPageEvents(): void {
   document.addEventListener('selectionchange', () => {
-    scheduleBase64ButtonRefresh();
+    selectionToolsScheduler.schedule();
   });
 
   const target = document.body;
@@ -61,66 +64,15 @@ function bindDynamicPageEvents(): void {
     {
       childList: true,
       subtree: true,
-      attributes: true,
-      attributeFilter: ['aria-expanded'],
     },
     (mutations) => {
-      const relevantMutations = mutations.filter(
-        (mutation) =>
-          mutation.type !== 'attributes' ||
-          (mutation.target instanceof Element &&
-            mutation.target.matches('button.btn-sidebar-toggle')),
-      );
-      if (!relevantMutations.length) return;
-
-      const requiresLayoutRebuild = relevantMutations.some((mutation) =>
-        Array.from(mutation.addedNodes || [])
-          .concat(Array.from(mutation.removedNodes || []))
-          .some(
-            (node) =>
-              node.nodeType === Node.ELEMENT_NODE &&
-              !isExpectedLayoutMutation(node) &&
-              ((node as Element).matches('.post-stream, #post_stream, #post-stream') ||
-                (node as Element).matches('.topic-post[data-post-number="1"]') ||
-                Boolean((node as Element).querySelector('.topic-post[data-post-number="1"]'))),
-          ),
-      );
-      const onlyToolkitChanges = relevantMutations.every((mutation) => {
-        if (mutation.type === 'attributes') return false;
-        const changedNodes = Array.from(mutation.addedNodes || []).concat(
-          Array.from(mutation.removedNodes || []),
-        );
-        if (!changedNodes.length) return false;
-
-        return changedNodes.every((node) => {
-          if (isExpectedLayoutMutation(node)) return true;
-          if (node.nodeType !== Node.ELEMENT_NODE) return true;
-          const element = node as Element;
-          if (
-            element.matches(
-              '.ldtk-shadow-host, [id^="ldcopy-"], .ldtk-topic-split-wrapper, .ldtk-topic-article-pane, .ldtk-topic-article-actions, .ldtk-topic-header-title',
-            )
-          ) {
-            return true;
-          }
-
-          return Boolean(element.closest('.ldtk-shadow-host, .ldtk-topic-header-title'));
-        });
-      });
-
-      if (!onlyToolkitChanges) {
-        if (requiresLayoutRebuild && latestSettings?.enableSplitLayout) {
-          layout.prepareTopicSplitLayout();
-        }
-        scheduleRefreshEnhancements(requiresLayoutRebuild ? 0 : 150);
-      }
+      if (!mutations.every(isToolkitMutation)) enhancementScheduler.schedule();
     },
   );
   managedObserver.start();
 
   const handleNavigation = (): void => {
-    if (latestSettings?.enableSplitLayout) layout.prepareTopicSplitLayout();
-    scheduleRefreshEnhancements(0);
+    enhancementScheduler.schedule(0);
   };
   window.addEventListener('discourse-navigate-completed', handleNavigation);
   window.addEventListener('page:change', handleNavigation);
@@ -129,14 +81,13 @@ function bindDynamicPageEvents(): void {
   });
 }
 
-function init(initialSettings: DiscourseSettings): void {
-  messages.registerMessageHandlers(refreshEnhancements);
+function init(): void {
+  registerMessageHandlers();
   bindDynamicPageEvents();
-  onSettingsChanged((settings) => {
-    latestSettings = settings;
-    void refreshEnhancements(settings);
+  onSettingsChanged(() => {
+    void enhancementScheduler.run();
   });
-  void refreshEnhancements(initialSettings);
+  void enhancementScheduler.run();
 }
 
 function waitForDomReady(): Promise<void> {
@@ -147,12 +98,8 @@ function waitForDomReady(): Promise<void> {
 }
 
 async function bootstrap(): Promise<void> {
-  layout.prepareTopicSplitLayout();
-  const initialSettings = await getCachedSettings();
-  latestSettings = initialSettings;
-  if (!initialSettings.enableSplitLayout) layout.restoreTopicSplitLayout();
-  await waitForDomReady();
-  init(initialSettings);
+  await Promise.all([getCachedSettings(), waitForDomReady()]);
+  init();
 }
 
 void bootstrap();

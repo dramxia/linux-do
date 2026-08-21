@@ -11,62 +11,49 @@ const sampleMeta: PostMeta = {
 
 describe('formatPostMd', () => {
   it('formats with metadata header by default', () => {
-    const result = formatPostMd(
-      sampleMeta,
-      '  hello body  ',
-      'My Topic',
-      'https://linux.do/t/topic/1',
-    );
+    const result = formatPostMd(sampleMeta, '  hello body  ', 'https://linux.do/t/topic/1');
     expect(result).toBe(
       '<!-- 来源: https://linux.do/t/topic/1#post-3 | 作者: alice | 2024-01-15 -->\n\nhello body',
     );
   });
 
   it('omits header when includeMetadata is false', () => {
-    const result = formatPostMd(
-      sampleMeta,
-      'body content',
-      'My Topic',
-      'https://linux.do/t/topic/1',
-      { includeMetadata: false },
-    );
+    const result = formatPostMd(sampleMeta, 'body content', 'https://linux.do/t/topic/1', {
+      includeMetadata: false,
+    });
     expect(result).toBe('body content');
   });
 
   it('omits #post-N anchor when postNumber is empty', () => {
     const meta: PostMeta = { postId: '1', postNumber: '', author: 'bob', date: '2024-02-01' };
-    const result = formatPostMd(meta, 'body', 'Topic', 'https://linux.do/t/topic/1');
+    const result = formatPostMd(meta, 'body', 'https://linux.do/t/topic/1');
     expect(result).toContain('来源: https://linux.do/t/topic/1 |');
     expect(result).not.toContain('#post-');
   });
 
   it('omits date in header when meta.date is empty', () => {
     const meta: PostMeta = { postId: '1', postNumber: '2', author: 'bob', date: '' };
-    const result = formatPostMd(meta, 'body', 'Topic', 'https://linux.do/t/topic/1');
+    const result = formatPostMd(meta, 'body', 'https://linux.do/t/topic/1');
     expect(result).toContain('作者: bob -->');
     expect(result).not.toContain(' | -->');
   });
 
   it('trims whitespace from raw markdown body', () => {
-    const result = formatPostMd(
-      sampleMeta,
-      '\n\n  trimmed  \n\n',
-      'T',
-      'https://linux.do/t/topic/1',
-      { includeMetadata: false },
-    );
+    const result = formatPostMd(sampleMeta, '\n\n  trimmed  \n\n', 'https://linux.do/t/topic/1', {
+      includeMetadata: false,
+    });
     expect(result).toBe('trimmed');
   });
 
   it('handles empty content (includeMetadata false) -> empty string', () => {
-    const result = formatPostMd(sampleMeta, '   ', 'T', 'https://linux.do/t/topic/1', {
+    const result = formatPostMd(sampleMeta, '   ', 'https://linux.do/t/topic/1', {
       includeMetadata: false,
     });
     expect(result).toBe('');
   });
 
   it('handles empty content (includeMetadata true) -> header only', () => {
-    const result = formatPostMd(sampleMeta, '   ', 'T', 'https://linux.do/t/topic/1');
+    const result = formatPostMd(sampleMeta, '   ', 'https://linux.do/t/topic/1');
     expect(result).toBe(
       '<!-- 来源: https://linux.do/t/topic/1#post-3 | 作者: alice | 2024-01-15 -->\n\n',
     );
@@ -76,7 +63,7 @@ describe('formatPostMd', () => {
 describe('formatTopicMd', () => {
   it('formats single post with metadata', () => {
     const posts = [{ meta: sampleMeta, raw: 'post body' }];
-    const result = formatTopicMd(posts, 'Topic Title', 'https://linux.do/t/topic/1');
+    const result = formatTopicMd(posts, 'https://linux.do/t/topic/1');
     expect(result).toContain('<!-- 来源: https://linux.do/t/topic/1 -->');
     expect(result).toContain('<!-- #3 alice | https://linux.do/t/topic/1#post-3 -->');
     expect(result).toContain('post body');
@@ -87,7 +74,7 @@ describe('formatTopicMd', () => {
       { meta: { ...sampleMeta, postNumber: '1', author: 'alice' }, raw: 'first' },
       { meta: { ...sampleMeta, postNumber: '2', author: 'bob' }, raw: 'second' },
     ];
-    const result = formatTopicMd(posts, 'T', 'https://linux.do/t/topic/1');
+    const result = formatTopicMd(posts, 'https://linux.do/t/topic/1');
     expect(result).toContain('<!-- #1 alice | https://linux.do/t/topic/1#post-1 -->');
     expect(result).toContain('first');
     expect(result).toContain('<!-- #2 bob | https://linux.do/t/topic/1#post-2 -->');
@@ -100,7 +87,7 @@ describe('formatTopicMd', () => {
 
   it('falls back to index+1 when meta.postNumber is empty', () => {
     const posts = [{ meta: { ...sampleMeta, postNumber: '' }, raw: 'body' }];
-    const result = formatTopicMd(posts, 'T', 'https://linux.do/t/topic/1');
+    const result = formatTopicMd(posts, 'https://linux.do/t/topic/1');
     expect(result).toContain('<!-- #1 alice | https://linux.do/t/topic/1#post-1 -->');
   });
 
@@ -109,7 +96,7 @@ describe('formatTopicMd', () => {
       { meta: sampleMeta, raw: 'first post' },
       { meta: sampleMeta, raw: 'second post' },
     ];
-    const result = formatTopicMd(posts, 'T', 'https://linux.do/t/topic/1', {
+    const result = formatTopicMd(posts, 'https://linux.do/t/topic/1', {
       includeMetadata: false,
     });
     expect(result).toBe('first post\n\n---\n\nsecond post');
@@ -120,7 +107,7 @@ describe('formatTopicMd', () => {
       { meta: sampleMeta, raw: '  first  ' },
       { meta: sampleMeta, raw: '  second  ' },
     ];
-    const result = formatTopicMd(posts, 'T', 'https://linux.do/t/topic/1', {
+    const result = formatTopicMd(posts, 'https://linux.do/t/topic/1', {
       includeMetadata: false,
     });
     expect(result).toBe('first\n\n---\n\nsecond');

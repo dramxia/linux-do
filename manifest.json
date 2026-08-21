@@ -9,9 +9,6 @@
     "128": "icons/icon128.png"
   },
   "permissions": ["activeTab", "clipboardWrite", "storage"],
-  "background": {
-    "service_worker": "background.js"
-  },
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -23,8 +20,7 @@
     {
       "matches": ["https://linux.do/*", "https://www.linux.do/*"],
       "js": ["content.js"],
-      "css": ["styles.css"],
-      "run_at": "document_start"
+      "run_at": "document_idle"
     }
   ]
 }

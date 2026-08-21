@@ -80,6 +80,21 @@ describe('batchFetchWithBackoff', () => {
     expect(failures).toEqual([]);
   });
 
+  it('preserves input order when tasks finish out of order', async () => {
+    const promise = batchFetchWithBackoff({
+      items: [30, 10, 20],
+      concurrency: 3,
+      task: async (delay) => {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return delay;
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(30);
+    const { results } = await promise;
+    expect(results.map((result) => result.value)).toEqual([30, 10, 20]);
+  });
+
   it('limits concurrency to the configured value', async () => {
     let active = 0;
     let maxActive = 0;
@@ -193,6 +208,31 @@ describe('batchFetchWithBackoff', () => {
     await vi.advanceTimersByTimeAsync(2);
     const { results } = await promise;
     expect(results.map((r) => r.value)).toEqual(['ok']);
+    expect(task).toHaveBeenCalledTimes(2);
+  });
+
+  it('caps Retry-After at maxBackoffMs', async () => {
+    let calls = 0;
+    const task = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new RateLimitError(60_000);
+      return 'ok';
+    });
+    const promise = batchFetchWithBackoff({
+      items: ['a'],
+      task,
+      concurrency: 1,
+      maxRetries: 1,
+      initialBackoffMs: 100,
+      maxBackoffMs: 2000,
+    });
+
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(task).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2);
+
+    const { results } = await promise;
+    expect(results.map((result) => result.value)).toEqual(['ok']);
     expect(task).toHaveBeenCalledTimes(2);
   });
 

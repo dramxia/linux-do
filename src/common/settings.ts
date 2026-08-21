@@ -3,20 +3,27 @@
 export interface DiscourseSettings {
   enablePostActions: boolean;
   enableBase64Decode: boolean;
-  enableSplitLayout: boolean;
   includeMetadata: boolean;
   replaceUploadUrls: boolean;
 }
+
+export type SettingKey = keyof DiscourseSettings;
 
 type SettingsCallback = (settings: DiscourseSettings) => void;
 
 export const DEFAULT_SETTINGS: Readonly<DiscourseSettings> = Object.freeze({
   enablePostActions: true,
   enableBase64Decode: true,
-  enableSplitLayout: false,
   includeMetadata: true,
   replaceUploadUrls: true,
 });
+
+export const SETTING_KEYS: readonly SettingKey[] = Object.freeze([
+  'enablePostActions',
+  'enableBase64Decode',
+  'includeMetadata',
+  'replaceUploadUrls',
+]);
 
 function hasChromeStorage(): boolean {
   return typeof chrome !== 'undefined' && Boolean(chrome.storage?.sync);
@@ -42,32 +49,31 @@ export function getSettings(): Promise<DiscourseSettings> {
   });
 }
 
-// T10: 初始化期缓存。首次 getCachedSettings() 调 getSettings() 并缓存到模块变量，
-// onSettingsChanged 触发时置空，下次调用重新读取。交互期（按钮点击 handler）仍
-// 直接调 getSettings() 实时读 chrome.storage.sync 最新值，不经过此缓存。
-let cachedSettings: DiscourseSettings | null = null;
+let cachedSettings: Promise<DiscourseSettings> | null = null;
 
-export async function getCachedSettings(): Promise<DiscourseSettings> {
-  if (cachedSettings) return cachedSettings;
-  cachedSettings = await getSettings();
+export function getCachedSettings(): Promise<DiscourseSettings> {
+  if (!cachedSettings) {
+    cachedSettings = getSettings().catch(() => {
+      cachedSettings = null;
+      return normalizeSettings();
+    });
+  }
   return cachedSettings;
 }
 
-export function saveSettings(
-  partialSettings: Partial<DiscourseSettings>,
-): Promise<DiscourseSettings> {
-  const normalized = normalizeSettings(partialSettings);
+export function saveSettings(partialSettings: Partial<DiscourseSettings>): Promise<void> {
   if (!hasChromeStorage()) {
-    return Promise.resolve(normalized);
+    return Promise.resolve();
   }
 
-  return new Promise<DiscourseSettings>((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     chrome.storage.sync.set(partialSettings, () => {
       if (chrome.runtime?.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
         return;
       }
-      resolve(normalized);
+      cachedSettings = null;
+      resolve();
     });
   });
 }
@@ -78,14 +84,8 @@ export function onSettingsChanged(callback: SettingsCallback): void {
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'sync') return;
     const changedKeys = Object.keys(changes);
-    const settingsKeys = Object.keys(DEFAULT_SETTINGS);
-    if (!changedKeys.some((key) => settingsKeys.includes(key))) return;
+    if (!changedKeys.some((key) => SETTING_KEYS.includes(key as SettingKey))) return;
     cachedSettings = null;
-    getSettings()
-      .then((settings) => {
-        cachedSettings = settings;
-        callback(settings);
-      })
-      .catch(() => callback(normalizeSettings()));
+    void getCachedSettings().then(callback);
   });
 }

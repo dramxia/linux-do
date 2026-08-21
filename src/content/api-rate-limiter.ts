@@ -37,11 +37,11 @@ export function parseRetryAfter(headerValue: string | null, now: Date = new Date
   return 0;
 }
 
-interface BatchFetchOptions<T> {
+interface BatchFetchOptions<T, R> {
   /** 输入项数组。 */
   items: readonly T[];
   /** 对单个输入项执行的异步请求，返回所需结果。若抛出 RateLimitError 则触发退避重试。 */
-  task: (item: T, attempt: number) => Promise<unknown>;
+  task: (item: T, attempt: number) => Promise<R>;
   /** 最大并发数（Promise pool 大小）。 */
   concurrency: number;
   /** 最大重试次数（429 触发，不含首次请求）。默认 3。 */
@@ -52,9 +52,9 @@ interface BatchFetchOptions<T> {
   maxBackoffMs?: number;
 }
 
-interface BatchFetchResult<T> {
+interface BatchFetchResult<T, R> {
   /** 成功结果，按输入顺序排列（失败项不包含）。 */
-  results: Array<{ index: number; value: unknown }>;
+  results: Array<{ index: number; value: R }>;
   /** 失败项：输入索引 + 输入项 + 错误信息。 */
   failures: Array<{ index: number; item: T; error: Error }>;
 }
@@ -63,13 +63,13 @@ interface BatchFetchResult<T> {
  *
  * Promise pool 模型：维护 concurrency 个活跃任务，一个完成立即启动下一个，
  * 保证至多 concurrency 个请求在飞。遇到 RateLimitError 时：
- *   1. 解析 retryAfterMs（取 max(header 值, 指数退避值)）
+ *   1. 解析 retryAfterMs，并与指数退避值一起限制在最大等待时间内
  *   2. 等待 retryAfterMs
  *   3. 重试该 item（attempt+1），重试次数耗尽则记入 failures
  * 非 RateLimitError 错误不重试，直接记入 failures。 */
-export async function batchFetchWithBackoff<T>(
-  options: BatchFetchOptions<T>,
-): Promise<BatchFetchResult<T>> {
+export async function batchFetchWithBackoff<T, R>(
+  options: BatchFetchOptions<T, R>,
+): Promise<BatchFetchResult<T, R>> {
   const {
     items,
     task,
@@ -79,7 +79,7 @@ export async function batchFetchWithBackoff<T>(
     maxBackoffMs = 30000,
   } = options;
 
-  const results: Array<{ index: number; value: unknown }> = [];
+  const results: Array<{ index: number; value: R }> = [];
   const failures: Array<{ index: number; item: T; error: Error }> = [];
 
   if (items.length === 0) return { results, failures };
@@ -97,7 +97,10 @@ export async function batchFetchWithBackoff<T>(
       } catch (err) {
         if (err instanceof RateLimitError && attempt < maxRetries) {
           const exponentialMs = Math.min(initialBackoffMs * 2 ** attempt, maxBackoffMs);
-          const waitMs = Math.max(err.retryAfterMs, exponentialMs);
+          const retryAfterMs = Number.isFinite(err.retryAfterMs)
+            ? Math.min(Math.max(err.retryAfterMs, 0), maxBackoffMs)
+            : maxBackoffMs;
+          const waitMs = Math.max(retryAfterMs, exponentialMs);
           await sleep(waitMs);
           attempt += 1;
           continue;
@@ -123,6 +126,9 @@ export async function batchFetchWithBackoff<T>(
   const poolSize = Math.min(concurrency, items.length);
   await Promise.all(Array.from({ length: poolSize }, () => worker()));
 
+  results.sort((left, right) => left.index - right.index);
+  failures.sort((left, right) => left.index - right.index);
+
   return { results, failures };
 }
 
@@ -131,9 +137,3 @@ function sleep(ms: number): Promise<void> {
     setTimeout(resolve, ms);
   });
 }
-
-export const apiRateLimiter = {
-  batchFetchWithBackoff,
-  parseRetryAfter,
-  RateLimitError,
-};

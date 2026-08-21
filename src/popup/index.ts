@@ -1,57 +1,38 @@
 /* Linux.do 工具箱 — Popup 入口 */
-import { getSettings as _getSettings, saveSettings as _saveSettings } from '../common/settings';
-import type { DiscourseSettings } from '../common/settings';
-import type { ContentMessage } from '../content/messages';
-
-type SettingKey = keyof DiscourseSettings;
-
-interface InfoResponse {
-  title: string;
-  url: string;
-  postCount: number;
-}
+import { getSettings, saveSettings, SETTING_KEYS } from '../common/settings';
+import type { SettingKey } from '../common/settings';
+import type { ContentMessage, PageInfoResponse } from '../content/messages';
+import { isSupportedPageUrl, renderPageInfo } from './security';
 
 document.addEventListener('DOMContentLoaded', async () => {
   const infoEl = document.getElementById('info') as HTMLElement | null;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const tabId = tab?.id;
 
-  const settingInputs: Record<SettingKey, HTMLInputElement | null> = {
-    enablePostActions: document.getElementById('enablePostActions') as HTMLInputElement | null,
-    enableBase64Decode: document.getElementById('enableBase64Decode') as HTMLInputElement | null,
-    enableSplitLayout: document.getElementById('enableSplitLayout') as HTMLInputElement | null,
-    includeMetadata: document.getElementById('includeMetadata') as HTMLInputElement | null,
-    replaceUploadUrls: document.getElementById('replaceUploadUrls') as HTMLInputElement | null,
-  };
+  const settingInputs = new Map<SettingKey, HTMLInputElement | null>(
+    SETTING_KEYS.map((key) => [key, document.getElementById(key) as HTMLInputElement | null]),
+  );
 
   async function loadSettings(): Promise<void> {
-    const settings = await _getSettings();
-    (Object.entries(settingInputs) as Array<[SettingKey, HTMLInputElement | null]>).forEach(
-      ([key, input]) => {
-        if (input) input.checked = Boolean(settings[key]);
-      },
-    );
+    const settings = await getSettings();
+    settingInputs.forEach((input, key) => {
+      if (input) input.checked = settings[key];
+    });
   }
 
-  async function saveSetting(key: SettingKey, checked: boolean): Promise<void> {
-    await _saveSettings({ [key]: checked });
-  }
-
-  (Object.entries(settingInputs) as Array<[SettingKey, HTMLInputElement | null]>).forEach(
-    ([key, input]) => {
-      if (!input) return;
-      input.addEventListener('change', () => {
-        saveSetting(key, input.checked).catch((err: Error) => {
-          if (infoEl) infoEl.innerHTML = `⚠️ 设置保存失败：${err.message}`;
-        });
+  settingInputs.forEach((input, key) => {
+    if (!input) return;
+    input.addEventListener('change', () => {
+      saveSettings({ [key]: input.checked }).catch((err: Error) => {
+        if (infoEl) infoEl.textContent = `⚠️ 设置保存失败：${err.message}`;
       });
-    },
-  );
+    });
+  });
 
   await loadSettings();
 
-  if (!tab?.url?.match(/linux\.do\//)) {
-    if (infoEl) infoEl.innerHTML = '⚠️ 请在 linux.do 的帖子页面使用此插件';
+  if (!isSupportedPageUrl(tab?.url)) {
+    if (infoEl) infoEl.textContent = '⚠️ 请在 linux.do 的帖子页面使用此插件';
     document.querySelectorAll<HTMLButtonElement>('.btn').forEach((button) => {
       button.disabled = true;
     });
@@ -59,7 +40,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   if (tabId === undefined) {
-    if (infoEl) infoEl.innerHTML = '⚠️ 页面未加载完成，请刷新后重试';
+    if (infoEl) infoEl.textContent = '⚠️ 页面未加载完成，请刷新后重试';
     return;
   }
 
@@ -67,33 +48,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     tabId,
     { action: 'getInfo' } satisfies ContentMessage,
     {},
-    (res: InfoResponse | undefined) => {
+    (res: PageInfoResponse | undefined) => {
       if (chrome.runtime.lastError || !res) {
-        if (infoEl) infoEl.innerHTML = '⚠️ 页面未加载完成，请刷新后重试';
+        if (infoEl) infoEl.textContent = '⚠️ 页面未加载完成，请刷新后重试';
         return;
       }
       if (infoEl) {
-        infoEl.innerHTML = `
-        <div class="title">${res.title}</div>
-        <div>当前已加载 ${res.postCount} 个楼层</div>
-      `;
+        renderPageInfo(infoEl, res.title, res.postCount);
       }
     },
   );
 
-  document.getElementById('copyTopic')?.addEventListener('click', () => {
-    if (tabId !== undefined) {
-      chrome.tabs.sendMessage(tabId, { action: 'copyTopic' } satisfies ContentMessage, {}, () =>
-        window.close(),
-      );
-    }
-  });
-
-  document.getElementById('downloadTopic')?.addEventListener('click', () => {
-    if (tabId !== undefined) {
-      chrome.tabs.sendMessage(tabId, { action: 'downloadTopic' } satisfies ContentMessage, {}, () =>
-        window.close(),
-      );
-    }
+  const topicActions = ['copyTopic', 'downloadTopic'] as const;
+  topicActions.forEach((action) => {
+    document.getElementById(action)?.addEventListener('click', () => {
+      chrome.tabs.sendMessage(tabId, { action } satisfies ContentMessage, {}, () => window.close());
+    });
   });
 });

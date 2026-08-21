@@ -1,24 +1,10 @@
-/* Linux.do 工具箱 — 输出与反馈模块
- *
- * T9 CSS 隔离：ToastManager 迁入 Shadow DOM（closed mode）。
- * Toast shadow host 挂载到 document.body，attachShadow({mode:'closed'}) 后
- * toast 元素与 <style> 注入 shadow root，:host { all: initial } 重置阻断
- * Discourse light DOM 样式泄漏。
- */
+/* Linux.do 工具箱 — Markdown 输出、文件下载与页面反馈 */
 import type { PostMeta } from './discourse';
 
 interface FormatOptions {
   includeMetadata?: boolean;
 }
 
-export interface PostMarkdown {
-  meta: PostMeta;
-  raw: string;
-  markdown: string;
-}
-
-// Shadow DOM 内 <style> 标签内容。:host { all: initial } 阻断 light DOM 继承，
-// toast 样式自包含。z-index 设为极高值确保覆盖所有 light DOM 层叠上下文。
 const TOAST_SHADOW_STYLE = `
 :host {
   all: initial;
@@ -55,25 +41,20 @@ const TOAST_SHADOW_STYLE = `
 }
 `;
 
-// Toast 生命周期封装为类实例。原先 hideTimer 作为动态属性挂在 DOM 元素上，
-// 现在收敛为 ToastManager 类，hideTimer 成为私有字段。单例 toastManager 供
-// showToast 函数委派使用，调用方 (buttons.ts/base64.ts/messages.ts) 不需改动。
-export class ToastManager {
+class ToastManager {
   private el: HTMLDivElement | null = null;
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
-  // shadow host 挂载到 document.body，shadow root 承载 toast 元素与 <style>。
-  private host: HTMLDivElement | null = null;
   private shadow: ShadowRoot | null = null;
 
   private ensureShadow(): ShadowRoot {
     if (this.shadow) return this.shadow;
-    this.host = document.createElement('div');
-    this.host.id = 'ldcopy-toast-host';
-    this.shadow = this.host.attachShadow({ mode: 'closed' });
+    const host = document.createElement('div');
+    host.id = 'ldcopy-toast-host';
+    this.shadow = host.attachShadow({ mode: 'closed' });
     const styleEl = document.createElement('style');
     styleEl.textContent = TOAST_SHADOW_STYLE;
     this.shadow.appendChild(styleEl);
-    document.body.appendChild(this.host);
+    document.body.appendChild(host);
     return this.shadow;
   }
 
@@ -82,7 +63,6 @@ export class ToastManager {
     if (!this.el) {
       this.el = document.createElement('div');
       this.el.className = 'ldcopy-toast';
-      // toast 元素注入 shadow root 而非 document.body。
       shadow.appendChild(this.el);
     }
 
@@ -114,7 +94,6 @@ export function showToast(message: string): void {
 export function formatPostMd(
   meta: PostMeta,
   rawMd: string,
-  title: string,
   url: string,
   options: FormatOptions = {},
 ): string {
@@ -127,7 +106,6 @@ export function formatPostMd(
 
 export function formatTopicMd(
   posts: Array<{ meta: PostMeta; raw: string }>,
-  title: string,
   url: string,
   options: FormatOptions = {},
 ): string {
@@ -169,12 +147,3 @@ export function sanitizeFilename(name: string): string {
     .replace(/\s+/g, ' ')
     .substring(0, 80);
 }
-
-export const output = {
-  formatPostMd,
-  formatTopicMd,
-  copyToClipboard,
-  downloadFile,
-  sanitizeFilename,
-  showToast,
-};

@@ -2,9 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { markdown } from '../src/content/markdown';
-
-const { normalizeDiscourseMd, htmlToMarkdown, htmlTableToMarkdown } = markdown;
+import { htmlTableToMarkdown, htmlToMarkdown, normalizeDiscourseMd } from '../src/content/markdown';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(__dirname, 'fixtures');

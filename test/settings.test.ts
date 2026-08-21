@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { getSettings, saveSettings, DEFAULT_SETTINGS } from '../src/common/settings';
+import {
+  DEFAULT_SETTINGS,
+  getCachedSettings,
+  getSettings,
+  onSettingsChanged,
+  saveSettings,
+} from '../src/common/settings';
 import { setupChromeMock, resetChromeMock, type ChromeMock } from './mocks/chrome';
 
 let chromeMock: ChromeMock;
@@ -22,14 +28,13 @@ describe('getSettings (normalizeSettings via mocked chrome.storage)', () => {
 
   it('fills in missing keys with defaults (partial input)', async () => {
     // Pre-set only one key; chrome.storage.sync.get returns defaults with override for that key.
-    chromeMock.storage.sync.set({ enableSplitLayout: true });
+    chromeMock.storage.sync.set({ includeMetadata: false });
 
     const settings = await getSettings();
-    expect(settings.enableSplitLayout).toBe(true);
+    expect(settings.includeMetadata).toBe(false);
     // Other keys fall back to defaults.
     expect(settings.enablePostActions).toBe(DEFAULT_SETTINGS.enablePostActions);
     expect(settings.enableBase64Decode).toBe(DEFAULT_SETTINGS.enableBase64Decode);
-    expect(settings.includeMetadata).toBe(DEFAULT_SETTINGS.includeMetadata);
     expect(settings.replaceUploadUrls).toBe(DEFAULT_SETTINGS.replaceUploadUrls);
   });
 
@@ -37,7 +42,6 @@ describe('getSettings (normalizeSettings via mocked chrome.storage)', () => {
     const full = {
       enablePostActions: false,
       enableBase64Decode: false,
-      enableSplitLayout: true,
       includeMetadata: false,
       replaceUploadUrls: false,
     };
@@ -74,28 +78,54 @@ describe('getSettings (normalizeSettings via mocked chrome.storage)', () => {
   });
 });
 
-describe('saveSettings (normalizes then stores)', () => {
-  it('normalizes partial input by merging with defaults', async () => {
-    const saved = await saveSettings({ enableSplitLayout: true });
-    expect(saved.enableSplitLayout).toBe(true);
+describe('settings cache', () => {
+  it('shares one storage read between concurrent callers', async () => {
+    const originalGet = chromeMock.storage.sync.get;
+    chromeMock.storage.sync.get = vi.fn(originalGet);
+
+    const [first, second] = await Promise.all([getCachedSettings(), getCachedSettings()]);
+
+    expect(first).toEqual(DEFAULT_SETTINGS);
+    expect(second).toEqual(DEFAULT_SETTINGS);
+    expect(chromeMock.storage.sync.get).toHaveBeenCalledTimes(1);
+    await saveSettings({});
+  });
+
+  it('invalidates the cache when a known setting changes', async () => {
+    const callback = vi.fn();
+    onSettingsChanged(callback);
+    await getCachedSettings();
+    chromeMock.storage.sync.set({ includeMetadata: false });
+
+    chromeMock.storage.onChanged.listeners[0]?.(
+      { includeMetadata: { oldValue: true, newValue: false } },
+      'sync',
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(callback).toHaveBeenCalledWith(expect.objectContaining({ includeMetadata: false }));
+    await saveSettings({});
+  });
+});
+
+describe('saveSettings', () => {
+  it('stores a partial update without changing other settings', async () => {
+    await saveSettings({ includeMetadata: false });
+    const saved = await getSettings();
+    expect(saved.includeMetadata).toBe(false);
     expect(saved.enablePostActions).toBe(DEFAULT_SETTINGS.enablePostActions);
   });
 
-  it('returns normalized full settings object', async () => {
-    const saved = await saveSettings({
+  it('stores a full settings object', async () => {
+    const full = {
       enablePostActions: false,
       enableBase64Decode: false,
-      enableSplitLayout: true,
       includeMetadata: false,
       replaceUploadUrls: false,
-    });
-    expect(saved).toEqual({
-      enablePostActions: false,
-      enableBase64Decode: false,
-      enableSplitLayout: true,
-      includeMetadata: false,
-      replaceUploadUrls: false,
-    });
+    };
+    await saveSettings(full);
+    expect(await getSettings()).toEqual(full);
   });
 
   it('rejects when chrome.runtime.lastError is set on set()', async () => {
@@ -105,19 +135,17 @@ describe('saveSettings (normalizes then stores)', () => {
       callback?.();
     };
 
-    await expect(saveSettings({ enableSplitLayout: true })).rejects.toThrow('write failed');
+    await expect(saveSettings({ includeMetadata: false })).rejects.toThrow('write failed');
 
     chromeMock.storage.sync.set = originalSet;
     chromeMock.runtime.lastError = undefined;
   });
 
-  it('resolves with normalized settings when chrome.storage is undefined (no-op save)', async () => {
+  it('resolves when chrome.storage is undefined (no-op save)', async () => {
     const savedChrome = (globalThis as { chrome?: ChromeMock }).chrome;
     (globalThis as { chrome?: ChromeMock }).chrome = undefined;
 
-    const saved = await saveSettings({ enableSplitLayout: true });
-    expect(saved.enableSplitLayout).toBe(true);
-    expect(saved.enablePostActions).toBe(DEFAULT_SETTINGS.enablePostActions);
+    await expect(saveSettings({ includeMetadata: false })).resolves.toBeUndefined();
 
     (globalThis as { chrome?: ChromeMock }).chrome = savedChrome;
   });

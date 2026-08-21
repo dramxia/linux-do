@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { base64 } from '../src/content/base64';
-
-const { decodeBase64Utf8, stripChineseText } = base64;
+import { decodeBase64Utf8, stripChineseText } from '../src/content/base64';
 
 describe('decodeBase64Utf8', () => {
   it('decodes valid ASCII base64', () => {

@@ -8,27 +8,6 @@ export interface PostMeta {
   date: string;
 }
 
-export interface DiscoursePost {
-  id?: number;
-  post_number?: number;
-  username?: string;
-  avatar_template?: string;
-  created_at?: string;
-  cooked?: string;
-}
-
-export interface TopicJson {
-  post_stream?: {
-    stream?: number[];
-    posts?: DiscoursePost[];
-  };
-}
-
-interface PostsResponse {
-  post_stream?: { posts?: DiscoursePost[] };
-  posts?: DiscoursePost[];
-}
-
 type ImageMap = Record<string, string>;
 
 function isHTMLElement(el: Element | null): el is HTMLElement {
@@ -36,14 +15,9 @@ function isHTMLElement(el: Element | null): el is HTMLElement {
 }
 
 export function getTopicTitle(): string {
-  const fancy = document.querySelector('.fancy-title');
-  if (isHTMLElement(fancy)) {
-    const text = fancy.textContent?.trim();
-    if (text) return text;
-  }
-  const titleEl = document.querySelector('#topic-title h1');
-  if (isHTMLElement(titleEl)) {
-    const text = titleEl.textContent?.trim();
+  for (const selector of ['.fancy-title', '#topic-title h1']) {
+    const titleElement = document.querySelector(selector);
+    const text = titleElement?.textContent?.trim();
     if (text) return text;
   }
   return document.title.replace(/\s*[—–-]\s*Linux\.do\s*$/, '').trim() || 'Untitled';
@@ -58,18 +32,10 @@ export function getTopicId(): string | null {
   return match ? match[1] : null;
 }
 
-function getAllPostElements(): HTMLElement[] {
-  return Array.from(document.querySelectorAll('[data-post-id].topic-post, .topic-post')).filter(
-    (el): el is HTMLElement => isHTMLElement(el),
-  );
-}
-
 export function getPostElements(): HTMLElement[] {
-  return getAllPostElements();
-}
-
-export function getNativePostElements(): HTMLElement[] {
-  return getAllPostElements();
+  return Array.from(document.querySelectorAll('.topic-post')).filter((el): el is HTMLElement =>
+    isHTMLElement(el),
+  );
 }
 
 export function getPostMeta(postEl: HTMLElement): PostMeta {
@@ -92,38 +58,6 @@ export async function fetchRawPost(topicId: string | null, postNumber: string): 
   }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.text();
-}
-
-export async function fetchTopicJson(topicId: string | null): Promise<TopicJson> {
-  if (!topicId) throw new Error('缺少主题 ID');
-  const res = await fetch(`/t/${topicId}.json`, {
-    credentials: 'same-origin',
-    headers: { Accept: 'application/json' },
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return (await res.json()) as TopicJson;
-}
-
-export async function fetchPostsByIds(
-  topicId: string | null,
-  postIds: Array<string | number>,
-): Promise<DiscoursePost[]> {
-  if (!topicId) throw new Error('缺少主题 ID');
-  if (!postIds.length) return [];
-
-  const url = new URL(`/t/${topicId}/posts.json`, window.location.origin);
-  postIds.forEach((postId) => {
-    url.searchParams.append('post_ids[]', String(postId));
-  });
-
-  const res = await fetch(url.pathname + url.search, {
-    credentials: 'same-origin',
-    headers: { Accept: 'application/json' },
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-  const data = (await res.json()) as PostsResponse;
-  return data?.post_stream?.posts || data?.posts || [];
 }
 
 export function getPostImages(postEl: HTMLElement): ImageMap {
@@ -149,18 +83,3 @@ export function replaceUploadUrls(rawMd: string, imageMap: ImageMap): string {
     },
   );
 }
-
-export const discourse = {
-  getTopicTitle,
-  getTopicUrl,
-  getTopicId,
-  getAllPostElements,
-  getPostElements,
-  getNativePostElements,
-  getPostMeta,
-  fetchRawPost,
-  fetchTopicJson,
-  fetchPostsByIds,
-  getPostImages,
-  replaceUploadUrls,
-};

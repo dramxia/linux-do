@@ -45,7 +45,8 @@
         } catch (err) {
           if (err instanceof RateLimitError && attempt < maxRetries) {
             const exponentialMs = Math.min(initialBackoffMs * 2 ** attempt, maxBackoffMs);
-            const waitMs = Math.max(err.retryAfterMs, exponentialMs);
+            const retryAfterMs = Number.isFinite(err.retryAfterMs) ? Math.min(Math.max(err.retryAfterMs, 0), maxBackoffMs) : maxBackoffMs;
+            const waitMs = Math.max(retryAfterMs, exponentialMs);
             await sleep(waitMs);
             attempt += 1;
             continue;
@@ -68,6 +69,8 @@
     }
     const poolSize = Math.min(concurrency, items.length);
     await Promise.all(Array.from({ length: poolSize }, () => worker()));
+    results.sort((left, right) => left.index - right.index);
+    failures.sort((left, right) => left.index - right.index);
     return { results, failures };
   }
   function sleep(ms) {
@@ -81,14 +84,9 @@
     return el instanceof HTMLElement;
   }
   function getTopicTitle() {
-    const fancy = document.querySelector(".fancy-title");
-    if (isHTMLElement(fancy)) {
-      const text = fancy.textContent?.trim();
-      if (text) return text;
-    }
-    const titleEl = document.querySelector("#topic-title h1");
-    if (isHTMLElement(titleEl)) {
-      const text = titleEl.textContent?.trim();
+    for (const selector of [".fancy-title", "#topic-title h1"]) {
+      const titleElement = document.querySelector(selector);
+      const text = titleElement?.textContent?.trim();
       if (text) return text;
     }
     return document.title.replace(/\s*[—–-]\s*Linux\.do\s*$/, "").trim() || "Untitled";
@@ -100,13 +98,10 @@
     const match = window.location.pathname.match(/\/t\/[^/]+\/(\d+)/);
     return match ? match[1] : null;
   }
-  function getAllPostElements() {
-    return Array.from(document.querySelectorAll("[data-post-id].topic-post, .topic-post")).filter(
+  function getPostElements() {
+    return Array.from(document.querySelectorAll(".topic-post")).filter(
       (el) => isHTMLElement(el)
     );
-  }
-  function getPostElements() {
-    return getAllPostElements();
   }
   function getPostMeta(postEl) {
     const postId = postEl.getAttribute("data-post-id") || "";
@@ -145,317 +140,6 @@
         return match;
       }
     );
-  }
-
-  // src/common/settings.ts
-  var DEFAULT_SETTINGS = Object.freeze({
-    enablePostActions: true,
-    enableBase64Decode: true,
-    enableSplitLayout: false,
-    includeMetadata: true,
-    replaceUploadUrls: true
-  });
-  function hasChromeStorage() {
-    return typeof chrome !== "undefined" && Boolean(chrome.storage?.sync);
-  }
-  function normalizeSettings(value = {}) {
-    return { ...DEFAULT_SETTINGS, ...value };
-  }
-  function getSettings() {
-    if (!hasChromeStorage()) {
-      return Promise.resolve(normalizeSettings());
-    }
-    return new Promise((resolve) => {
-      chrome.storage.sync.get(DEFAULT_SETTINGS, (items) => {
-        if (chrome.runtime?.lastError) {
-          resolve(normalizeSettings());
-          return;
-        }
-        resolve(normalizeSettings(items));
-      });
-    });
-  }
-  var cachedSettings = null;
-  async function getCachedSettings() {
-    if (cachedSettings) return cachedSettings;
-    cachedSettings = await getSettings();
-    return cachedSettings;
-  }
-  function onSettingsChanged(callback) {
-    if (!hasChromeStorage() || !chrome.storage?.onChanged) return;
-    chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== "sync") return;
-      const changedKeys = Object.keys(changes);
-      const settingsKeys = Object.keys(DEFAULT_SETTINGS);
-      if (!changedKeys.some((key) => settingsKeys.includes(key))) return;
-      cachedSettings = null;
-      getSettings().then((settings) => {
-        cachedSettings = settings;
-        callback(settings);
-      }).catch(() => callback(normalizeSettings()));
-    });
-  }
-
-  // src/content/layout/dom-queries.ts
-  var BODY_CLASS = "ldtk-topic-split-active";
-  var PREPARING_ROOT_CLASS = "ldtk-topic-split-preparing";
-  var SIDEBAR_GUARD_CLASS = "ldtk-topic-sidebar-collapsing";
-  var WRAPPER_CLASS = "ldtk-topic-split-wrapper";
-  var ARTICLE_PANE_CLASS = "ldtk-topic-article-pane";
-  var COMMENTS_STREAM_CLASS = "ldtk-topic-comments-stream";
-  var HEADER_TITLE_CLASS = "ldtk-topic-header-title";
-  var HEADER_TITLE_INNER_CLASS = "ldtk-topic-header-title-inner";
-  var ARTICLE_ACTIONS_CLASS = "ldtk-topic-article-actions";
-  var FOOTER_ACTIONS_SOURCE_ATTR = "data-ldtk-footer-actions-source";
-  var FOOTER_ACTIONS_TOPIC_ATTR = "data-ldtk-footer-actions-topic";
-  var FOOTER_ACTIONS_PLACEHOLDER_ATTR = "data-ldtk-footer-actions-placeholder";
-  var FOOTER_ACTIONS_SELECTORS = "#topic-footer-buttons, .topic-footer-main-buttons";
-  var NATIVE_STREAM_CLASS = "ldtk-topic-native-stream";
-  var ORIGINAL_MAIN_POST_CLASS = "ldtk-topic-original-main-post";
-
-  // src/content/layout/header-title-cloner.ts
-  var pendingTimers = /* @__PURE__ */ new Set();
-  function getHeaderTitleMount() {
-    return document.querySelector(".d-header .contents") || document.querySelector("header.d-header .contents") || document.querySelector(".d-header");
-  }
-  function stripHeaderCloneUnsafeNodes(clone) {
-    clone.querySelectorAll(
-      ["script", "style", ".edit-topic", ".topic-statuses", ".topic-notifications-button"].join(
-        ","
-      )
-    ).forEach((el) => el.remove());
-    clone.querySelectorAll("[id]").forEach((el) => el.removeAttribute("id"));
-  }
-  function syncSplitHeaderTitle() {
-    if (!document.body?.classList.contains(BODY_CLASS)) return;
-    const source = document.querySelector("#topic-title");
-    const mount = getHeaderTitleMount();
-    if (!source || !mount) return;
-    let headerTitle = mount.querySelector(`:scope > .${HEADER_TITLE_CLASS}`);
-    if (!headerTitle) {
-      headerTitle = document.createElement("div");
-      headerTitle.className = HEADER_TITLE_CLASS;
-      const logoArea = mount.querySelector(
-        ":scope > .title, :scope > .home-logo-wrapper, :scope > .brand-header"
-      );
-      if (logoArea) logoArea.insertAdjacentElement("afterend", headerTitle);
-      else mount.insertBefore(headerTitle, mount.children[1] || null);
-    }
-    const clone = source.cloneNode(true);
-    clone.className = HEADER_TITLE_INNER_CLASS;
-    stripHeaderCloneUnsafeNodes(clone);
-    headerTitle.replaceChildren(clone);
-  }
-  function clearPendingTimers() {
-    pendingTimers.forEach((timer) => clearTimeout(timer));
-    pendingTimers.clear();
-  }
-  function scheduleSplitHeaderSync() {
-    clearPendingTimers();
-    syncSplitHeaderTitle();
-    [250, 1e3].forEach((delay) => {
-      const timer = setTimeout(() => {
-        pendingTimers.delete(timer);
-        syncSplitHeaderTitle();
-      }, delay);
-      pendingTimers.add(timer);
-    });
-  }
-  function restoreSplitHeaderTitle() {
-    clearPendingTimers();
-    document.querySelectorAll(`.${HEADER_TITLE_CLASS}`).forEach((el) => el.remove());
-  }
-
-  // src/content/layout/layout-mutation-tracker.ts
-  var expectedNodes = /* @__PURE__ */ new Set();
-  var clearTimer = null;
-  function markLayoutMutation(...nodes) {
-    nodes.forEach((node) => {
-      if (node) expectedNodes.add(node);
-    });
-    if (clearTimer) return;
-    clearTimer = setTimeout(() => {
-      expectedNodes.clear();
-      clearTimer = null;
-    }, 0);
-  }
-  function isExpectedLayoutMutation(node) {
-    return expectedNodes.has(node);
-  }
-
-  // src/content/layout/footer-actions-cloner.ts
-  var footerPortalState = {
-    source: null,
-    placeholder: null,
-    host: null,
-    originalParent: null,
-    originalNextSibling: null,
-    topicId: ""
-  };
-  function findFooterActionsSource() {
-    return Array.from(document.querySelectorAll(FOOTER_ACTIONS_SELECTORS)).find(
-      (el) => el instanceof HTMLElement && !el.closest(`.${ARTICLE_PANE_CLASS}`) && !el.hasAttribute(FOOTER_ACTIONS_PLACEHOLDER_ATTR)
-    ) || null;
-  }
-  function findFooterActionsHostReplacement() {
-    const candidate = footerPortalState.host?.querySelector(
-      ":scope > #topic-footer-buttons, :scope > .topic-footer-main-buttons"
-    );
-    return candidate instanceof HTMLElement && candidate !== footerPortalState.source ? candidate : null;
-  }
-  function createFooterActionsPlaceholder(source) {
-    const placeholder = document.createElement("span");
-    placeholder.hidden = true;
-    placeholder.setAttribute(FOOTER_ACTIONS_PLACEHOLDER_ATTR, "true");
-    markLayoutMutation(placeholder);
-    source.parentElement?.insertBefore(placeholder, source);
-    return placeholder;
-  }
-  function clearPortalState() {
-    footerPortalState.source = null;
-    footerPortalState.placeholder = null;
-    footerPortalState.host = null;
-    footerPortalState.originalParent = null;
-    footerPortalState.originalNextSibling = null;
-    footerPortalState.topicId = "";
-  }
-  function restoreSource(source, placeholder, originalParent, originalNextSibling, sourceTopicId) {
-    source.removeAttribute(FOOTER_ACTIONS_SOURCE_ATTR);
-    source.removeAttribute(FOOTER_ACTIONS_TOPIC_ATTR);
-    markLayoutMutation(source);
-    const currentTopicId = getTopicId();
-    if (!currentTopicId || sourceTopicId && sourceTopicId !== currentTopicId) {
-      source.remove();
-      return;
-    }
-    if (placeholder?.parentElement?.isConnected) {
-      placeholder.parentElement.insertBefore(source, placeholder);
-      return;
-    }
-    if (originalParent?.isConnected) {
-      const anchor = originalNextSibling?.parentNode === originalParent ? originalNextSibling : null;
-      originalParent.insertBefore(source, anchor);
-      return;
-    }
-    const replacement = findFooterActionsSource();
-    if (replacement && replacement !== source) {
-      source.remove();
-      return;
-    }
-    const fallback = document.querySelector(".topic-area, .container.posts, #main-outlet") || document.body;
-    fallback.appendChild(source);
-  }
-  function syncArticleFooterActions(pane) {
-    if (!pane) return;
-    const hostReplacement = findFooterActionsHostReplacement();
-    const nextSource = findFooterActionsSource();
-    const currentSource = footerPortalState.source;
-    if (hostReplacement) {
-      markLayoutMutation(currentSource);
-      currentSource?.remove();
-      footerPortalState.source = hostReplacement;
-      hostReplacement.setAttribute(FOOTER_ACTIONS_SOURCE_ATTR, "true");
-      hostReplacement.setAttribute(FOOTER_ACTIONS_TOPIC_ATTR, footerPortalState.topicId);
-    } else if (nextSource && nextSource !== currentSource) {
-      markLayoutMutation(currentSource, footerPortalState.placeholder);
-      currentSource?.remove();
-      footerPortalState.placeholder?.remove();
-      footerPortalState.source = nextSource;
-      footerPortalState.originalParent = nextSource.parentElement;
-      footerPortalState.originalNextSibling = nextSource.nextSibling;
-      footerPortalState.topicId = getTopicId() || "";
-      footerPortalState.placeholder = createFooterActionsPlaceholder(nextSource);
-      nextSource.setAttribute(FOOTER_ACTIONS_SOURCE_ATTR, "true");
-      nextSource.setAttribute(FOOTER_ACTIONS_TOPIC_ATTR, footerPortalState.topicId);
-    } else if (currentSource && !currentSource.isConnected) {
-      markLayoutMutation(footerPortalState.placeholder, footerPortalState.host);
-      footerPortalState.placeholder?.remove();
-      footerPortalState.host?.remove();
-      clearPortalState();
-    }
-    const source = footerPortalState.source;
-    let articleActions = footerPortalState.host;
-    if (!source) {
-      articleActions?.remove();
-      footerPortalState.host = null;
-      return;
-    }
-    if (!articleActions?.isConnected || articleActions.parentElement !== pane) {
-      articleActions = document.createElement("section");
-      articleActions.className = ARTICLE_ACTIONS_CLASS;
-      articleActions.setAttribute("aria-label", "\u4E3B\u9898\u64CD\u4F5C");
-      markLayoutMutation(articleActions);
-      pane.appendChild(articleActions);
-      footerPortalState.host = articleActions;
-    }
-    if (source.parentElement !== articleActions) {
-      markLayoutMutation(source);
-      articleActions.appendChild(source);
-    }
-  }
-  function restoreFooterActions() {
-    const { source, placeholder, host, originalParent, originalNextSibling, topicId } = footerPortalState;
-    if (source) {
-      restoreSource(source, placeholder, originalParent, originalNextSibling, topicId);
-    }
-    markLayoutMutation(placeholder, host);
-    placeholder?.remove();
-    host?.remove();
-    clearPortalState();
-    const orphanedSource = document.querySelector(
-      `[${FOOTER_ACTIONS_SOURCE_ATTR}="true"]`
-    );
-    const orphanedPlaceholder = document.querySelector(
-      `[${FOOTER_ACTIONS_PLACEHOLDER_ATTR}="true"]`
-    );
-    if (orphanedSource) {
-      restoreSource(
-        orphanedSource,
-        orphanedPlaceholder,
-        null,
-        null,
-        orphanedSource.getAttribute(FOOTER_ACTIONS_TOPIC_ATTR) || ""
-      );
-    }
-    markLayoutMutation(orphanedPlaceholder);
-    orphanedPlaceholder?.remove();
-    document.querySelectorAll(`.${ARTICLE_ACTIONS_CLASS}`).forEach((el) => {
-      markLayoutMutation(el);
-      el.remove();
-    });
-  }
-
-  // src/content/layout/resize-handler.ts
-  var ResizeHandler = class {
-    listener = null;
-    pagehideHandler = () => {
-      if (this.listener) window.removeEventListener("resize", this.listener);
-    };
-    pageshowHandler = (event) => {
-      if (!event.persisted || !this.listener) return;
-      window.addEventListener("resize", this.listener);
-      this.listener();
-    };
-    bind() {
-      if (this.listener) return;
-      this.listener = () => {
-        document.querySelectorAll(`.${WRAPPER_CLASS}`).forEach(updateSplitPaneHeight);
-      };
-      window.addEventListener("resize", this.listener);
-      window.addEventListener("pagehide", this.pagehideHandler);
-      window.addEventListener("pageshow", this.pageshowHandler);
-    }
-    unbind() {
-      if (!this.listener) return;
-      window.removeEventListener("resize", this.listener);
-      window.removeEventListener("pagehide", this.pagehideHandler);
-      window.removeEventListener("pageshow", this.pageshowHandler);
-      this.listener = null;
-    }
-  };
-  var resizeHandler = new ResizeHandler();
-  function bindResizeHandler() {
-    resizeHandler.bind();
   }
 
   // src/content/output.ts
@@ -497,18 +181,16 @@
   var ToastManager = class {
     el = null;
     hideTimer = null;
-    // shadow host 挂载到 document.body，shadow root 承载 toast 元素与 <style>。
-    host = null;
     shadow = null;
     ensureShadow() {
       if (this.shadow) return this.shadow;
-      this.host = document.createElement("div");
-      this.host.id = "ldcopy-toast-host";
-      this.shadow = this.host.attachShadow({ mode: "closed" });
+      const host = document.createElement("div");
+      host.id = "ldcopy-toast-host";
+      this.shadow = host.attachShadow({ mode: "closed" });
       const styleEl = document.createElement("style");
       styleEl.textContent = TOAST_SHADOW_STYLE;
       this.shadow.appendChild(styleEl);
-      document.body.appendChild(this.host);
+      document.body.appendChild(host);
       return this.shadow;
     }
     show(message, duration = 2500) {
@@ -539,13 +221,13 @@
   function showToast(message) {
     toastManager.show(message);
   }
-  function formatPostMd(meta, rawMd, title, url, options = {}) {
+  function formatPostMd(meta, rawMd, url, options = {}) {
     if (options.includeMetadata === false) return rawMd.trim();
     const sourceUrl = url + (meta.postNumber ? "#post-" + meta.postNumber : "");
     const header = `<!-- \u6765\u6E90: ${sourceUrl} | \u4F5C\u8005: ${meta.author}${meta.date ? " | " + meta.date : ""} -->`;
     return header + "\n\n" + rawMd.trim();
   }
-  function formatTopicMd(posts, title, url, options = {}) {
+  function formatTopicMd(posts, url, options = {}) {
     if (options.includeMetadata === false) {
       return posts.map((post) => post.raw.trim()).join("\n\n---\n\n");
     }
@@ -577,264 +259,6 @@
   function sanitizeFilename(name) {
     return name.replace(/[<>:"/\\|?*\n\r]/g, "_").replace(/\s+/g, " ").substring(0, 80);
   }
-
-  // src/content/error-handler.ts
-  function handleError(err, context) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[LinuxDoToolkit] ${context}:`, err);
-    showToast(`${context}\u5931\u8D25: ${message}`);
-  }
-
-  // src/content/layout/split-pane-layout.ts
-  var layoutState = {
-    generation: 0,
-    active: false,
-    splitSessionActive: false,
-    topicId: "",
-    wrapper: null,
-    stream: null,
-    articlePane: null,
-    mainPost: null,
-    mainPostNextSibling: null,
-    previousStreamAriaLabel: null,
-    revealTimer: null,
-    sidebarGuardTimer: null
-  };
-  function getNativeStream() {
-    if (layoutState.stream?.isConnected) return layoutState.stream;
-    return document.querySelector(`.${NATIVE_STREAM_CLASS}`) || document.querySelector("#post_stream") || document.querySelector("#post-stream") || document.querySelector(".post-stream") || document.querySelector(".topic-posts");
-  }
-  function getNativeMainPost(stream) {
-    const numberedMainPost = stream?.querySelector(
-      ':scope > [data-post-number="1"].topic-post, :scope > .topic-post[data-post-number="1"]'
-    );
-    if (numberedMainPost) return numberedMainPost;
-    const firstPost = stream?.querySelector(
-      ":scope > [data-post-id].topic-post, :scope > .topic-post"
-    );
-    if (!firstPost || firstPost.getAttribute("data-post-number")) return null;
-    return firstPost;
-  }
-  function revealPreparedLayout() {
-    document.documentElement.classList.remove(PREPARING_ROOT_CLASS);
-    if (layoutState.revealTimer) {
-      clearTimeout(layoutState.revealTimer);
-      layoutState.revealTimer = null;
-    }
-  }
-  function prepareTopicSplitLayout() {
-    if (!getTopicId()) return;
-    document.documentElement.classList.add(PREPARING_ROOT_CLASS);
-    if (layoutState.revealTimer) clearTimeout(layoutState.revealTimer);
-    layoutState.revealTimer = setTimeout(revealPreparedLayout, 2e3);
-  }
-  function releaseSidebarGuard(toggle, attempt = 0) {
-    if (toggle.getAttribute("aria-expanded") === "false" || attempt >= 12) {
-      document.body?.classList.remove(SIDEBAR_GUARD_CLASS, "sidebar-animate");
-      layoutState.sidebarGuardTimer = null;
-      return;
-    }
-    layoutState.sidebarGuardTimer = setTimeout(() => releaseSidebarGuard(toggle, attempt + 1), 16);
-  }
-  function collapseSidebarOnce() {
-    if (layoutState.splitSessionActive) return;
-    const toggle = document.querySelector(
-      "button.btn-sidebar-toggle[aria-controls], button.btn-sidebar-toggle"
-    );
-    const expanded = toggle?.getAttribute("aria-expanded");
-    if (!toggle || expanded !== "true" && expanded !== "false") return;
-    layoutState.splitSessionActive = true;
-    if (expanded === "false") return;
-    document.body.classList.add(SIDEBAR_GUARD_CLASS);
-    toggle.click();
-    releaseSidebarGuard(toggle);
-  }
-  function createSplitShell(stream) {
-    const parent = stream.parentElement;
-    if (!parent) throw new Error("\u8BC4\u8BBA\u5217\u8868\u5C1A\u672A\u6302\u8F7D");
-    const wrapper = document.createElement("div");
-    wrapper.className = WRAPPER_CLASS;
-    const articlePane = document.createElement("aside");
-    articlePane.className = ARTICLE_PANE_CLASS;
-    articlePane.setAttribute("aria-label", "\u6587\u7AE0\u5185\u5BB9");
-    markLayoutMutation(wrapper, articlePane, stream);
-    parent.insertBefore(wrapper, stream);
-    wrapper.append(articlePane, stream);
-    return { wrapper, articlePane };
-  }
-  function restoreMainPost() {
-    const { stream, mainPost, mainPostNextSibling } = layoutState;
-    if (!stream?.isConnected || !mainPost) return;
-    const replacement = getNativeMainPost(stream);
-    if (replacement && replacement !== mainPost) {
-      markLayoutMutation(mainPost);
-      mainPost.remove();
-      return;
-    }
-    mainPost.classList.remove(ORIGINAL_MAIN_POST_CLASS);
-    if (mainPost.parentElement === stream) return;
-    const anchor = mainPostNextSibling?.parentNode === stream ? mainPostNextSibling : stream.firstChild;
-    markLayoutMutation(mainPost);
-    stream.insertBefore(mainPost, anchor);
-  }
-  function clearLayoutState(endSession) {
-    layoutState.active = false;
-    if (endSession) layoutState.splitSessionActive = false;
-    layoutState.topicId = "";
-    layoutState.wrapper = null;
-    layoutState.stream = null;
-    layoutState.articlePane = null;
-    layoutState.mainPost = null;
-    layoutState.mainPostNextSibling = null;
-    layoutState.previousStreamAriaLabel = null;
-  }
-  function restoreOrphanedLayout() {
-    const wrapper = document.querySelector(`.${WRAPPER_CLASS}`);
-    const stream = wrapper?.querySelector(
-      `:scope > .${NATIVE_STREAM_CLASS}, :scope > .post-stream, :scope > #post_stream`
-    );
-    const articlePane = wrapper?.querySelector(`:scope > .${ARTICLE_PANE_CLASS}`);
-    const movedMain = articlePane?.querySelector(`.${ORIGINAL_MAIN_POST_CLASS}`);
-    restoreFooterActions();
-    if (stream && movedMain && !getNativeMainPost(stream)) {
-      movedMain.classList.remove(ORIGINAL_MAIN_POST_CLASS);
-      markLayoutMutation(movedMain);
-      stream.insertBefore(movedMain, stream.firstChild);
-    }
-    markLayoutMutation(articlePane);
-    articlePane?.remove();
-    const legacyCommentsPane = wrapper?.querySelector(":scope > .ldtk-topic-comments-pane");
-    markLayoutMutation(legacyCommentsPane);
-    legacyCommentsPane?.remove();
-    wrapper?.querySelectorAll(":scope > .ldtk-paged-comment, :scope > .ldtk-comments-pager").forEach((el) => {
-      markLayoutMutation(el);
-      el.remove();
-    });
-    if (wrapper?.parentElement && stream) {
-      markLayoutMutation(stream, wrapper);
-      wrapper.parentElement.insertBefore(stream, wrapper);
-      wrapper.remove();
-    }
-    stream?.classList.remove(NATIVE_STREAM_CLASS, COMMENTS_STREAM_CLASS);
-    stream?.removeAttribute("aria-hidden");
-    stream?.removeAttribute("aria-label");
-    restoreSplitHeaderTitle();
-    document.body?.classList.remove(BODY_CLASS, SIDEBAR_GUARD_CLASS, "sidebar-animate");
-  }
-  function teardownCurrentLayout(endSession) {
-    if (!layoutState.active) {
-      if (document.body?.classList.contains(BODY_CLASS)) restoreOrphanedLayout();
-      if (endSession) layoutState.splitSessionActive = false;
-      revealPreparedLayout();
-      return;
-    }
-    const { wrapper, stream, articlePane, previousStreamAriaLabel } = layoutState;
-    restoreFooterActions();
-    restoreMainPost();
-    markLayoutMutation(articlePane);
-    articlePane?.remove();
-    if (stream) {
-      stream.classList.remove(NATIVE_STREAM_CLASS, COMMENTS_STREAM_CLASS);
-      stream.removeAttribute("aria-hidden");
-      if (previousStreamAriaLabel === null) stream.removeAttribute("aria-label");
-      else stream.setAttribute("aria-label", previousStreamAriaLabel);
-    }
-    if (wrapper?.parentElement && stream?.parentElement === wrapper) {
-      markLayoutMutation(stream, wrapper);
-      wrapper.parentElement.insertBefore(stream, wrapper);
-      wrapper.remove();
-    } else if (wrapper && !wrapper.children.length) {
-      wrapper.remove();
-    }
-    restoreSplitHeaderTitle();
-    document.body.classList.remove(BODY_CLASS, SIDEBAR_GUARD_CLASS, "sidebar-animate");
-    if (layoutState.sidebarGuardTimer) {
-      clearTimeout(layoutState.sidebarGuardTimer);
-      layoutState.sidebarGuardTimer = null;
-    }
-    clearLayoutState(endSession);
-    revealPreparedLayout();
-  }
-  function isCurrentLayoutIntact(topicId) {
-    return Boolean(
-      layoutState.active && layoutState.topicId === topicId && layoutState.wrapper?.isConnected && layoutState.stream?.isConnected && layoutState.articlePane?.isConnected && layoutState.mainPost?.parentElement === layoutState.articlePane && !getNativeMainPost(layoutState.stream)
-    );
-  }
-  function activateLayout(stream, mainPost, topicId) {
-    collapseSidebarOnce();
-    const mainPostNextSibling = mainPost.nextSibling;
-    const previousStreamAriaLabel = stream.getAttribute("aria-label");
-    const { wrapper, articlePane } = createSplitShell(stream);
-    layoutState.active = true;
-    layoutState.topicId = topicId;
-    layoutState.wrapper = wrapper;
-    layoutState.stream = stream;
-    layoutState.articlePane = articlePane;
-    layoutState.mainPost = mainPost;
-    layoutState.mainPostNextSibling = mainPostNextSibling;
-    layoutState.previousStreamAriaLabel = previousStreamAriaLabel;
-    mainPost.classList.add(ORIGINAL_MAIN_POST_CLASS);
-    markLayoutMutation(mainPost);
-    articlePane.appendChild(mainPost);
-    stream.classList.add(NATIVE_STREAM_CLASS, COMMENTS_STREAM_CLASS);
-    stream.removeAttribute("aria-hidden");
-    stream.setAttribute("aria-label", "\u8BC4\u8BBA\u5217\u8868");
-    syncArticleFooterActions(articlePane);
-    document.body.classList.add(BODY_CLASS);
-    scheduleSplitHeaderSync();
-    updateSplitPaneHeight(wrapper);
-    revealPreparedLayout();
-  }
-  function updateSplitPaneHeight(wrapper) {
-    if (!wrapper?.isConnected) return;
-    const viewportHeight = window.visualViewport?.height || window.innerHeight;
-    const wrapperTop = wrapper.getBoundingClientRect().top;
-    const headerBottom = document.querySelector(".d-header")?.getBoundingClientRect().bottom || 0;
-    const paneTop = Math.max(0, wrapperTop, headerBottom);
-    const height = Math.max(320, viewportHeight - paneTop - 8);
-    wrapper.style.setProperty("--ldtk-topic-top-offset", `${paneTop}px`);
-    wrapper.style.setProperty("--ldtk-split-pane-height", `${height}px`);
-  }
-  function restoreTopicSplitLayout() {
-    layoutState.generation += 1;
-    teardownCurrentLayout(true);
-  }
-  async function applyTopicSplitLayout(settings) {
-    const generation = ++layoutState.generation;
-    const currentSettings = settings || await getCachedSettings();
-    if (generation !== layoutState.generation) return;
-    const topicId = getTopicId();
-    if (!currentSettings.enableSplitLayout || !topicId) {
-      teardownCurrentLayout(true);
-      return;
-    }
-    try {
-      if (isCurrentLayoutIntact(topicId)) {
-        collapseSidebarOnce();
-        syncArticleFooterActions(layoutState.articlePane);
-        updateSplitPaneHeight(layoutState.wrapper);
-        revealPreparedLayout();
-        return;
-      }
-      if (layoutState.active) {
-        prepareTopicSplitLayout();
-        teardownCurrentLayout(false);
-      } else if (document.body.classList.contains(BODY_CLASS)) restoreOrphanedLayout();
-      const stream = getNativeStream();
-      const mainPost = getNativeMainPost(stream);
-      if (!stream || !mainPost) return;
-      activateLayout(stream, mainPost, topicId);
-    } catch (err) {
-      handleError(err, "\u5206\u680F\u5E03\u5C40");
-      teardownCurrentLayout(false);
-    }
-  }
-  bindResizeHandler();
-  var layout = {
-    applyTopicSplitLayout,
-    prepareTopicSplitLayout,
-    restoreTopicSplitLayout
-  };
 
   // src/content/markdown.ts
   function isHtmlContent(text) {
@@ -1062,6 +486,9 @@ ${lines}
   }
 
   // src/content/post-export.ts
+  var COLLECT_CONCURRENCY = 5;
+  var COLLECT_MAX_RETRIES = 3;
+  var COLLECT_INITIAL_BACKOFF_MS = 1e3;
   async function buildPostMarkdown(postEl, settings) {
     const topicId = getTopicId();
     const meta = getPostMeta(postEl);
@@ -1074,29 +501,15 @@ ${lines}
     const md = ensureMarkdown(processedRaw);
     return {
       meta,
-      markdown: formatPostMd(
-        meta,
-        md,
-        getTopicTitle(),
-        getTopicUrl(),
-        settings
-      ),
+      markdown: formatPostMd(meta, md, getTopicUrl(), settings),
       raw: md
     };
   }
-  function getFallbackMeta(postEl, index) {
-    try {
-      return getPostMeta(postEl);
-    } catch {
-      return { postId: "", postNumber: String(index + 1), author: "Unknown", date: "" };
-    }
-  }
   async function collectLoadedPosts(settings) {
-    const postEls = Array.from(getPostElements());
-    const items = postEls.map((postEl, index) => ({
+    const postEls = getPostElements();
+    const items = postEls.map((postEl) => ({
       postEl,
-      meta: getFallbackMeta(postEl, index),
-      index
+      meta: getPostMeta(postEl)
     }));
     const topicId = getTopicId();
     const { results, failures } = await batchFetchWithBackoff({
@@ -1109,10 +522,7 @@ ${lines}
         return buildPostMarkdownFromRaw(item.postEl, item.meta, raw, settings);
       }
     });
-    const posts = results.map(({ value }) => {
-      const built = value;
-      return { meta: built.meta, raw: built.raw };
-    });
+    const posts = results.map(({ value }) => ({ meta: value.meta, raw: value.raw }));
     const postFailures = failures.map((failure) => ({
       meta: failure.item.meta,
       error: failure.error.message || "\u672A\u77E5\u9519\u8BEF"
@@ -1125,9 +535,69 @@ ${lines}
       failureCount: postFailures.length
     };
   }
-  var COLLECT_CONCURRENCY = 5;
-  var COLLECT_MAX_RETRIES = 3;
-  var COLLECT_INITIAL_BACKOFF_MS = 1e3;
+
+  // src/common/settings.ts
+  var DEFAULT_SETTINGS = Object.freeze({
+    enablePostActions: true,
+    enableBase64Decode: true,
+    includeMetadata: true,
+    replaceUploadUrls: true
+  });
+  var SETTING_KEYS = Object.freeze([
+    "enablePostActions",
+    "enableBase64Decode",
+    "includeMetadata",
+    "replaceUploadUrls"
+  ]);
+  function hasChromeStorage() {
+    return typeof chrome !== "undefined" && Boolean(chrome.storage?.sync);
+  }
+  function normalizeSettings(value = {}) {
+    return { ...DEFAULT_SETTINGS, ...value };
+  }
+  function getSettings() {
+    if (!hasChromeStorage()) {
+      return Promise.resolve(normalizeSettings());
+    }
+    return new Promise((resolve) => {
+      chrome.storage.sync.get(DEFAULT_SETTINGS, (items) => {
+        if (chrome.runtime?.lastError) {
+          resolve(normalizeSettings());
+          return;
+        }
+        resolve(normalizeSettings(items));
+      });
+    });
+  }
+  var cachedSettings = null;
+  function getCachedSettings() {
+    if (!cachedSettings) {
+      cachedSettings = getSettings().catch(() => {
+        cachedSettings = null;
+        return normalizeSettings();
+      });
+    }
+    return cachedSettings;
+  }
+  function onSettingsChanged(callback) {
+    if (!hasChromeStorage() || !chrome.storage?.onChanged) return;
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "sync") return;
+      const changedKeys = Object.keys(changes);
+      if (!changedKeys.some((key) => SETTING_KEYS.includes(key))) return;
+      cachedSettings = null;
+      void getCachedSettings().then(callback);
+    });
+  }
+
+  // src/content/error-handler.ts
+  function getErrorMessage(err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  function handleError(err, context) {
+    console.error(`[LinuxDoToolkit] ${context}:`, err);
+    showToast(`${context}\u5931\u8D25: ${getErrorMessage(err)}`);
+  }
 
   // src/content/buttons.ts
   var COPY_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
@@ -1193,16 +663,68 @@ ${lines}
 }
 `;
   function removeInjectedActions() {
-    document.querySelectorAll("." + SHADOW_HOST_CLASS).forEach((el) => el.remove());
+    document.querySelectorAll(`.${SHADOW_HOST_CLASS}`).forEach((element) => element.remove());
   }
-  async function injectButtons() {
-    const settings = await getCachedSettings();
+  function createActionButton(options) {
+    const button = document.createElement("button");
+    button.className = "ldcopy-btn";
+    button.title = options.title;
+    button.innerHTML = `${options.icon} <span>${options.label}</span>`;
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      button.disabled = true;
+      try {
+        await options.action();
+      } catch (err) {
+        handleError(err, options.errorContext);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    return button;
+  }
+  function createActions(postEl) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "ldcopy-actions";
+    wrapper.appendChild(
+      createActionButton({
+        title: "\u590D\u5236\u672C\u697C\u539F\u59CB Markdown",
+        label: "\u590D\u5236",
+        icon: COPY_ICON,
+        errorContext: "\u590D\u5236\u697C\u5C42",
+        action: async () => {
+          const result = await buildPostMarkdown(postEl, await getSettings());
+          await copyToClipboard(result.markdown);
+          showToast("\u2705 \u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F");
+        }
+      })
+    );
+    wrapper.appendChild(
+      createActionButton({
+        title: "\u4E0B\u8F7D\u672C\u697C\u4E3A Markdown \u6587\u4EF6",
+        label: "\u4E0B\u8F7D",
+        icon: DOWNLOAD_ICON,
+        errorContext: "\u4E0B\u8F7D\u697C\u5C42",
+        action: async () => {
+          const result = await buildPostMarkdown(postEl, await getSettings());
+          const filename = sanitizeFilename(
+            `${getTopicTitle()}_#${result.meta.postNumber || "post"}.md`
+          );
+          downloadFile(result.markdown, filename);
+          showToast(`\u2705 \u5DF2\u4E0B\u8F7D ${filename}`);
+        }
+      })
+    );
+    return wrapper;
+  }
+  function injectButtons(settings) {
     if (!settings.enablePostActions) {
       removeInjectedActions();
       return;
     }
     getPostElements().forEach((postEl) => {
-      if (postEl.querySelector("." + SHADOW_HOST_CLASS)) return;
+      if (postEl.querySelector(`.${SHADOW_HOST_CLASS}`)) return;
       const actionsEl = postEl.querySelector(".post-controls, .actions");
       if (!actionsEl) return;
       const host = document.createElement("div");
@@ -1211,60 +733,10 @@ ${lines}
       const styleEl = document.createElement("style");
       styleEl.textContent = BUTTON_SHADOW_STYLE;
       shadow.appendChild(styleEl);
-      const wrapper = document.createElement("div");
-      wrapper.className = "ldcopy-actions";
-      const copyBtn = document.createElement("button");
-      copyBtn.className = "ldcopy-btn";
-      copyBtn.title = "\u590D\u5236\u672C\u697C\u539F\u59CB Markdown";
-      copyBtn.innerHTML = `${COPY_ICON} <span>\u590D\u5236</span>`;
-      copyBtn.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        copyBtn.disabled = true;
-        try {
-          const latestSettings2 = await getSettings();
-          const result = await buildPostMarkdown(postEl, latestSettings2);
-          await copyToClipboard(result.markdown);
-          showToast("\u2705 \u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F");
-        } catch (err) {
-          handleError(err, "\u590D\u5236\u697C\u5C42");
-        } finally {
-          copyBtn.disabled = false;
-        }
-      });
-      const downloadBtn = document.createElement("button");
-      downloadBtn.className = "ldcopy-btn";
-      downloadBtn.title = "\u4E0B\u8F7D\u672C\u697C\u4E3A Markdown \u6587\u4EF6";
-      downloadBtn.innerHTML = `${DOWNLOAD_ICON} <span>\u4E0B\u8F7D</span>`;
-      downloadBtn.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        downloadBtn.disabled = true;
-        try {
-          const latestSettings2 = await getSettings();
-          const result = await buildPostMarkdown(postEl, latestSettings2);
-          const title = getTopicTitle();
-          const filename = sanitizeFilename(
-            `${title}_#${result.meta.postNumber || "post"}.md`
-          );
-          downloadFile(result.markdown, filename);
-          showToast(`\u2705 \u5DF2\u4E0B\u8F7D ${filename}`);
-        } catch (err) {
-          handleError(err, "\u4E0B\u8F7D\u697C\u5C42");
-        } finally {
-          downloadBtn.disabled = false;
-        }
-      });
-      wrapper.appendChild(copyBtn);
-      wrapper.appendChild(downloadBtn);
-      shadow.appendChild(wrapper);
+      shadow.appendChild(createActions(postEl));
       actionsEl.appendChild(host);
     });
   }
-  var buttons = {
-    injectButtons,
-    removeInjectedActions
-  };
 
   // src/content/base64.ts
   function decodeBase64Utf8(text) {
@@ -1293,8 +765,30 @@ ${lines}
       "align-items: center"
     ].join("; ");
   }
-  async function injectBase64Button() {
-    const settings = await getSettings();
+  function createSelectionToolButton(options) {
+    const button = document.createElement("button");
+    button.className = `btn btn-flat ${options.className}`;
+    button.title = options.title;
+    button.innerHTML = options.content;
+    styleSelectionToolButton(button, options.order);
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        const selectedText = getSelectedText();
+        if (!selectedText) {
+          showToast("\u274C \u672A\u9009\u4E2D\u6587\u5B57");
+          return;
+        }
+        await copyToClipboard(options.transform(selectedText));
+        showToast(options.successMessage);
+      } catch (err) {
+        handleError(err, options.errorContext);
+      }
+    });
+    return button;
+  }
+  function injectBase64Button(settings) {
     if (!settings.enableBase64Decode) {
       document.querySelectorAll(".ldcopy-base64-btn, .ldcopy-strip-chinese-btn").forEach((el) => el.remove());
       return;
@@ -1303,58 +797,30 @@ ${lines}
     if (!quoteContainer) return;
     let base64Btn = quoteContainer.querySelector(".ldcopy-base64-btn");
     if (!base64Btn) {
-      base64Btn = document.createElement("button");
-      base64Btn.className = "btn btn-flat ldcopy-base64-btn";
-      base64Btn.title = "Base64 \u89E3\u7801\u5E76\u590D\u5236";
-      base64Btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="vertical-align: middle; margin-right: 2px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>base64';
-      styleSelectionToolButton(base64Btn, -2);
-      base64Btn.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        try {
-          const selectedText = getSelectedText();
-          if (!selectedText) {
-            showToast("\u274C \u672A\u9009\u4E2D\u6587\u5B57");
-            return;
-          }
-          await copyToClipboard(decodeBase64Utf8(selectedText));
-          showToast("\u2705 Base64 \u89E3\u7801\u5DF2\u590D\u5236");
-        } catch (err) {
-          handleError(err, "Base64 \u89E3\u7801");
-        }
+      base64Btn = createSelectionToolButton({
+        className: "ldcopy-base64-btn",
+        title: "Base64 \u89E3\u7801\u5E76\u590D\u5236",
+        content: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="vertical-align: middle; margin-right: 2px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>base64',
+        order: -2,
+        transform: decodeBase64Utf8,
+        successMessage: "\u2705 Base64 \u89E3\u7801\u5DF2\u590D\u5236",
+        errorContext: "Base64 \u89E3\u7801"
       });
       quoteContainer.insertBefore(base64Btn, quoteContainer.firstChild);
     }
     if (!quoteContainer.querySelector(".ldcopy-strip-chinese-btn")) {
-      const stripChineseBtn = document.createElement("button");
-      stripChineseBtn.className = "btn btn-flat ldcopy-strip-chinese-btn";
-      stripChineseBtn.title = "\u53BB\u6389\u9009\u4E2D\u6587\u672C\u4E2D\u7684\u4E2D\u6587\u5E76\u590D\u5236";
-      stripChineseBtn.textContent = "\u53BB\u4E2D\u6587";
-      styleSelectionToolButton(stripChineseBtn, -1);
-      stripChineseBtn.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        try {
-          const selectedText = getSelectedText();
-          if (!selectedText) {
-            showToast("\u274C \u672A\u9009\u4E2D\u6587\u5B57");
-            return;
-          }
-          const strippedText = stripChineseText(selectedText);
-          await copyToClipboard(strippedText);
-          showToast("\u2705 \u5DF2\u53BB\u4E2D\u6587\u5E76\u590D\u5236");
-        } catch (err) {
-          handleError(err, "\u53BB\u4E2D\u6587");
-        }
+      const stripChineseBtn = createSelectionToolButton({
+        className: "ldcopy-strip-chinese-btn",
+        title: "\u53BB\u6389\u9009\u4E2D\u6587\u672C\u4E2D\u7684\u4E2D\u6587\u5E76\u590D\u5236",
+        content: "\u53BB\u4E2D\u6587",
+        order: -1,
+        transform: stripChineseText,
+        successMessage: "\u2705 \u5DF2\u53BB\u4E2D\u6587\u5E76\u590D\u5236",
+        errorContext: "\u53BB\u4E2D\u6587"
       });
       base64Btn.insertAdjacentElement("afterend", stripChineseBtn);
     }
   }
-  var base64 = {
-    decodeBase64Utf8,
-    stripChineseText,
-    injectBase64Button
-  };
 
   // src/content/messages.ts
   function assertExportResult(result) {
@@ -1365,114 +831,100 @@ ${lines}
     if (result.failureCount === 0) return "\u2705";
     return `\u26A0\uFE0F \u5DF2\u5904\u7406 ${result.successCount}/${result.total} \u4E2A\u697C\u5C42\uFF0C${result.failureCount} \u4E2A\u5931\u8D25\u3002`;
   }
-  function registerMessageHandlers(refreshEnhancements2) {
+  async function exportTopic(action) {
+    const settings = await getCachedSettings();
+    const result = await collectLoadedPosts(settings);
+    assertExportResult(result);
+    const title = getTopicTitle();
+    const markdown = formatTopicMd(result.posts, getTopicUrl(), settings);
+    const prefix = getExportToastPrefix(result);
+    if (action === "copy") {
+      await copyToClipboard(markdown);
+      return {
+        response: { success: true, ...result },
+        toast: result.failureCount === 0 ? "\u2705 \u5DF2\u590D\u5236\u6574\u4E2A\u4E3B\u9898" : `${prefix} \u5DF2\u590D\u5236`
+      };
+    }
+    const filename = sanitizeFilename(`${title}.md`);
+    downloadFile(markdown, filename);
+    return {
+      response: { success: true, filename, ...result },
+      toast: result.failureCount === 0 ? `\u2705 \u5DF2\u4E0B\u8F7D ${filename}` : `${prefix} \u5DF2\u4E0B\u8F7D ${filename}`
+    };
+  }
+  async function handleTopicExport(action, sendResponse) {
+    try {
+      const outcome = await exportTopic(action);
+      sendResponse(outcome.response);
+      showToast(outcome.toast);
+    } catch (err) {
+      sendResponse({ success: false, error: getErrorMessage(err) });
+      handleError(err, action === "copy" ? "\u590D\u5236\u4E3B\u9898" : "\u4E0B\u8F7D\u4E3B\u9898");
+    }
+  }
+  function registerMessageHandlers() {
     chrome.runtime.onMessage.addListener(
       (msg, _sender, sendResponse) => {
         if (msg.action === "getInfo") {
           const postEls = getPostElements();
           sendResponse({
             title: getTopicTitle(),
-            url: getTopicUrl(),
             postCount: postEls.length
           });
           return true;
         }
-        if (msg.action === "refreshEnhancements") {
-          refreshEnhancements2?.();
-          sendResponse({ success: true });
-          return true;
-        }
         if (msg.action === "copyTopic") {
-          (async () => {
-            try {
-              const settings = await getCachedSettings();
-              const result = await collectLoadedPosts(settings);
-              assertExportResult(result);
-              const md = formatTopicMd(
-                result.posts,
-                getTopicTitle(),
-                getTopicUrl(),
-                settings
-              );
-              await copyToClipboard(md);
-              sendResponse({ success: true, ...result });
-              const prefix = getExportToastPrefix(result);
-              showToast(result.failureCount === 0 ? "\u2705 \u5DF2\u590D\u5236\u6574\u4E2A\u4E3B\u9898" : `${prefix} \u5DF2\u590D\u5236`);
-            } catch (err) {
-              sendResponse({ success: false, error: err.message });
-              handleError(err, "\u590D\u5236\u4E3B\u9898");
-            }
-          })();
+          void handleTopicExport("copy", sendResponse);
           return true;
         }
         if (msg.action === "downloadTopic") {
-          (async () => {
-            try {
-              const settings = await getCachedSettings();
-              const result = await collectLoadedPosts(settings);
-              assertExportResult(result);
-              const title = getTopicTitle();
-              const md = formatTopicMd(result.posts, title, getTopicUrl(), settings);
-              const filename = sanitizeFilename(`${title}.md`);
-              downloadFile(md, filename);
-              sendResponse({ success: true, filename, ...result });
-              const prefix = getExportToastPrefix(result);
-              showToast(
-                result.failureCount === 0 ? `\u2705 \u5DF2\u4E0B\u8F7D ${filename}` : `${prefix} \u5DF2\u4E0B\u8F7D ${filename}`
-              );
-            } catch (err) {
-              sendResponse({ success: false, error: err.message });
-              handleError(err, "\u4E0B\u8F7D\u4E3B\u9898");
-            }
-          })();
+          void handleTopicExport("download", sendResponse);
           return true;
         }
         return false;
       }
     );
   }
-  var messages = {
-    registerMessageHandlers
-  };
 
   // src/content/refresh-state.ts
-  var RefreshState = class {
-    refreshTimer = null;
-    base64Timer = null;
-    inFlight = false;
+  var RefreshScheduler = class {
+    constructor(task, defaultDelay) {
+      this.task = task;
+      this.defaultDelay = defaultDelay;
+    }
+    task;
+    defaultDelay;
+    timer = null;
+    inFlight = null;
     pending = false;
-    // 去抖：清掉旧定时器，排一个新的。
-    scheduleRefresh(callback, delay = 150) {
-      if (this.refreshTimer) clearTimeout(this.refreshTimer);
-      this.refreshTimer = setTimeout(() => {
-        this.refreshTimer = null;
-        callback();
+    schedule(delay = this.defaultDelay) {
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        void this.run();
       }, delay);
     }
-    scheduleBase64(callback, delay = 100) {
-      if (this.base64Timer) clearTimeout(this.base64Timer);
-      this.base64Timer = setTimeout(() => {
-        this.base64Timer = null;
-        callback();
-      }, delay);
+    run() {
+      if (this.timer) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
+      if (this.inFlight) {
+        this.pending = true;
+        return this.inFlight;
+      }
+      this.inFlight = this.runUntilIdle();
+      return this.inFlight;
     }
-    // 重入守卫：成功获取返回 true 并标记 in-flight；并发调用返回 false 由调用方标记 pending。
-    tryAcquire() {
-      if (this.inFlight) return false;
-      this.inFlight = true;
-      return true;
-    }
-    release() {
-      this.inFlight = false;
-    }
-    hasPending() {
-      return this.pending;
-    }
-    markPending() {
-      this.pending = true;
-    }
-    clearPending() {
-      this.pending = false;
+    async runUntilIdle() {
+      try {
+        do {
+          this.pending = false;
+          await this.task();
+        } while (this.pending);
+      } finally {
+        this.inFlight = null;
+      }
     }
   };
 
@@ -1516,91 +968,58 @@ ${lines}
   };
 
   // src/content/index.ts
-  var refreshState = new RefreshState();
-  var latestSettings = null;
-  async function refreshEnhancements(settings) {
-    if (settings) {
-      latestSettings = settings;
-      if (settings.enableSplitLayout) layout.prepareTopicSplitLayout();
-    }
-    if (!refreshState.tryAcquire()) {
-      refreshState.markPending();
-      return;
-    }
-    Promise.resolve().then(async () => {
-      await layout.applyTopicSplitLayout(settings);
-      await buttons.injectButtons();
-      await base64.injectBase64Button();
-    }).catch(() => {
-    }).finally(() => {
-      refreshState.release();
-      if (refreshState.hasPending()) {
-        refreshState.clearPending();
-        scheduleRefreshEnhancements();
-      }
+  var selectionToolsEnhancement = {
+    refresh: injectBase64Button,
+    ownedSelectors: [".ldcopy-base64-btn", ".ldcopy-strip-chinese-btn"]
+  };
+  var enhancements = [
+    {
+      refresh: injectButtons,
+      ownedSelectors: [".ldtk-shadow-host"]
+    },
+    selectionToolsEnhancement
+  ];
+  var toolkitSelector = [
+    "#ldcopy-toast-host",
+    ...enhancements.flatMap((enhancement) => enhancement.ownedSelectors)
+  ].join(", ");
+  async function runEnhancements(items) {
+    const settings = await getCachedSettings();
+    await Promise.allSettled(
+      items.map(({ refresh }) => Promise.resolve().then(() => refresh(settings)))
+    );
+  }
+  var enhancementScheduler = new RefreshScheduler(() => runEnhancements(enhancements), 150);
+  var selectionToolsScheduler = new RefreshScheduler(
+    () => runEnhancements([selectionToolsEnhancement]),
+    100
+  );
+  function isToolkitMutation(mutation) {
+    const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+    if (changedNodes.length === 0) return false;
+    return changedNodes.every((node) => {
+      if (!(node instanceof Element)) return false;
+      return node.matches(toolkitSelector) || Boolean(node.closest(toolkitSelector));
     });
-  }
-  function scheduleRefreshEnhancements(delay = 150) {
-    refreshState.scheduleRefresh(refreshEnhancements, delay);
-  }
-  function scheduleBase64ButtonRefresh(delay = 100) {
-    refreshState.scheduleBase64(() => {
-      base64.injectBase64Button();
-    }, delay);
   }
   function bindDynamicPageEvents() {
     document.addEventListener("selectionchange", () => {
-      scheduleBase64ButtonRefresh();
+      selectionToolsScheduler.schedule();
     });
     const target = document.body;
     const managedObserver = new ManagedObserver(
       target,
       {
         childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ["aria-expanded"]
+        subtree: true
       },
       (mutations) => {
-        const relevantMutations = mutations.filter(
-          (mutation) => mutation.type !== "attributes" || mutation.target instanceof Element && mutation.target.matches("button.btn-sidebar-toggle")
-        );
-        if (!relevantMutations.length) return;
-        const requiresLayoutRebuild = relevantMutations.some(
-          (mutation) => Array.from(mutation.addedNodes || []).concat(Array.from(mutation.removedNodes || [])).some(
-            (node) => node.nodeType === Node.ELEMENT_NODE && !isExpectedLayoutMutation(node) && (node.matches(".post-stream, #post_stream, #post-stream") || node.matches('.topic-post[data-post-number="1"]') || Boolean(node.querySelector('.topic-post[data-post-number="1"]')))
-          )
-        );
-        const onlyToolkitChanges = relevantMutations.every((mutation) => {
-          if (mutation.type === "attributes") return false;
-          const changedNodes = Array.from(mutation.addedNodes || []).concat(
-            Array.from(mutation.removedNodes || [])
-          );
-          if (!changedNodes.length) return false;
-          return changedNodes.every((node) => {
-            if (isExpectedLayoutMutation(node)) return true;
-            if (node.nodeType !== Node.ELEMENT_NODE) return true;
-            const element = node;
-            if (element.matches(
-              '.ldtk-shadow-host, [id^="ldcopy-"], .ldtk-topic-split-wrapper, .ldtk-topic-article-pane, .ldtk-topic-article-actions, .ldtk-topic-header-title'
-            )) {
-              return true;
-            }
-            return Boolean(element.closest(".ldtk-shadow-host, .ldtk-topic-header-title"));
-          });
-        });
-        if (!onlyToolkitChanges) {
-          if (requiresLayoutRebuild && latestSettings?.enableSplitLayout) {
-            layout.prepareTopicSplitLayout();
-          }
-          scheduleRefreshEnhancements(requiresLayoutRebuild ? 0 : 150);
-        }
+        if (!mutations.every(isToolkitMutation)) enhancementScheduler.schedule();
       }
     );
     managedObserver.start();
     const handleNavigation = () => {
-      if (latestSettings?.enableSplitLayout) layout.prepareTopicSplitLayout();
-      scheduleRefreshEnhancements(0);
+      enhancementScheduler.schedule(0);
     };
     window.addEventListener("discourse-navigate-completed", handleNavigation);
     window.addEventListener("page:change", handleNavigation);
@@ -1608,14 +1027,13 @@ ${lines}
       if (event.persisted) handleNavigation();
     });
   }
-  function init(initialSettings) {
-    messages.registerMessageHandlers(refreshEnhancements);
+  function init() {
+    registerMessageHandlers();
     bindDynamicPageEvents();
-    onSettingsChanged((settings) => {
-      latestSettings = settings;
-      void refreshEnhancements(settings);
+    onSettingsChanged(() => {
+      void enhancementScheduler.run();
     });
-    void refreshEnhancements(initialSettings);
+    void enhancementScheduler.run();
   }
   function waitForDomReady() {
     if (document.readyState !== "loading") return Promise.resolve();
@@ -1624,12 +1042,8 @@ ${lines}
     });
   }
   async function bootstrap() {
-    layout.prepareTopicSplitLayout();
-    const initialSettings = await getCachedSettings();
-    latestSettings = initialSettings;
-    if (!initialSettings.enableSplitLayout) layout.restoreTopicSplitLayout();
-    await waitForDomReady();
-    init(initialSettings);
+    await Promise.all([getCachedSettings(), waitForDomReady()]);
+    init();
   }
   void bootstrap();
 })();

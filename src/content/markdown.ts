@@ -1,7 +1,7 @@
 /* Linux.do 工具箱 — Markdown 转换模块 */
 
 // 检测内容是否为 HTML（而非纯 Markdown）。
-function isHtmlContent(text: string): boolean {
+export function isHtmlContent(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
 
@@ -18,7 +18,7 @@ function isHtmlContent(text: string): boolean {
   return /^<(?!p>|\/p>)[a-zA-Z][\s\S]*>/.test(trimmed);
 }
 
-function htmlTableToMarkdown(tableEl: HTMLElement): string {
+export function htmlTableToMarkdown(tableEl: HTMLElement): string {
   const rows: string[][] = [];
   tableEl.querySelectorAll('tr').forEach((tr) => {
     const cells = Array.from(tr.querySelectorAll('td, th')).map((cell) => {
@@ -45,7 +45,7 @@ function htmlTableToMarkdown(tableEl: HTMLElement): string {
 }
 
 // 轻量 HTML → Markdown 转换器，覆盖 Discourse 常见结构。
-function htmlToMarkdown(html: string): string {
+export function htmlToMarkdown(html: string): string {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
 
@@ -230,11 +230,3 @@ export function ensureMarkdown(rawContent: string): string {
 export function normalizeDiscourseMd(md: string): string {
   return md.replace(/!\[([^\]]+?)\|(\d+x\d+(?:x\d+)?(?:\|[^\]]*)?)\]\(/g, '![$1](');
 }
-
-export const markdown = {
-  isHtmlContent,
-  htmlToMarkdown,
-  htmlTableToMarkdown,
-  ensureMarkdown,
-  normalizeDiscourseMd,
-};
