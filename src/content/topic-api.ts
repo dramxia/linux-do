@@ -14,6 +14,33 @@ export interface TopicPostReaction {
   id: string;
   type?: string;
   count: number;
+  emoji_url?: string;
+  users?: TopicParticipant[];
+}
+
+export interface TopicParticipant {
+  id?: number;
+  username: string;
+  name?: string | null;
+  avatar_template?: string;
+  post_count?: number;
+  primary_group_name?: string | null;
+}
+
+export interface TopicLink {
+  url?: string;
+  title?: string;
+  clicks?: number;
+  internal?: boolean;
+  attachment?: boolean;
+}
+
+export interface TopicBoost {
+  id: number;
+  cooked: string;
+  can_delete?: boolean;
+  can_flag?: boolean;
+  user?: TopicParticipant | null;
 }
 
 export interface TopicPostCurrentReaction {
@@ -41,6 +68,8 @@ export interface TopicPost {
   reaction_users_count?: number;
   current_user_reaction?: TopicPostCurrentReaction | null;
   current_user_used_main_reaction?: boolean;
+  boosts?: TopicBoost[];
+  can_boost?: boolean;
   can_edit?: boolean;
   can_delete?: boolean;
   can_recover?: boolean;
@@ -61,8 +90,15 @@ export interface TopicResponse {
   posts_count: number;
   highest_post_number?: number;
   last_read_post_number?: number;
+  views?: number;
+  reply_count?: number;
+  like_count?: number;
+  participant_count?: number;
+  word_count?: number;
   details?: {
     can_create_post?: boolean;
+    participants?: TopicParticipant[];
+    links?: TopicLink[];
   };
   post_stream: {
     posts: TopicPost[];
@@ -184,7 +220,7 @@ export async function fetchPostReplies(
 
 export class TopicDataSource {
   readonly topic: TopicResponse;
-  readonly article: TopicPost;
+  article: TopicPost;
   readonly commentPostIds: readonly number[];
   private readonly cache = new Map<number, TopicPost>();
   private readonly cacheByPostNumber = new Map<number, TopicPost>();
@@ -290,6 +326,7 @@ export class TopicDataSource {
       return null;
     }
     this.cachePost(post);
+    if (post.post_number === 1) this.article = post;
     return post;
   }
 

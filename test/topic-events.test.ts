@@ -27,6 +27,36 @@ describe('topic event bridge validation', () => {
     ).toEqual({ topicId: 123, type: 'deleted', postId: 456 });
   });
 
+  it('accepts reaction updates with a safe native emoji image URL', () => {
+    expect(
+      parseTopicEventDetail({
+        topicId: 123,
+        type: 'acted',
+        postId: 456,
+        currentReactionId: 'cry',
+        currentReactionUrl: 'https://cdn.linux.do/images/emoji/twitter/cry.png',
+      }),
+    ).toEqual({
+      topicId: 123,
+      type: 'acted',
+      postId: 456,
+      currentReactionId: 'cry',
+      currentReactionUrl: 'https://cdn.linux.do/images/emoji/twitter/cry.png',
+    });
+  });
+
+  it('rejects unsafe reaction image URLs', () => {
+    expect(
+      parseTopicEventDetail({
+        topicId: 123,
+        type: 'acted',
+        postId: 456,
+        currentReactionId: 'cry',
+        currentReactionUrl: 'javascript:alert(1)',
+      }),
+    ).toBeNull();
+  });
+
   it('rejects malformed serialized payloads', () => {
     expect(parseTopicEventDetail('{broken')).toBeNull();
   });
@@ -46,6 +76,34 @@ describe('topic event bridge validation', () => {
       updatedAt: '2026-08-22T00:00:00Z',
     });
   });
+
+  it('accepts the acted message published after a reaction toggle', () => {
+    expect(
+      sanitizeTopicMessage(123, {
+        type: 'acted',
+        id: 456,
+        topic_id: 123,
+      }),
+    ).toEqual({
+      topicId: 123,
+      type: 'acted',
+      postId: 456,
+    });
+  });
+
+  it.each(['boost_added', 'boost_removed'] as const)(
+    'accepts the %s message published by discourse-boosts',
+    (type) => {
+      expect(
+        sanitizeTopicMessage(123, {
+          type,
+          id: 456,
+          topic_id: 123,
+          boost: { id: 99, cooked: '<p>great</p>' },
+        }),
+      ).toEqual({ topicId: 123, type, postId: 456 });
+    },
+  );
 
   it('rejects messages for a different topic', () => {
     expect(sanitizeTopicMessage(123, { type: 'created', id: 456, topic_id: 999 })).toBeNull();

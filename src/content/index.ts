@@ -6,7 +6,7 @@ import { getCachedSettings, onSettingsChanged } from '../common/settings';
 import type { DiscourseSettings } from '../common/settings';
 import { RefreshScheduler } from './refresh-state';
 import { ManagedObserver } from './managed-observer';
-import { refreshTopicLayout, topicLayoutOwnedSelectors } from './topic-layout';
+import { prepareTopicLayout, refreshTopicLayout, topicLayoutOwnedSelectors } from './topic-layout';
 
 interface Enhancement {
   refresh: (settings: DiscourseSettings) => void | Promise<void>;
@@ -104,7 +104,10 @@ function waitForDomReady(): Promise<void> {
 }
 
 async function bootstrap(): Promise<void> {
-  await Promise.all([getCachedSettings(), waitForDomReady()]);
+  prepareTopicLayout();
+  const settings = await getCachedSettings();
+  prepareTopicLayout(settings);
+  await waitForDomReady();
   init();
 }
 

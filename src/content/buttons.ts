@@ -132,6 +132,17 @@ function createActions(postEl: HTMLElement): HTMLDivElement {
   return wrapper;
 }
 
+function getActionsElement(postEl: HTMLElement): Element | null {
+  const localActions = postEl.querySelector('.post-controls, .actions');
+  if (localActions) return localActions;
+  if (!postEl.classList.contains('ldtk-article-content')) return null;
+  return (
+    postEl
+      .closest('.ldtk-article-pane')
+      ?.querySelector('.ldtk-article-footer .post-controls, .ldtk-article-footer .actions') ?? null
+  );
+}
+
 export function injectButtons(settings: DiscourseSettings): void {
   if (!settings.enablePostActions) {
     removeInjectedActions();
@@ -139,10 +150,9 @@ export function injectButtons(settings: DiscourseSettings): void {
   }
 
   getPostElements().forEach((postEl) => {
-    if (postEl.querySelector(`.${SHADOW_HOST_CLASS}`)) return;
-
-    const actionsEl = postEl.querySelector('.post-controls, .actions');
+    const actionsEl = getActionsElement(postEl);
     if (!actionsEl) return;
+    if (actionsEl.querySelector(`.${SHADOW_HOST_CLASS}`)) return;
 
     const host = document.createElement('div');
     host.className = SHADOW_HOST_CLASS;

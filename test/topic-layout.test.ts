@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, type DiscourseSettings } from '../src/common/settings';
-import { refreshTopicLayout } from '../src/content/topic-layout';
+import { prepareTopicLayout, refreshTopicLayout } from '../src/content/topic-layout';
 import type { TopicPost, TopicResponse } from '../src/content/topic-api';
 import {
   parseTopicActionRequest,
+  parseTopicReactionPickerRequest,
   TOPIC_ACTION_REQUEST_NAME,
   TOPIC_ACTION_RESULT_NAME,
+  TOPIC_REACTION_PICKER_REQUEST_NAME,
 } from '../src/content/topic-actions';
+import { TOPIC_EVENT_NAME } from '../src/content/topic-events';
 
 const enabledSettings: DiscourseSettings = {
   ...DEFAULT_SETTINGS,
@@ -61,6 +64,21 @@ afterEach(async () => {
 });
 
 describe('topic split layout lifecycle', () => {
+  it('hides the native topic while the initial split layout is pending', async () => {
+    expect(prepareTopicLayout(enabledSettings)).toBe(true);
+    expect(document.documentElement.classList.contains('ldtk-split-reading-pending')).toBe(true);
+    expect(getComputedStyle(document.getElementById('main-outlet') as HTMLElement).visibility).toBe(
+      'hidden',
+    );
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
+    await refreshTopicLayout(enabledSettings);
+
+    expect(document.documentElement.classList.contains('ldtk-split-reading-pending')).toBe(false);
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
+    expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
+  });
+
   it('mounts article post 1 on the left and comments on the right', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
     await refreshTopicLayout(enabledSettings);
@@ -72,11 +90,269 @@ describe('topic split layout lifecycle', () => {
     expect(root?.querySelectorAll('.ldtk-comments-list .topic-post')).toHaveLength(2);
     const grid = root?.querySelector<HTMLElement>('.ldtk-reading-grid');
     const articlePane = root?.querySelector<HTMLElement>('.ldtk-article-pane');
+    const articleScroll = root?.querySelector<HTMLElement>('.ldtk-article-scroll');
+    const articleFooter = root?.querySelector<HTMLElement>('.ldtk-article-footer');
     const articlePost = root?.querySelector<HTMLElement>('.ldtk-article-content.topic-post');
     expect(getComputedStyle(grid as HTMLElement).display).toBe('grid');
+    expect(getComputedStyle(articlePane as HTMLElement).display).toBe('flex');
     expect(getComputedStyle(articlePane as HTMLElement).overflowX).toBe('hidden');
-    expect(getComputedStyle(articlePane as HTMLElement).overflowY).toBe('auto');
+    expect(getComputedStyle(articlePane as HTMLElement).overflowY).toBe('hidden');
+    expect(getComputedStyle(articleScroll as HTMLElement).overflowY).toBe('auto');
+    expect(articleScroll?.contains(articlePost as HTMLElement)).toBe(true);
+    expect(articleScroll?.contains(articleFooter as HTMLElement)).toBe(false);
+    expect(articlePane?.lastElementChild).toBe(articleFooter);
     expect(getComputedStyle(articlePost as HTMLElement).display).toBe('block');
+  });
+
+  it('keeps the current split layout visible until a forced refresh is ready', async () => {
+    let resolveRefresh: (response: Response) => void = () => undefined;
+    const pendingRefresh = new Promise<Response>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(topic({ title: 'Before refresh' })))
+      .mockReturnValueOnce(pendingRefresh);
+    vi.stubGlobal('fetch', fetchMock);
+    await refreshTopicLayout(enabledSettings);
+
+    const previousRoot = document.querySelector('.ldtk-topic-reading-root');
+    const refreshPromise = refreshTopicLayout(enabledSettings, true);
+    await Promise.resolve();
+
+    expect(previousRoot?.isConnected).toBe(true);
+    expect(document.querySelectorAll('.ldtk-topic-reading-root')).toHaveLength(1);
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
+    expect(getComputedStyle(document.getElementById('main-outlet') as HTMLElement).visibility).toBe(
+      'hidden',
+    );
+
+    resolveRefresh(jsonResponse(topic({ title: 'After refresh' })));
+    await refreshPromise;
+
+    const nextRoot = document.querySelector('.ldtk-topic-reading-root');
+    expect(previousRoot?.isConnected).toBe(false);
+    expect(nextRoot).not.toBe(previousRoot);
+    expect(nextRoot?.querySelector('h1')?.textContent).toBe('After refresh');
+    expect(document.querySelectorAll('.ldtk-topic-reading-root')).toHaveLength(1);
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
+  });
+
+  it('keeps the current split layout when a forced refresh fails', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(topic()))
+      .mockRejectedValueOnce(new Error('refresh failed'));
+    vi.stubGlobal('fetch', fetchMock);
+    await refreshTopicLayout(enabledSettings);
+    const previousRoot = document.querySelector('.ldtk-topic-reading-root');
+
+    await refreshTopicLayout(enabledSettings, true);
+
+    expect(previousRoot?.isConnected).toBe(true);
+    expect(document.querySelector('.ldtk-topic-reading-root')).toBe(previousRoot);
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
+  });
+
+  it('places the complete article actions and topic information after the cooked body', async () => {
+    const article: TopicPost = {
+      ...post(1, 1),
+      reply_count: 7,
+      reaction_users_count: 199,
+      reactions: [{ id: 'heart', type: 'emoji', count: 199 }],
+      actions_summary: [{ id: 2, count: 199, can_act: true, acted: false }],
+    };
+    const directReply: TopicPost = {
+      ...post(2, 2),
+      cooked:
+        '<p>等一等图片，这是一段必须完整显示且允许自动换行的回复内容 <img class="emoji" alt=":white_check_mark:" src="/check.png"></p>',
+      avatar_template: '/avatar/{size}/reply.png',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        if (String(input).includes('/posts/1/replies')) {
+          return Promise.resolve(jsonResponse([directReply]));
+        }
+        return Promise.resolve(
+          jsonResponse(
+            topic({
+              views: 10_700,
+              like_count: 484,
+              participant_count: 2_700,
+              word_count: 49_800,
+              details: {
+                can_create_post: true,
+                links: [{ url: 'https://example.com' }, { url: 'https://linux.do' }],
+                participants: [
+                  { username: 'alice', name: 'Alice', avatar_template: '/avatar/{size}/alice.png' },
+                ],
+              },
+              post_stream: { posts: [article, directReply, post(3, 3)], stream: [1, 2, 3] },
+            }),
+          ),
+        );
+      }),
+    );
+
+    await refreshTopicLayout({ ...enabledSettings, enablePostActions: true });
+
+    const articlePane = document.querySelector('.ldtk-article-pane');
+    const articleScroll = articlePane?.querySelector('.ldtk-article-scroll');
+    const footer = articlePane?.querySelector('.ldtk-article-footer');
+    expect(footer).toBe(articlePane?.lastElementChild);
+    expect(articleScroll?.contains(footer as Node)).toBe(false);
+    expect(getComputedStyle(footer as HTMLElement).flexGrow).toBe('0');
+    expect(footer?.querySelector('.post-action-menu__like-count')?.textContent).toContain('199');
+    expect(footer?.querySelector('.post-action-menu__show-replies')?.textContent).toContain(
+      '7 个回复',
+    );
+    expect(footer?.querySelector('.post-action-menu__like')).not.toBeNull();
+    expect(footer?.querySelector('.post-action-menu__copy-link')).not.toBeNull();
+    expect(footer?.querySelector('.post-action-menu__show-more')).not.toBeNull();
+    expect(footer?.querySelector('.post-action-menu__reply')).not.toBeNull();
+    expect(footer?.querySelectorAll('.ldtk-shadow-host')).toHaveLength(1);
+    const replySummary = footer?.querySelector<HTMLElement>('.ldtk-article-reply-summary');
+    const replyChip = replySummary?.querySelector<HTMLButtonElement>('.ldtk-article-reply-chip');
+    const replyContent = replyChip?.querySelector<HTMLElement>('.ldtk-article-reply-content');
+    expect(replyContent?.textContent?.trim()).toBe(
+      '等一等图片，这是一段必须完整显示且允许自动换行的回复内容',
+    );
+    expect(getComputedStyle(replyContent as HTMLElement).whiteSpace).toBe('normal');
+    expect(getComputedStyle(replyContent as HTMLElement).overflowWrap).toBe('anywhere');
+    expect(replyChip?.dataset.targetFloor).toBe('2');
+    expect(replyChip?.querySelector('.ldtk-article-reply-avatar')?.getAttribute('src')).toBe(
+      '/avatar/90/reply.png',
+    );
+    const emoji = replyContent?.querySelector<HTMLImageElement>('img.emoji');
+    expect(emoji?.getAttribute('src')).toBe('/check.png');
+    expect(emoji?.alt).toBe(':white_check_mark:');
+    expect(emoji?.width).toBe(18);
+    expect(emoji?.height).toBe(18);
+    expect(replyChip?.getAttribute('aria-label')).toContain(':white_check_mark:');
+    const repliesButton = footer?.querySelector<HTMLButtonElement>(
+      '.post-action-menu__show-replies',
+    );
+    expect(repliesButton?.getAttribute('aria-expanded')).toBe('true');
+    repliesButton?.click();
+    expect(replySummary?.hidden).toBe(true);
+    repliesButton?.click();
+    expect(replySummary?.hidden).toBe(false);
+    expect(footer?.querySelector('.ldtk-topic-summary')?.textContent).toContain(
+      '10.7k浏览量484赞2链接2.7k用户249 分钟阅读时间',
+    );
+    expect(footer?.querySelector('.ldtk-topic-participants a')?.getAttribute('href')).toBe(
+      '/u/alice',
+    );
+  });
+
+  it('renders complete Boost content and the native Boost triggers in split mode', async () => {
+    const article: TopicPost = {
+      ...post(1, 1),
+      can_boost: true,
+      boosts: [
+        {
+          id: 91,
+          cooked:
+            '<p>这是一条需要完整显示的 Boost 内容 <img class="emoji" alt=":rocket:" src="/rocket.png"></p>',
+          user: {
+            id: 11,
+            username: 'booster',
+            name: 'Booster',
+            avatar_template: '/avatar/{size}/booster.png',
+          },
+        },
+      ],
+    };
+    const comment: TopicPost = { ...post(2, 2), boosts: [], can_boost: true };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          topic({
+            post_stream: { posts: [article, comment, post(3, 3)], stream: [1, 2, 3] },
+          }),
+        ),
+      ),
+    );
+
+    await refreshTopicLayout(enabledSettings);
+
+    const footer = document.querySelector('.ldtk-article-footer');
+    const bubble = footer?.querySelector<HTMLElement>('.discourse-boosts__bubble');
+    const cooked = bubble?.querySelector<HTMLElement>('.discourse-boosts__cooked');
+    expect(cooked?.textContent?.trim()).toBe('这是一条需要完整显示的 Boost 内容');
+    expect(getComputedStyle(cooked as HTMLElement).whiteSpace).toBe('normal');
+    expect(getComputedStyle(cooked as HTMLElement).overflowWrap).toBe('anywhere');
+    expect(cooked?.querySelector<HTMLImageElement>('img.emoji')?.getAttribute('src')).toBe(
+      '/rocket.png',
+    );
+    expect(bubble?.querySelector('.avatar')?.getAttribute('src')).toBe('/avatar/90/booster.png');
+    expect(bubble?.querySelector('a')?.getAttribute('href')).toBe('/u/booster');
+    const addBoost = footer?.querySelector<HTMLButtonElement>('.discourse-boosts__add-btn');
+    expect(addBoost?.dataset.topicAction).toBe('boost');
+    expect(addBoost?.getAttribute('aria-haspopup')).toBe('menu');
+    expect(addBoost?.querySelector('use')?.getAttribute('href')).toBe('#rocket');
+    expect(footer?.querySelector('.post-action-menu__boost')).toBeNull();
+
+    const commentBoost = document.querySelector<HTMLButtonElement>(
+      '.ldtk-comments-list [data-post-id="2"] .post-action-menu__boost',
+    );
+    expect(commentBoost?.dataset.topicAction).toBe('boost');
+    expect(commentBoost?.querySelector('use')?.getAttribute('href')).toBe('#rocket');
+
+    const nativeBoostInput = document.createElement('div');
+    nativeBoostInput.className = 'discourse-boosts__input-container';
+    document.getElementById('main-outlet')?.appendChild(nativeBoostInput);
+    expect(getComputedStyle(nativeBoostInput).visibility).toBe('visible');
+    expect(getComputedStyle(nativeBoostInput).pointerEvents).toBe('auto');
+  });
+
+  it('refreshes the article Boost row after a discourse-boosts event', async () => {
+    const initialArticle: TopicPost = { ...post(1, 1), boosts: [], can_boost: true };
+    const boostedArticle: TopicPost = {
+      ...initialArticle,
+      can_boost: false,
+      boosts: [
+        {
+          id: 92,
+          cooked: '<p>实时助推 <img class="emoji" alt=":tada:" src="/tada.png"></p>',
+          user: { id: 12, username: 'live-user' },
+        },
+      ],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        if (String(input).includes('.json?track_visit')) {
+          return Promise.resolve(
+            jsonResponse(
+              topic({
+                post_stream: {
+                  posts: [initialArticle, post(2, 2), post(3, 3)],
+                  stream: [1, 2, 3],
+                },
+              }),
+            ),
+          );
+        }
+        return Promise.resolve(jsonResponse({ post_stream: { posts: [boostedArticle] } }));
+      }),
+    );
+    await refreshTopicLayout(enabledSettings);
+    expect(document.querySelector('.ldtk-article-footer .post-action-menu__boost')).not.toBeNull();
+
+    document.dispatchEvent(
+      new CustomEvent(TOPIC_EVENT_NAME, {
+        detail: JSON.stringify({ topicId: 123, type: 'boost_added', postId: 1 }),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      const footer = document.querySelector('.ldtk-article-footer');
+      expect(footer?.querySelector('.discourse-boosts__cooked')?.textContent).toContain('实时助推');
+      expect(footer?.querySelector('.post-action-menu__boost')).toBeNull();
+    });
   });
 
   it('shows who a comment replies to even when the target is on another page', async () => {
@@ -198,6 +474,185 @@ describe('topic split layout lifecycle', () => {
     document.body.appendChild(composer);
     expect(getComputedStyle(composer).zIndex).toBe('400');
     expect(getComputedStyle(composer).visibility).toBe('visible');
+  });
+
+  it('forwards like hover and focus to the native reaction picker without leaving split mode', async () => {
+    const actionablePost: TopicPost = {
+      ...post(2, 2),
+      actions_summary: [{ id: 2, count: 0, can_act: true, acted: false }],
+      current_user_used_main_reaction: false,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          topic({
+            post_stream: {
+              posts: [post(1, 1), actionablePost, post(3, 3)],
+              stream: [1, 2, 3],
+            },
+          }),
+        ),
+      ),
+    );
+    const requests: unknown[] = [];
+    document.addEventListener(TOPIC_REACTION_PICKER_REQUEST_NAME, (event) => {
+      if (event instanceof CustomEvent) {
+        requests.push(parseTopicReactionPickerRequest(event.detail));
+      }
+    });
+
+    await refreshTopicLayout(enabledSettings);
+
+    const button = document.querySelector<HTMLButtonElement>(
+      '.ldtk-topic-reading-root [data-post-id="2"] .post-action-menu__like',
+    );
+    expect(button?.getAttribute('aria-haspopup')).toBe('menu');
+    const pointerOver = new MouseEvent('pointerover', { bubbles: true });
+    Object.defineProperty(pointerOver, 'pointerType', { value: 'mouse' });
+    button?.dispatchEvent(pointerOver);
+    const pointerOut = new MouseEvent('pointerout', { bubbles: true });
+    Object.defineProperty(pointerOut, 'pointerType', { value: 'mouse' });
+    button?.dispatchEvent(pointerOut);
+    button?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    button?.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+
+    expect(requests).toHaveLength(4);
+    expect(requests).toEqual([
+      expect.objectContaining({ topicId: 123, postId: 2, floor: 2, open: true }),
+      expect.objectContaining({ topicId: 123, postId: 2, floor: 2, open: false }),
+      expect.objectContaining({ topicId: 123, postId: 2, floor: 2, open: true }),
+      expect.objectContaining({ topicId: 123, postId: 2, floor: 2, open: false }),
+    ]);
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
+    expect(
+      getComputedStyle(document.getElementById('main-outlet') as HTMLElement).display,
+    ).not.toBe('none');
+    expect(getComputedStyle(document.getElementById('main-outlet') as HTMLElement).visibility).toBe(
+      'hidden',
+    );
+    const nativePicker = document.createElement('div');
+    nativePicker.className = 'discourse-reactions-picker is-expanded';
+    document.getElementById('main-outlet')?.appendChild(nativePicker);
+    expect(getComputedStyle(nativePicker).visibility).toBe('visible');
+    expect(getComputedStyle(nativePicker).pointerEvents).toBe('auto');
+    expect(getComputedStyle(nativePicker).zIndex).toBe('410');
+  });
+
+  it('shows the selected custom reaction image after an acted event', async () => {
+    const initialPost: TopicPost = {
+      ...post(2, 2),
+      actions_summary: [{ id: 2, count: 0, can_act: true, acted: false }],
+      reaction_users_count: 0,
+      current_user_reaction: null,
+      current_user_used_main_reaction: false,
+    };
+    const reactedPost: TopicPost = {
+      ...initialPost,
+      actions_summary: [{ id: 2, count: 1, can_act: true, acted: false }],
+      reaction_users_count: 1,
+      current_user_reaction: { id: 'cry', type: 'emoji', can_undo: true },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        if (String(input).includes('.json?track_visit')) {
+          return Promise.resolve(
+            jsonResponse(
+              topic({
+                post_stream: {
+                  posts: [post(1, 1), initialPost, post(3, 3)],
+                  stream: [1, 2, 3],
+                },
+              }),
+            ),
+          );
+        }
+        return Promise.resolve(jsonResponse({ post_stream: { posts: [reactedPost] } }));
+      }),
+    );
+    await refreshTopicLayout(enabledSettings);
+
+    document.dispatchEvent(
+      new CustomEvent(TOPIC_EVENT_NAME, {
+        detail: JSON.stringify({
+          topicId: 123,
+          type: 'acted',
+          postId: 2,
+          currentReactionId: 'cry',
+          currentReactionUrl: 'https://cdn.linux.do/images/emoji/twitter/cry.png',
+        }),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>(
+        '.ldtk-topic-reading-root [data-post-id="2"] .post-action-menu__like',
+      );
+      expect(button?.getAttribute('aria-pressed')).toBe('true');
+      expect(button?.classList.contains('has-reaction')).toBe(true);
+      expect(button?.querySelector('svg')).toBeNull();
+      expect(button?.querySelector<HTMLImageElement>('.btn-toggle-reaction-emoji')?.src).toBe(
+        'https://cdn.linux.do/images/emoji/twitter/cry.png',
+      );
+    });
+  });
+
+  it('refreshes the article footer when the first post reaction changes', async () => {
+    const initialArticle: TopicPost = {
+      ...post(1, 1),
+      actions_summary: [{ id: 2, count: 0, can_act: true, acted: false }],
+      reaction_users_count: 0,
+      current_user_reaction: null,
+      current_user_used_main_reaction: false,
+    };
+    const reactedArticle: TopicPost = {
+      ...initialArticle,
+      actions_summary: [{ id: 2, count: 1, can_act: true, acted: false }],
+      reaction_users_count: 1,
+      reactions: [{ id: 'cry', type: 'emoji', count: 1 }],
+      current_user_reaction: { id: 'cry', type: 'emoji', can_undo: true },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        if (String(input).includes('.json?track_visit')) {
+          return Promise.resolve(
+            jsonResponse(
+              topic({
+                post_stream: {
+                  posts: [initialArticle, post(2, 2), post(3, 3)],
+                  stream: [1, 2, 3],
+                },
+              }),
+            ),
+          );
+        }
+        return Promise.resolve(jsonResponse({ post_stream: { posts: [reactedArticle] } }));
+      }),
+    );
+    await refreshTopicLayout(enabledSettings);
+
+    document.dispatchEvent(
+      new CustomEvent(TOPIC_EVENT_NAME, {
+        detail: JSON.stringify({
+          topicId: 123,
+          type: 'acted',
+          postId: 1,
+          currentReactionId: 'cry',
+          currentReactionUrl: 'https://cdn.linux.do/images/emoji/twitter/cry.png',
+        }),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      const footer = document.querySelector('.ldtk-article-footer');
+      const button = footer?.querySelector<HTMLButtonElement>('.post-action-menu__like');
+      expect(button?.classList.contains('has-reaction')).toBe(true);
+      expect(button?.querySelector<HTMLImageElement>('.btn-toggle-reaction-emoji')?.src).toBe(
+        'https://cdn.linux.do/images/emoji/twitter/cry.png',
+      );
+    });
   });
 
   it('expands direct replies inside the split layout', async () => {

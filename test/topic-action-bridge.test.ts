@@ -3,8 +3,11 @@ import {
   parseTopicActionResult,
   TOPIC_ACTION_REQUEST_NAME,
   TOPIC_ACTION_RESULT_NAME,
+  TOPIC_REACTION_PICKER_REQUEST_NAME,
   type TopicActionRequest,
+  type TopicReactionPickerRequest,
 } from '../src/content/topic-actions';
+import { parseTopicEventDetail, TOPIC_EVENT_NAME } from '../src/content/topic-events';
 
 interface BridgeTestWindow extends Window {
   MessageBus: {
@@ -18,6 +21,7 @@ interface BridgeTestWindow extends Window {
 const pageWindow = window as unknown as BridgeTestWindow;
 let routeTo: (url: string) => void = () => undefined;
 let topicController: unknown = null;
+let reactionToggleCallback: ((value: unknown) => void) | null = null;
 
 function request(action: TopicActionRequest['action'], postId = 2): TopicActionRequest {
   return {
@@ -46,6 +50,18 @@ function dispatchRequest(button: HTMLButtonElement, detail: TopicActionRequest):
   });
 }
 
+function dispatchReactionPicker(
+  button: HTMLButtonElement,
+  detail: TopicReactionPickerRequest,
+): void {
+  button.dispatchEvent(
+    new CustomEvent(TOPIC_REACTION_PICKER_REQUEST_NAME, {
+      bubbles: true,
+      detail: JSON.stringify(detail),
+    }),
+  );
+}
+
 beforeAll(async () => {
   pageWindow.MessageBus = {
     callbacks: [],
@@ -58,12 +74,23 @@ beforeAll(async () => {
         withPluginApi: (_version: string, callback: (api: unknown) => void) =>
           callback({
             onPageChange: vi.fn(),
+            onAppEvent: (name: string, eventCallback: (value: unknown) => void) => {
+              if (name === 'discourse-reactions:reaction-toggled') {
+                reactionToggleCallback = eventCallback;
+              }
+            },
             container: { lookup: () => topicController },
           }),
       };
     }
     if (moduleName === 'discourse/lib/url')
       return { default: { routeTo: (url: string) => routeTo(url) } };
+    if (moduleName === 'discourse/lib/text') {
+      return {
+        emojiUrlFor: (reactionId: string) =>
+          `https://cdn.linux.do/images/emoji/twitter/${reactionId}.png`,
+      };
+    }
     return undefined;
   };
   await import('../src/page/topic-events-bridge');
@@ -77,6 +104,29 @@ beforeEach(() => {
 });
 
 describe('page-world topic action bridge', () => {
+  it('forwards the local custom reaction result with its native emoji URL', async () => {
+    const detail = new Promise((resolve) => {
+      document.addEventListener(
+        TOPIC_EVENT_NAME,
+        (event) => resolve(parseTopicEventDetail((event as CustomEvent).detail)),
+        { once: true },
+      );
+    });
+
+    reactionToggleCallback?.({
+      post: { id: 2, topic_id: 123, current_user_reaction: { id: 'cry' } },
+      reaction: { id: 'cry' },
+    });
+
+    await expect(detail).resolves.toEqual({
+      topicId: 123,
+      type: 'acted',
+      postId: 2,
+      currentReactionId: 'cry',
+      currentReactionUrl: 'https://cdn.linux.do/images/emoji/twitter/cry.png',
+    });
+  });
+
   it('clicks an already loaded native control and reports success', async () => {
     const nativePost = document.createElement('article');
     nativePost.className = 'topic-post';
@@ -122,6 +172,44 @@ describe('page-world topic action bridge', () => {
       phase: 'triggered',
     });
     expect(click).toHaveBeenCalledOnce();
+  });
+
+  it('forwards hover to the native reactions picker and anchors it to the split button', () => {
+    const nativePost = document.createElement('article');
+    nativePost.className = 'topic-post';
+    nativePost.dataset.postId = '2';
+    nativePost.dataset.postNumber = '2';
+    const shim = document.createElement('div');
+    shim.className = 'discourse-reactions-actions-button-shim';
+    const nativeReaction = document.createElement('div');
+    nativeReaction.className = 'discourse-reactions-reaction-button';
+    const pointerTypes: string[] = [];
+    nativeReaction.addEventListener('pointerover', (event) => {
+      pointerTypes.push((event as PointerEvent).pointerType);
+    });
+    nativeReaction.addEventListener('pointerout', (event) => {
+      pointerTypes.push((event as PointerEvent).pointerType);
+    });
+    shim.appendChild(nativeReaction);
+    nativePost.appendChild(shim);
+    document.getElementById('main-outlet')?.appendChild(nativePost);
+    const visibleButton = document.createElement('button');
+    visibleButton.getBoundingClientRect = () =>
+      DOMRect.fromRect({ x: 180, y: 112, width: 32, height: 32 });
+    document.body.appendChild(visibleButton);
+    const pickerRequest: TopicReactionPickerRequest = {
+      topicId: 123,
+      postId: 2,
+      floor: 2,
+      open: true,
+      routeUrl: `${window.location.origin}/t/topic/123/2?ldo_comments_page=1`,
+    };
+
+    dispatchReactionPicker(visibleButton, pickerRequest);
+    dispatchReactionPicker(visibleButton, { ...pickerRequest, open: false });
+
+    expect(pointerTypes).toEqual(['mouse', 'mouse']);
+    expect(nativeReaction.getBoundingClientRect().x).toBe(180);
   });
 
   it('tracks the Discourse Reactions users panel until it closes', async () => {
@@ -200,6 +288,44 @@ describe('page-world topic action bridge', () => {
       { requestId: 'bridge:2', ok: true, phase: 'settled' },
     ]);
     expect(nativeBookmark.getBoundingClientRect().x).toBe(120);
+  });
+
+  it('opens the native Boost menu from the split-layout rocket button', async () => {
+    const nativePost = document.createElement('article');
+    nativePost.className = 'topic-post';
+    nativePost.dataset.postId = '2';
+    nativePost.dataset.postNumber = '2';
+    const nativeBoost = document.createElement('button');
+    nativeBoost.className = 'discourse-boosts__add-btn';
+    nativeBoost.setAttribute('aria-expanded', 'false');
+    nativeBoost.addEventListener('click', () => {
+      nativeBoost.setAttribute('aria-expanded', 'true');
+      window.setTimeout(() => nativeBoost.setAttribute('aria-expanded', 'false'), 0);
+    });
+    nativePost.appendChild(nativeBoost);
+    document.getElementById('main-outlet')?.appendChild(nativePost);
+    const visibleButton = document.createElement('button');
+    visibleButton.getBoundingClientRect = () =>
+      DOMRect.fromRect({ x: 144, y: 88, width: 32, height: 32 });
+    document.body.appendChild(visibleButton);
+    const results: unknown[] = [];
+    visibleButton.addEventListener(TOPIC_ACTION_RESULT_NAME, (event) => {
+      results.push(parseTopicActionResult((event as CustomEvent).detail));
+    });
+
+    visibleButton.dispatchEvent(
+      new CustomEvent(TOPIC_ACTION_REQUEST_NAME, {
+        bubbles: true,
+        detail: JSON.stringify(request('boost')),
+      }),
+    );
+
+    await vi.waitFor(() => expect(results).toHaveLength(2));
+    expect(results).toEqual([
+      { requestId: 'bridge:2', ok: true, phase: 'triggered' },
+      { requestId: 'bridge:2', ok: true, phase: 'settled' },
+    ]);
+    expect(nativeBoost.getBoundingClientRect().x).toBe(144);
   });
 
   it('opens replies through the topic controller without navigating the hidden layout', async () => {

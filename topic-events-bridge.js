@@ -4,6 +4,9 @@
   var TOPIC_EVENT_NAME = "ldtk:topic-event";
   var TOPIC_EVENT_TYPES = [
     "created",
+    "acted",
+    "boost_added",
+    "boost_removed",
     "revised",
     "rebaked",
     "deleted",
@@ -16,6 +19,17 @@
   function toPositiveInteger(value) {
     const number = typeof value === "string" ? Number(value) : value;
     return typeof number === "number" && Number.isInteger(number) && number > 0 ? number : null;
+  }
+  function isReactionId(value) {
+    return typeof value === "string" && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f]/.test(value);
+  }
+  function isSafeReactionUrl(value) {
+    if (typeof value !== "string" || value.length === 0 || value.length > 2048) return false;
+    try {
+      return new URL(value, "https://linux.do").protocol === "https:";
+    } catch {
+      return false;
+    }
   }
   function sanitizeTopicMessage(topicId, value) {
     const data = asRecord(value);
@@ -43,24 +57,28 @@
     }
     if (!parsedValue || typeof parsedValue !== "object") return null;
     const detail = parsedValue;
-    if (!Number.isInteger(detail.topicId) || Number(detail.topicId) <= 0 || !Number.isInteger(detail.postId) || Number(detail.postId) <= 0 || !TOPIC_EVENT_TYPES.includes(detail.type) || detail.updatedAt !== void 0 && typeof detail.updatedAt !== "string") {
+    if (!Number.isInteger(detail.topicId) || Number(detail.topicId) <= 0 || !Number.isInteger(detail.postId) || Number(detail.postId) <= 0 || !TOPIC_EVENT_TYPES.includes(detail.type) || detail.updatedAt !== void 0 && typeof detail.updatedAt !== "string" || detail.currentReactionId !== void 0 && detail.currentReactionId !== null && !isReactionId(detail.currentReactionId) || detail.currentReactionUrl !== void 0 && (!isReactionId(detail.currentReactionId) || !isSafeReactionUrl(detail.currentReactionUrl))) {
       return null;
     }
     return {
       topicId: detail.topicId,
       type: detail.type,
       postId: detail.postId,
-      ...detail.updatedAt === void 0 ? {} : { updatedAt: detail.updatedAt }
+      ...detail.updatedAt === void 0 ? {} : { updatedAt: detail.updatedAt },
+      ...detail.currentReactionId === void 0 ? {} : { currentReactionId: detail.currentReactionId },
+      ...detail.currentReactionUrl === void 0 ? {} : { currentReactionUrl: detail.currentReactionUrl }
     };
   }
 
   // src/content/topic-actions.ts
   var TOPIC_ACTION_REQUEST_NAME = "ldtk:topic-action-request";
   var TOPIC_ACTION_RESULT_NAME = "ldtk:topic-action-result";
+  var TOPIC_REACTION_PICKER_REQUEST_NAME = "ldtk:reaction-picker-request";
   var TOPIC_ACTIONS = [
     "like",
     "likeUsers",
     "bookmark",
+    "boost",
     "reply",
     "edit",
     "delete",
@@ -95,6 +113,21 @@
       routeUrl: detail.routeUrl
     };
   }
+  function parseTopicReactionPickerRequest(value) {
+    const parsed = parseSerialized(value);
+    if (!parsed || typeof parsed !== "object") return null;
+    const detail = parsed;
+    if (!isPositiveInteger(detail.topicId) || !isPositiveInteger(detail.postId) || !isPositiveInteger(detail.floor) || typeof detail.open !== "boolean" || typeof detail.routeUrl !== "string" || detail.routeUrl.length === 0 || detail.routeUrl.length > 2048) {
+      return null;
+    }
+    return {
+      topicId: detail.topicId,
+      postId: detail.postId,
+      floor: detail.floor,
+      open: detail.open,
+      routeUrl: detail.routeUrl
+    };
+  }
 
   // src/page/topic-events-bridge.ts
   var MAX_DISCOVERY_ATTEMPTS = 40;
@@ -105,6 +138,7 @@
     ],
     likeUsers: [".discourse-reactions-counter", ".post-action-menu__like-count"],
     bookmark: [".post-action-menu__bookmark"],
+    boost: [".post-action-menu__boost", ".discourse-boosts__add-btn"],
     reply: [".post-action-menu__reply"],
     edit: [".post-action-menu__edit"],
     delete: [".post-action-menu__delete"],
@@ -113,11 +147,13 @@
     share: [".post-action-menu__share"]
   };
   var COLLAPSED_ACTIONS = /* @__PURE__ */ new Set(["edit", "delete", "recover", "flag", "share"]);
+  var REACTION_CONTROL_SELECTOR = ".discourse-reactions-actions-button-shim .discourse-reactions-reaction-button";
   var pageWindow = window;
   var activeChannel = null;
   var activeCallback = null;
   var pluginHookInstalled = false;
   var discourseContainer = null;
+  var pendingReactionPickers = /* @__PURE__ */ new WeakMap();
   function getTopicId() {
     const parts = window.location.pathname.split("/").filter(Boolean);
     if (parts[0] !== "t") return null;
@@ -150,6 +186,73 @@
   function anchorControlToTarget(control, target) {
     const original = control.getBoundingClientRect.bind(control);
     control.getBoundingClientRect = () => target.isConnected ? target.getBoundingClientRect() : original();
+  }
+  function dispatchReactionPointer(control, target, type) {
+    anchorControlToTarget(control, target);
+    const pointerEvent = typeof window.PointerEvent === "function" ? new PointerEvent(type, {
+      bubbles: true,
+      pointerType: "mouse"
+    }) : new MouseEvent(type, {
+      bubbles: true
+    });
+    if (!("pointerType" in pointerEvent)) {
+      Object.defineProperty(pointerEvent, "pointerType", { value: "mouse" });
+    }
+    control.dispatchEvent(pointerEvent);
+  }
+  function queryNativeReactionControl(request) {
+    return getNativePost(request)?.querySelector(REACTION_CONTROL_SELECTOR) || null;
+  }
+  function cancelPendingReactionPicker(target) {
+    pendingReactionPickers.get(target)?.();
+    pendingReactionPickers.delete(target);
+  }
+  function routeToReactionPicker(target, request, url) {
+    if (!pageWindow.require) return;
+    let timeout = 0;
+    const cleanup = () => {
+      observer.disconnect();
+      window.clearTimeout(timeout);
+      if (pendingReactionPickers.get(target) === cleanup) pendingReactionPickers.delete(target);
+    };
+    const attemptOpen = () => {
+      const control = queryNativeReactionControl(request);
+      if (!control) return;
+      cleanup();
+      dispatchReactionPointer(control, target, "pointerover");
+    };
+    const observer = new MutationObserver(attemptOpen);
+    observer.observe(document.body, { childList: true, subtree: true });
+    timeout = window.setTimeout(cleanup, 8e3);
+    pendingReactionPickers.set(target, cleanup);
+    try {
+      const module = pageWindow.require("discourse/lib/url");
+      const routeTo = module?.default?.routeTo || module?.routeTo;
+      if (!routeTo) throw new Error("routeTo unavailable");
+      routeTo.call(module?.default || module, `${url.pathname}${url.search}${url.hash}`);
+      window.setTimeout(attemptOpen, 0);
+    } catch {
+      cleanup();
+    }
+  }
+  function handleReactionPickerRequest(event) {
+    if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
+    const request = parseTopicReactionPickerRequest(event.detail);
+    if (!request || request.topicId !== getTopicId()) return;
+    const url = validateActionRoute(request);
+    if (!url) return;
+    const target = event.target;
+    cancelPendingReactionPicker(target);
+    const control = queryNativeReactionControl(request);
+    if (!request.open) {
+      if (control) dispatchReactionPointer(control, target, "pointerout");
+      return;
+    }
+    if (control) {
+      dispatchReactionPointer(control, target, "pointerover");
+    } else {
+      routeToReactionPicker(target, request, url);
+    }
   }
   function isMenuExpanded(control, action) {
     if (action === "likeUsers" && control.matches(".discourse-reactions-counter")) {
@@ -321,7 +424,7 @@
       return;
     }
     anchorControlToTarget(control, target);
-    if (request.action === "bookmark" || request.action === "likeUsers") {
+    if (request.action === "bookmark" || request.action === "boost" || request.action === "likeUsers") {
       watchMenuClose(control, target, request);
     }
     control.click();
@@ -413,11 +516,40 @@
   function forwardEvent(topicId, value) {
     const detail = sanitizeTopicMessage(topicId, value);
     if (!detail) return;
+    dispatchTopicEvent(detail);
+  }
+  function dispatchTopicEvent(detail) {
     document.dispatchEvent(
       new CustomEvent(TOPIC_EVENT_NAME, {
         detail: JSON.stringify(detail)
       })
     );
+  }
+  function forwardReactionToggle(value) {
+    const topicId = getTopicId();
+    const post = readProperty(value, "post");
+    const postId = Number(readProperty(post, "id"));
+    if (!topicId || !Number.isInteger(postId) || postId <= 0) return;
+    const reaction = readProperty(value, "reaction") ?? readProperty(post, "current_user_reaction");
+    const reactionIdValue = readProperty(reaction, "id");
+    const currentReactionId = typeof reactionIdValue === "string" && reactionIdValue.length > 0 ? reactionIdValue : null;
+    let currentReactionUrl;
+    if (currentReactionId) {
+      try {
+        const textModule = pageWindow.require?.("discourse/lib/text");
+        currentReactionUrl = textModule?.emojiUrlFor?.(currentReactionId);
+      } catch {
+        currentReactionUrl = void 0;
+      }
+    }
+    const detail = parseTopicEventDetail({
+      topicId,
+      postId,
+      type: "acted",
+      currentReactionId,
+      ...currentReactionUrl ? { currentReactionUrl } : {}
+    });
+    if (detail) dispatchTopicEvent(detail);
   }
   function unsubscribe() {
     if (!activeChannel || !activeCallback || !pageWindow.MessageBus) return;
@@ -449,6 +581,7 @@
       module.withPluginApi("1.0.0", (api) => {
         discourseContainer = api.container || null;
         api.onPageChange(() => subscribeToCurrentTopic());
+        api.onAppEvent?.("discourse-reactions:reaction-toggled", forwardReactionToggle);
         subscribeToCurrentTopic();
       });
       pluginHookInstalled = true;
@@ -466,6 +599,7 @@
   window.addEventListener("popstate", () => subscribeToCurrentTopic());
   document.addEventListener("DOMContentLoaded", () => subscribeToCurrentTopic(), { once: true });
   document.addEventListener(TOPIC_ACTION_REQUEST_NAME, handleActionRequest);
+  document.addEventListener(TOPIC_REACTION_PICKER_REQUEST_NAME, handleReactionPickerRequest);
   discover();
 })();
 //# sourceMappingURL=topic-events-bridge.js.map

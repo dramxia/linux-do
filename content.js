@@ -720,15 +720,21 @@ ${lines}
     );
     return wrapper;
   }
+  function getActionsElement(postEl) {
+    const localActions = postEl.querySelector(".post-controls, .actions");
+    if (localActions) return localActions;
+    if (!postEl.classList.contains("ldtk-article-content")) return null;
+    return postEl.closest(".ldtk-article-pane")?.querySelector(".ldtk-article-footer .post-controls, .ldtk-article-footer .actions") ?? null;
+  }
   function injectButtons(settings) {
     if (!settings.enablePostActions) {
       removeInjectedActions();
       return;
     }
     getPostElements().forEach((postEl) => {
-      if (postEl.querySelector(`.${SHADOW_HOST_CLASS}`)) return;
-      const actionsEl = postEl.querySelector(".post-controls, .actions");
+      const actionsEl = getActionsElement(postEl);
       if (!actionsEl) return;
+      if (actionsEl.querySelector(`.${SHADOW_HOST_CLASS}`)) return;
       const host = document.createElement("div");
       host.className = SHADOW_HOST_CLASS;
       const shadow = host.attachShadow({ mode: "closed" });
@@ -1128,6 +1134,7 @@ ${lines}
         return null;
       }
       this.cachePost(post);
+      if (post.post_number === 1) this.article = post;
       return post;
     }
     invalidatePost(postId) {
@@ -1140,6 +1147,7 @@ ${lines}
   // src/content/topic-actions.ts
   var TOPIC_ACTION_REQUEST_NAME = "ldtk:topic-action-request";
   var TOPIC_ACTION_RESULT_NAME = "ldtk:topic-action-result";
+  var TOPIC_REACTION_PICKER_REQUEST_NAME = "ldtk:reaction-picker-request";
   function parseSerialized(value) {
     if (typeof value !== "string") return value;
     try {
@@ -1167,12 +1175,26 @@ ${lines}
   var TOPIC_EVENT_NAME = "ldtk:topic-event";
   var TOPIC_EVENT_TYPES = [
     "created",
+    "acted",
+    "boost_added",
+    "boost_removed",
     "revised",
     "rebaked",
     "deleted",
     "destroyed",
     "recovered"
   ];
+  function isReactionId(value) {
+    return typeof value === "string" && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f]/.test(value);
+  }
+  function isSafeReactionUrl(value) {
+    if (typeof value !== "string" || value.length === 0 || value.length > 2048) return false;
+    try {
+      return new URL(value, "https://linux.do").protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
   function parseTopicEventDetail(value) {
     let parsedValue = value;
     if (typeof value === "string") {
@@ -1184,14 +1206,16 @@ ${lines}
     }
     if (!parsedValue || typeof parsedValue !== "object") return null;
     const detail = parsedValue;
-    if (!Number.isInteger(detail.topicId) || Number(detail.topicId) <= 0 || !Number.isInteger(detail.postId) || Number(detail.postId) <= 0 || !TOPIC_EVENT_TYPES.includes(detail.type) || detail.updatedAt !== void 0 && typeof detail.updatedAt !== "string") {
+    if (!Number.isInteger(detail.topicId) || Number(detail.topicId) <= 0 || !Number.isInteger(detail.postId) || Number(detail.postId) <= 0 || !TOPIC_EVENT_TYPES.includes(detail.type) || detail.updatedAt !== void 0 && typeof detail.updatedAt !== "string" || detail.currentReactionId !== void 0 && detail.currentReactionId !== null && !isReactionId(detail.currentReactionId) || detail.currentReactionUrl !== void 0 && (!isReactionId(detail.currentReactionId) || !isSafeReactionUrl(detail.currentReactionUrl))) {
       return null;
     }
     return {
       topicId: detail.topicId,
       type: detail.type,
       postId: detail.postId,
-      ...detail.updatedAt === void 0 ? {} : { updatedAt: detail.updatedAt }
+      ...detail.updatedAt === void 0 ? {} : { updatedAt: detail.updatedAt },
+      ...detail.currentReactionId === void 0 ? {} : { currentReactionId: detail.currentReactionId },
+      ...detail.currentReactionUrl === void 0 ? {} : { currentReactionUrl: detail.currentReactionUrl }
     };
   }
 
@@ -1394,7 +1418,9 @@ ${lines}
   // src/content/topic-layout.ts
   var ROOT_CLASS = "ldtk-topic-reading-root";
   var ACTIVE_CLASS = "ldtk-split-reading-active";
+  var PENDING_CLASS = "ldtk-split-reading-pending";
   var STYLE_ID = "ldtk-topic-reading-style";
+  var PENDING_STYLE_ID = "ldtk-topic-reading-pending-style";
   var RETURN_BUTTON_ID = "ldtk-native-return";
   var MIN_VIEWPORT_WIDTH = 1280;
   var nativeAttemptKey = null;
@@ -1413,16 +1439,39 @@ ${lines}
     delete: '.post-action-menu__delete, button[title*="\u5220\u9664"], button[aria-label*="\u5220\u9664"]',
     recover: '.post-action-menu__recover, button[title*="\u6062\u590D"], button[aria-label*="\u6062\u590D"]'
   };
+  var PENDING_STYLE = `
+html.${PENDING_CLASS} #main-outlet,
+html.${PENDING_CLASS} .sidebar-wrapper,
+html.${PENDING_CLASS} .topic-navigation,
+html.${PENDING_CLASS} .timeline-container {
+  visibility: hidden !important;
+}
+`;
   var LAYOUT_STYLE = `
 html.${ACTIVE_CLASS},
 html.${ACTIVE_CLASS} body {
   overflow: hidden !important;
 }
-html.${ACTIVE_CLASS} #main-outlet,
+html.${ACTIVE_CLASS} #main-outlet {
+  position: relative !important;
+  z-index: 400 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 html.${ACTIVE_CLASS} .sidebar-wrapper,
 html.${ACTIVE_CLASS} .topic-navigation,
 html.${ACTIVE_CLASS} .timeline-container {
   display: none !important;
+}
+html.${ACTIVE_CLASS} #main-outlet .discourse-reactions-picker.is-expanded {
+  z-index: 410 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+html.${ACTIVE_CLASS} #main-outlet .discourse-boosts__input-container,
+html.${ACTIVE_CLASS} #main-outlet .discourse-boosts__input-container * {
+  visibility: visible !important;
+  pointer-events: auto !important;
 }
 html.${ACTIVE_CLASS} #reply-control {
   z-index: 400 !important;
@@ -1467,7 +1516,19 @@ html.${ACTIVE_CLASS} #reply-control.open {
   border-radius: 6px;
 }
 .ldtk-article-pane {
-  padding: 28px clamp(24px, 4vw, 64px) 56px;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+.ldtk-article-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 28px clamp(24px, 4vw, 64px) 40px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 .ldtk-article-header {
   max-width: 780px;
@@ -1492,6 +1553,136 @@ html.${ACTIVE_CLASS} #reply-control.open {
 .ldtk-article-content {
   max-width: 780px;
   margin: 0 auto;
+}
+.ldtk-article-footer {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  width: 100%;
+  max-height: min(38vh, 230px);
+  padding: 0 clamp(24px, 4vw, 64px) 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  color: var(--primary, #222);
+  background: var(--secondary, #fff);
+  border-top: 1px solid var(--primary-low, #e4e4e4);
+  box-shadow: 0 -4px 12px rgb(0 0 0 / 4%);
+  scrollbar-gutter: stable;
+}
+.ldtk-article-footer > * {
+  max-width: 780px;
+  margin-right: auto;
+  margin-left: auto;
+}
+.ldtk-article-reply-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 38px;
+  padding: 8px 0;
+  border-top: 1px solid var(--primary-low, #e4e4e4);
+}
+.ldtk-article-reply-summary[hidden] {
+  display: none;
+}
+.ldtk-article-reply-chip {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 5px;
+  min-height: 30px;
+  max-width: min(100%, 300px);
+  padding: 3px 9px 3px 4px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--primary-medium, #666);
+  background: var(--primary-very-low, #f5f5f5);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ldtk-article-reply-chip:hover {
+  color: var(--primary, #222);
+  background: var(--primary-low, #e9e9e9);
+}
+.ldtk-article-reply-chip:focus-visible {
+  outline: 2px solid var(--tertiary, #0088cc);
+  outline-offset: 2px;
+}
+.ldtk-article-reply-avatar {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.ldtk-article-reply-content {
+  min-width: 0;
+  padding-top: 2px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.45;
+  text-align: left;
+}
+.ldtk-article-reply-content img.emoji {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  margin: 0 1px;
+  border-radius: 0;
+  object-fit: contain;
+  vertical-align: -4px;
+}
+.ldtk-topic-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  min-height: 68px;
+  padding: 12px 0;
+  border-top: 1px solid var(--primary-low, #e4e4e4);
+  border-bottom: 1px solid var(--primary-low, #e4e4e4);
+}
+.ldtk-topic-stat {
+  display: grid;
+  gap: 2px;
+  min-width: 52px;
+  color: var(--primary-medium, #666);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.ldtk-topic-stat strong {
+  color: var(--tertiary, #0088cc);
+  font-size: 19px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.ldtk-topic-participants {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.ldtk-topic-participants a {
+  display: block;
+  margin-left: -5px;
+}
+.ldtk-topic-participants a:first-child {
+  margin-left: 0;
+}
+.ldtk-topic-participants img {
+  display: block;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--secondary, #fff);
+  border-radius: 50%;
+  background: var(--primary-low, #e4e4e4);
+}
+.ldtk-topic-read-time {
+  margin-left: auto;
+  text-align: right;
+}
+.ldtk-topic-read-time strong {
+  color: var(--primary-medium, #666);
 }
 .ldtk-comments-pane {
   position: relative;
@@ -1730,6 +1921,13 @@ html.${ACTIVE_CLASS} #reply-control.open {
   fill: currentColor;
   pointer-events: none;
 }
+.ldtk-post-menu-button .btn-toggle-reaction-emoji {
+  display: block;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  pointer-events: none;
+}
 .ldtk-post-menu-button.button-count {
   gap: 5px;
   color: var(--primary-medium, #777);
@@ -1745,6 +1943,65 @@ html.${ACTIVE_CLASS} #reply-control.open {
 .ldtk-post-menu-button.post-action-menu__reply {
   padding-inline: 9px;
   color: var(--primary-medium, #666);
+}
+.${ROOT_CLASS} .discourse-boosts__post-menu {
+  width: 100%;
+  padding: 4px 0;
+}
+.${ROOT_CLASS} .discourse-boosts__list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.${ROOT_CLASS} .discourse-boosts__bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 4px 8px 4px 4px;
+  border: 0;
+  border-radius: 50px;
+  color: var(--primary, #222);
+  background: var(--primary-100, var(--primary-very-low, #f2f2f2));
+  font-size: 12px;
+  line-height: 1;
+}
+.${ROOT_CLASS} .discourse-boosts__bubble > a {
+  flex: 0 0 auto;
+}
+.${ROOT_CLASS} .discourse-boosts__bubble .avatar {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.${ROOT_CLASS} .discourse-boosts__cooked {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.${ROOT_CLASS} .discourse-boosts__cooked p {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+}
+.${ROOT_CLASS} .discourse-boosts__cooked img.emoji,
+.${ROOT_CLASS} .discourse-boosts__cooked img.emoji.only-emoji {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  object-fit: contain;
+}
+.${ROOT_CLASS} .discourse-boosts__add-btn {
+  color: var(--primary-medium, #666);
+}
+.${ROOT_CLASS} .discourse-boosts__add-btn:hover {
+  color: var(--primary, #222);
 }
 .ldtk-inline-replies {
   margin-top: 8px;
@@ -1882,6 +2139,18 @@ html.${ACTIVE_CLASS} #reply-control.open {
     const url = template.replace("{size}", "90");
     return url.startsWith("//") ? `${window.location.protocol}${url}` : url;
   }
+  function formatCompactNumber(value) {
+    const normalized = Math.max(0, value);
+    if (normalized < 1e3) return String(normalized);
+    const units = [
+      { threshold: 1e6, suffix: "m" },
+      { threshold: 1e3, suffix: "k" }
+    ];
+    const unit = units.find(({ threshold }) => normalized >= threshold);
+    if (!unit) return String(normalized);
+    const compact = normalized / unit.threshold;
+    return `${compact >= 100 ? Math.round(compact) : compact.toFixed(1).replace(/\.0$/, "")}${unit.suffix}`;
+  }
   function createElement(tag, className, text) {
     const element = document.createElement(tag);
     if (className) element.className = className;
@@ -1946,6 +2215,28 @@ html.${ACTIVE_CLASS} #reply-control.open {
     style.textContent = LAYOUT_STYLE;
     document.head.appendChild(style);
   }
+  function ensurePendingStyle() {
+    if (document.getElementById(PENDING_STYLE_ID)) return;
+    const style = createElement("style");
+    style.id = PENDING_STYLE_ID;
+    style.textContent = PENDING_STYLE;
+    (document.head || document.documentElement).appendChild(style);
+  }
+  function clearPendingTopicLayout() {
+    document.documentElement.classList.remove(PENDING_CLASS);
+    document.getElementById(PENDING_STYLE_ID)?.remove();
+  }
+  function prepareTopicLayout(settings) {
+    const route = parseTopicRoute(window.location.pathname);
+    const eligible = Boolean(route) && window.innerWidth >= MIN_VIEWPORT_WIDTH && settings?.enableSplitReading !== false;
+    if (!eligible) {
+      clearPendingTopicLayout();
+      return false;
+    }
+    ensurePendingStyle();
+    document.documentElement.classList.add(PENDING_CLASS);
+    return true;
+  }
   function addHighlight(element) {
     element.classList.add("ldtk-post-highlight");
     window.setTimeout(() => element.classList.remove("ldtk-post-highlight"), 1800);
@@ -1976,6 +2267,7 @@ html.${ACTIVE_CLASS} #reply-control.open {
   }
   function ensureNativeMode(options) {
     ensureLayoutStyle();
+    clearPendingTopicLayout();
     document.documentElement.classList.remove(ACTIVE_CLASS);
     document.querySelector(`.${ROOT_CLASS}`)?.remove();
     let button = document.getElementById(RETURN_BUTTON_ID);
@@ -2028,6 +2320,7 @@ html.${ACTIVE_CLASS} #reply-control.open {
     callbacks;
     root = createElement("section", ROOT_CLASS);
     articlePane = createElement("section", "ldtk-reading-pane ldtk-article-pane");
+    articleScroll = createElement("div", "ldtk-article-scroll");
     commentsPane = createElement("section", "ldtk-reading-pane ldtk-comments-pane");
     commentsList = createElement("div", "ldtk-comments-list");
     pagination = createElement("nav", "ldtk-pagination");
@@ -2038,13 +2331,16 @@ html.${ACTIVE_CLASS} #reply-control.open {
     pageCount;
     state;
     eventVersions = /* @__PURE__ */ new Map();
+    reactionImages = /* @__PURE__ */ new Map();
     replyAborts = /* @__PURE__ */ new Map();
+    articleReplies = [];
     readTracker = null;
     pageAbort = null;
     newReplyCount = 0;
     destroyed = false;
     saveTimer = null;
-    async mount(initialPosts) {
+    mount(initialPosts, articleReplies = []) {
+      this.articleReplies = articleReplies;
       this.ensureStyle();
       this.root.setAttribute("aria-label", "\u4E3B\u9898\u53CC\u680F\u9605\u8BFB");
       const grid = createElement("div", "ldtk-reading-grid");
@@ -2056,19 +2352,24 @@ html.${ACTIVE_CLASS} #reply-control.open {
       this.updateHeaderOffset();
       document.body.appendChild(this.root);
       document.documentElement.classList.add(ACTIVE_CLASS);
+      clearPendingTopicLayout();
       removeReturnButton();
-      this.articlePane.scrollTop = this.state.leftScrollTop;
+      this.articleScroll.scrollTop = this.state.leftScrollTop;
       this.commentsPane.scrollTop = this.state.rightScrollTop;
-      this.articlePane.addEventListener("scroll", this.scheduleSave, { passive: true });
+      this.articleScroll.addEventListener("scroll", this.scheduleSave, { passive: true });
       this.commentsPane.addEventListener("scroll", this.scheduleSave, { passive: true });
       this.root.addEventListener("click", this.handleClick);
+      this.root.addEventListener("pointerover", this.handleReactionPointerOver);
+      this.root.addEventListener("pointerout", this.handleReactionPointerOut);
+      this.root.addEventListener("focusin", this.handleReactionFocusIn);
+      this.root.addEventListener("focusout", this.handleReactionFocusOut);
       window.addEventListener("popstate", this.handlePopState);
       window.addEventListener("pagehide", this.handlePageHide);
       document.addEventListener(TOPIC_EVENT_NAME, this.handleTopicEvent);
       injectButtons(this.settings);
       if (this.route.floor) void this.goToFloor(this.route.floor, false);
     }
-    destroy(save = true) {
+    destroy(save = true, preserveShell = false) {
       if (this.destroyed) return;
       this.destroyed = true;
       if (save) this.saveState();
@@ -2077,15 +2378,24 @@ html.${ACTIVE_CLASS} #reply-control.open {
       this.replyAborts.forEach((controller) => controller.abort());
       this.replyAborts.clear();
       this.readTracker?.disconnect();
-      this.articlePane.removeEventListener("scroll", this.scheduleSave);
+      this.articleScroll.removeEventListener("scroll", this.scheduleSave);
       this.commentsPane.removeEventListener("scroll", this.scheduleSave);
       this.root.removeEventListener("click", this.handleClick);
+      this.root.removeEventListener("pointerover", this.handleReactionPointerOver);
+      this.root.removeEventListener("pointerout", this.handleReactionPointerOut);
+      this.root.removeEventListener("focusin", this.handleReactionFocusIn);
+      this.root.removeEventListener("focusout", this.handleReactionFocusOut);
       window.removeEventListener("popstate", this.handlePopState);
       window.removeEventListener("pagehide", this.handlePageHide);
       document.removeEventListener(TOPIC_EVENT_NAME, this.handleTopicEvent);
       this.root.remove();
-      document.documentElement.classList.remove(ACTIVE_CLASS);
-      document.getElementById(STYLE_ID)?.remove();
+      if (!preserveShell) {
+        document.documentElement.classList.remove(ACTIVE_CLASS);
+        document.getElementById(STYLE_ID)?.remove();
+      }
+    }
+    persistState() {
+      this.saveState();
     }
     updateHeaderOffset() {
       const header = document.querySelector(".d-header-wrap, .d-header");
@@ -2099,6 +2409,7 @@ html.${ACTIVE_CLASS} #reply-control.open {
       ensureLayoutStyle();
     }
     renderArticle() {
+      const scrollTop = this.articleScroll.scrollTop;
       const header = createElement("header", "ldtk-article-header");
       const title = createElement("h1");
       title.innerHTML = this.source.topic.fancy_title || this.source.topic.title;
@@ -2116,10 +2427,24 @@ html.${ACTIVE_CLASS} #reply-control.open {
       const body = createElement("div", "topic-body");
       const cooked = createElement("div", "cooked");
       cooked.innerHTML = this.source.article.cooked;
-      const controls = this.createPostControls(this.source.article);
-      body.append(cooked, controls);
+      const footer = createElement("footer", "ldtk-article-footer");
+      footer.setAttribute("aria-label", "\u6B63\u6587\u4FE1\u606F\u548C\u64CD\u4F5C");
+      footer.appendChild(this.createPostControls(this.source.article));
+      const boosts = this.createBoosts(this.source.article);
+      if (boosts) footer.appendChild(boosts);
+      const replySummary = this.createArticleReplySummary(this.source.article, this.articleReplies);
+      if (replySummary) {
+        footer.appendChild(replySummary);
+        const repliesButton = footer.querySelector("[data-toggle-replies]");
+        repliesButton?.setAttribute("aria-expanded", "true");
+      }
+      const summary = this.createTopicSummary();
+      if (summary) footer.appendChild(summary);
+      body.appendChild(cooked);
       content.appendChild(body);
-      this.articlePane.replaceChildren(header, content);
+      this.articleScroll.replaceChildren(header, content);
+      this.articlePane.replaceChildren(this.articleScroll, footer);
+      this.articleScroll.scrollTop = scrollTop;
     }
     renderCommentsShell() {
       const toolbar = createElement("header", "ldtk-comments-toolbar");
@@ -2193,6 +2518,8 @@ html.${ACTIVE_CLASS} #reply-control.open {
         cooked.innerHTML = post.cooked;
       }
       body.append(heading, cooked, this.createPostControls(post));
+      const boosts = this.createBoosts(post);
+      if (boosts) body.appendChild(boosts);
       article.append(avatar, body);
       return article;
     }
@@ -2204,6 +2531,9 @@ html.${ACTIVE_CLASS} #reply-control.open {
       const like = post.actions_summary?.find((action) => action.id === 2);
       const likeCount = Math.max(0, post.reaction_users_count ?? like?.count ?? 0);
       const hasLiked = post.current_user_used_main_reaction ?? like?.acted === true;
+      const currentReactionId = post.current_user_reaction?.id;
+      const hasCustomReaction = Boolean(currentReactionId && !hasLiked);
+      const hasReaction = hasLiked || Boolean(currentReactionId);
       const replyCount = Math.max(0, post.reply_count || 0);
       const addNativeAction = (container, action, icon, label, className, visibleLabel) => {
         const button = createPostMenuButton({ className, icon, label, visibleLabel });
@@ -2238,14 +2568,21 @@ html.${ACTIVE_CLASS} #reply-control.open {
         extraControls.appendChild(replies);
       }
       if (like && post.yours !== true) {
+        const likeLabel = hasCustomReaction ? `\u53D6\u6D88 ${currentReactionId} \u8868\u6001` : hasLiked ? "\u53D6\u6D88\u8D5E" : "\u8D5E";
+        const stateClass = hasLiked ? "has-like" : hasCustomReaction ? "has-reaction" : "like";
         const likeButton = addNativeAction(
           actions,
           "like",
           hasLiked ? "d-liked" : "d-unliked",
-          hasLiked ? "\u53D6\u6D88\u8D5E" : "\u8D5E",
-          `post-action-menu__like toggle-like btn-icon ${hasLiked ? "has-like" : "like"}`
+          likeLabel,
+          `post-action-menu__like toggle-like btn-icon ${stateClass}`
         );
-        likeButton.setAttribute("aria-pressed", String(hasLiked));
+        if (hasCustomReaction && currentReactionId) {
+          const reactionImage = this.createCurrentReactionImage(post, currentReactionId);
+          if (reactionImage) likeButton.replaceChildren(reactionImage);
+        }
+        likeButton.setAttribute("aria-pressed", String(hasReaction));
+        likeButton.setAttribute("aria-haspopup", "menu");
       }
       const copyLink = createPostMenuButton({
         className: "post-action-menu__copy-link btn-icon",
@@ -2266,6 +2603,17 @@ html.${ACTIVE_CLASS} #reply-control.open {
         bookmark.setAttribute("aria-haspopup", "menu");
         bookmark.setAttribute("aria-expanded", "false");
         bookmark.setAttribute("aria-pressed", String(post.bookmarked === true));
+      }
+      if (post.can_boost === true && (post.boosts?.length || 0) === 0) {
+        const boost = addNativeAction(
+          actions,
+          "boost",
+          "rocket",
+          "\u52A9\u63A8",
+          "post-action-menu__boost boost btn-flat"
+        );
+        boost.setAttribute("aria-haspopup", "menu");
+        boost.setAttribute("aria-expanded", "false");
       }
       const moreActions = createElement("span", "ldtk-more-actions");
       moreActions.hidden = true;
@@ -2320,6 +2668,205 @@ html.${ACTIVE_CLASS} #reply-control.open {
       }
       controls.append(extraControls, actions);
       return controls;
+    }
+    createBoosts(post) {
+      const boosts = post.boosts || [];
+      if (boosts.length === 0) return null;
+      const postMenu = createElement("div", "discourse-boosts__post-menu");
+      const wrapper = createElement("div", "discourse-boosts");
+      const list = createElement("div", "discourse-boosts__list");
+      boosts.forEach((boost) => {
+        const bubble = createElement("span", "discourse-boosts__bubble");
+        const user = boost.user;
+        const avatarUrl = getAvatarUrl(user?.avatar_template);
+        if (user && avatarUrl) {
+          const profile = createElement("a");
+          profile.href = `/u/${encodeURIComponent(user.username)}`;
+          profile.dataset.userCard = user.username;
+          profile.title = user.name || user.username;
+          profile.setAttribute("aria-label", user.name || user.username);
+          const avatar = createElement("img", "avatar");
+          avatar.src = avatarUrl;
+          avatar.alt = "";
+          avatar.width = 24;
+          avatar.height = 24;
+          avatar.loading = "lazy";
+          profile.appendChild(avatar);
+          bubble.appendChild(profile);
+        }
+        const cooked = createElement("span", "discourse-boosts__cooked");
+        cooked.innerHTML = boost.cooked;
+        bubble.appendChild(cooked);
+        list.appendChild(bubble);
+      });
+      if (post.can_boost === true) {
+        const addBoost = createPostMenuButton({
+          className: "discourse-boosts__add-btn btn-flat",
+          icon: "rocket",
+          label: "\u52A9\u63A8"
+        });
+        addBoost.dataset.topicAction = "boost";
+        addBoost.dataset.postId = String(post.id);
+        addBoost.dataset.floor = String(post.post_number);
+        addBoost.setAttribute("aria-haspopup", "menu");
+        addBoost.setAttribute("aria-expanded", "false");
+        list.appendChild(addBoost);
+      }
+      wrapper.appendChild(list);
+      postMenu.appendChild(wrapper);
+      return postMenu;
+    }
+    createReplySummaryContent(post) {
+      const cooked = createElement("div");
+      cooked.innerHTML = post.cooked;
+      const content = createElement("span", "ldtk-article-reply-content");
+      const textParts = [];
+      const blockTags = /* @__PURE__ */ new Set(["P", "DIV", "LI", "BLOCKQUOTE", "PRE", "TR"]);
+      const appendText = (value) => {
+        content.appendChild(document.createTextNode(value));
+        textParts.push(value);
+      };
+      const appendNode = (node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+          appendText(node.textContent || "");
+          return;
+        }
+        if (!(node instanceof HTMLElement)) return;
+        if (node instanceof HTMLImageElement) {
+          const alt = node.alt || node.title;
+          const isEmoji = node.classList.contains("emoji") || /^:[^:]+:$/.test(alt);
+          if (isEmoji && node.getAttribute("src")) {
+            const emoji = createElement("img", "emoji");
+            emoji.src = node.getAttribute("src") || "";
+            emoji.alt = alt;
+            emoji.title = node.title;
+            emoji.width = 18;
+            emoji.height = 18;
+            emoji.loading = "lazy";
+            content.appendChild(emoji);
+            textParts.push(alt);
+          } else if (alt) {
+            appendText(alt);
+          }
+          return;
+        }
+        if (node instanceof HTMLBRElement) {
+          appendText(" ");
+          return;
+        }
+        Array.from(node.childNodes).forEach(appendNode);
+        if (blockTags.has(node.tagName)) appendText(" ");
+      };
+      Array.from(cooked.childNodes).forEach(appendNode);
+      const text = textParts.join("").replace(/\s+/g, " ").trim();
+      if (content.childNodes.length === 0) appendText(`\u67E5\u770B ${post.post_number} \u697C\u56DE\u590D`);
+      return { element: content, text: text || `\u67E5\u770B ${post.post_number} \u697C\u56DE\u590D` };
+    }
+    createArticleReplySummary(article, replies) {
+      if (replies.length === 0) return null;
+      const summary = createElement("div", "ldtk-article-reply-summary");
+      summary.dataset.articleReplySummary = String(article.id);
+      summary.setAttribute("aria-label", "\u6B63\u6587\u7684\u76F4\u63A5\u56DE\u590D");
+      replies.slice(0, 8).forEach((reply) => {
+        const replyContent = this.createReplySummaryContent(reply);
+        const button = createButton(
+          "ldtk-article-reply-chip",
+          "",
+          `\u8DF3\u8F6C\u5230 ${reply.username} \u7684 ${reply.post_number} \u697C\u56DE\u590D\uFF1A${replyContent.text}`
+        );
+        button.dataset.targetFloor = String(reply.post_number);
+        const avatarUrl = getAvatarUrl(reply.avatar_template);
+        if (avatarUrl) {
+          const avatar = createElement("img", "ldtk-article-reply-avatar");
+          avatar.src = avatarUrl;
+          avatar.alt = "";
+          avatar.loading = "lazy";
+          button.appendChild(avatar);
+        }
+        button.appendChild(replyContent.element);
+        summary.appendChild(button);
+      });
+      return summary;
+    }
+    createTopicSummary() {
+      const topic = this.source.topic;
+      const participants = topic.details?.participants || [];
+      const linkCount = topic.details?.links?.length;
+      const stats = [];
+      if (typeof topic.views === "number") stats.push({ value: topic.views, label: "\u6D4F\u89C8\u91CF" });
+      if (typeof topic.like_count === "number") stats.push({ value: topic.like_count, label: "\u8D5E" });
+      if (typeof linkCount === "number") stats.push({ value: linkCount, label: "\u94FE\u63A5" });
+      if (typeof topic.participant_count === "number") {
+        stats.push({ value: topic.participant_count, label: "\u7528\u6237" });
+      }
+      const readMinutes = typeof topic.word_count === "number" && topic.word_count > 0 ? Math.max(1, Math.ceil(topic.word_count / 200)) : null;
+      if (stats.length === 0 && participants.length === 0 && readMinutes === null) return null;
+      const summary = createElement("section", "ldtk-topic-summary");
+      summary.setAttribute("aria-label", "\u4E3B\u9898\u4FE1\u606F");
+      stats.forEach((stat) => {
+        const item = createElement("span", "ldtk-topic-stat");
+        item.append(
+          createElement("strong", "", formatCompactNumber(stat.value)),
+          createElement("span", "", stat.label)
+        );
+        summary.appendChild(item);
+      });
+      if (participants.length > 0) {
+        const people = createElement("span", "ldtk-topic-participants");
+        people.setAttribute("aria-label", "\u4E3B\u8981\u53C2\u4E0E\u8005");
+        participants.slice(0, 8).forEach((participant) => {
+          const avatarUrl = getAvatarUrl(participant.avatar_template);
+          if (!avatarUrl) return;
+          const profile = createElement("a");
+          profile.href = `/u/${encodeURIComponent(participant.username)}`;
+          profile.title = participant.name || participant.username;
+          profile.setAttribute("aria-label", participant.name || participant.username);
+          const avatar = createElement("img");
+          avatar.src = avatarUrl;
+          avatar.alt = "";
+          avatar.loading = "lazy";
+          profile.appendChild(avatar);
+          people.appendChild(profile);
+        });
+        if (people.childElementCount > 0) summary.appendChild(people);
+      }
+      if (readMinutes !== null) {
+        const readTime = createElement("span", "ldtk-topic-stat ldtk-topic-read-time");
+        readTime.append(
+          createElement("strong", "", `${formatCompactNumber(readMinutes)} \u5206\u949F`),
+          createElement("span", "", "\u9605\u8BFB\u65F6\u95F4")
+        );
+        summary.appendChild(readTime);
+      }
+      return summary;
+    }
+    createCurrentReactionImage(post, reactionId) {
+      const nativePost = document.querySelector(
+        `#main-outlet .topic-post[data-post-id="${post.id}"], #main-outlet .topic-post[data-post-number="${post.post_number}"]`
+      );
+      const nativeImage = nativePost?.querySelector(
+        ".discourse-reactions-reaction-button .btn-toggle-reaction-emoji"
+      );
+      const expectedAlts = /* @__PURE__ */ new Set([`:${reactionId}`, `:${reactionId}:`]);
+      let image = null;
+      if (nativeImage && (!nativeImage.alt || expectedAlts.has(nativeImage.alt))) {
+        image = nativeImage.cloneNode(false);
+      } else {
+        const cached = this.reactionImages.get(post.id);
+        if (cached?.id === reactionId && cached.url) {
+          image = document.createElement("img");
+          image.src = cached.url;
+        }
+      }
+      if (!image) return null;
+      image.className = "btn-toggle-reaction-emoji reaction-button";
+      image.alt = `:${reactionId}:`;
+      image.setAttribute("aria-hidden", "true");
+      image.draggable = false;
+      image.removeAttribute("style");
+      image.removeAttribute("width");
+      image.removeAttribute("height");
+      return image;
     }
     createInlineReply(post) {
       const reply = createElement("article", "ldtk-inline-reply");
@@ -2415,8 +2962,50 @@ html.${ACTIVE_CLASS} #reply-control.open {
         button.disabled = false;
       }
     }
+    async loadArticleReplySummary(button) {
+      const postId = Number(button.dataset.toggleReplies);
+      if (postId !== this.source.article.id) return;
+      this.replyAborts.get(postId)?.abort();
+      const request = new AbortController();
+      this.replyAborts.set(postId, request);
+      button.disabled = true;
+      try {
+        const replies = await fetchPostReplies(postId, 1, request.signal);
+        if (this.destroyed || request.signal.aborted) return;
+        this.articleReplies = replies;
+        const summary = this.createArticleReplySummary(this.source.article, replies);
+        if (!summary) {
+          showToast("\u6682\u65E0\u53EF\u89C1\u56DE\u590D");
+          return;
+        }
+        button.closest(".ldtk-post-controls")?.insertAdjacentElement("afterend", summary);
+        button.setAttribute("aria-expanded", "true");
+        button.setAttribute("aria-label", "\u6536\u8D77\u56DE\u590D");
+        setButtonIcon(button, "chevron-up");
+      } catch (error) {
+        if (error.name !== "AbortError") showToast("\u56DE\u590D\u52A0\u8F7D\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5");
+      } finally {
+        if (this.replyAborts.get(postId) === request) this.replyAborts.delete(postId);
+        button.disabled = false;
+      }
+    }
     toggleInlineReplies(button) {
       const postId = Number(button.dataset.toggleReplies);
+      if (postId === this.source.article.id) {
+        const summary = this.root.querySelector(
+          `[data-article-reply-summary="${postId}"]`
+        );
+        if (!summary) {
+          void this.loadArticleReplySummary(button);
+          return;
+        }
+        summary.hidden = !summary.hidden;
+        const expanded2 = !summary.hidden;
+        button.setAttribute("aria-expanded", String(expanded2));
+        button.setAttribute("aria-label", `${expanded2 ? "\u6536\u8D77" : "\u5C55\u5F00"}\u56DE\u590D`);
+        setButtonIcon(button, expanded2 ? "chevron-up" : "chevron-down");
+        return;
+      }
       const postElement = this.root.querySelector(`[data-post-id="${postId}"]`);
       const panel = postElement?.querySelector(".ldtk-inline-replies");
       if (!panel) {
@@ -2444,7 +3033,7 @@ html.${ACTIVE_CLASS} #reply-control.open {
         action,
         routeUrl: this.buildActionRoute(floor)
       };
-      const waitsForMenuClose = action === "bookmark" || action === "likeUsers";
+      const waitsForMenuClose = action === "bookmark" || action === "boost" || action === "likeUsers";
       let triggered = false;
       const finish = () => {
         window.clearTimeout(timeout);
@@ -2476,6 +3065,9 @@ html.${ACTIVE_CLASS} #reply-control.open {
         } else if (action === "bookmark" && result.phase === "settled") {
           finish();
           void this.updateVisiblePost({ topicId: request.topicId, postId, type: "revised" });
+        } else if (action === "boost" && result.phase === "settled") {
+          finish();
+          void this.updateVisiblePost({ topicId: request.topicId, postId, type: "revised" });
         } else if (action === "likeUsers" && result.phase === "settled") {
           finish();
         } else if (!waitsForMenuClose) {
@@ -2503,6 +3095,58 @@ html.${ACTIVE_CLASS} #reply-control.open {
         })
       );
     }
+    requestReactionPicker(button, open) {
+      const postId = Number(button.dataset.postId);
+      const floor = Number(button.dataset.floor);
+      if (!postId || !floor) return;
+      const request = {
+        topicId: this.source.topic.id,
+        postId,
+        floor,
+        open,
+        routeUrl: this.buildActionRoute(floor)
+      };
+      button.dispatchEvent(
+        new CustomEvent(TOPIC_REACTION_PICKER_REQUEST_NAME, {
+          bubbles: true,
+          detail: JSON.stringify(request)
+        })
+      );
+    }
+    getReactionButton(target) {
+      if (!(target instanceof Element)) return null;
+      const button = target.closest(
+        '.post-action-menu__like[data-topic-action="like"]'
+      );
+      return button && this.root.contains(button) ? button : null;
+    }
+    isWithinButton(button, target) {
+      return target instanceof Node && button.contains(target);
+    }
+    handleReactionPointerOver = (event) => {
+      const pointerEvent = event;
+      if (pointerEvent.pointerType !== "mouse") return;
+      const button = this.getReactionButton(event.target);
+      if (!button || this.isWithinButton(button, pointerEvent.relatedTarget)) return;
+      this.requestReactionPicker(button, true);
+    };
+    handleReactionPointerOut = (event) => {
+      const pointerEvent = event;
+      if (pointerEvent.pointerType !== "mouse") return;
+      const button = this.getReactionButton(event.target);
+      if (!button || this.isWithinButton(button, pointerEvent.relatedTarget)) return;
+      this.requestReactionPicker(button, false);
+    };
+    handleReactionFocusIn = (event) => {
+      const button = this.getReactionButton(event.target);
+      if (button) this.requestReactionPicker(button, true);
+    };
+    handleReactionFocusOut = (event) => {
+      const focusEvent = event;
+      const button = this.getReactionButton(event.target);
+      if (!button || this.isWithinButton(button, focusEvent.relatedTarget)) return;
+      this.requestReactionPicker(button, false);
+    };
     buildActionRoute(floor) {
       const url = new URL(buildNativeFloorUrl(floor));
       url.searchParams.set(COMMENTS_PAGE_PARAM, String(this.currentPage));
@@ -2591,7 +3235,7 @@ html.${ACTIVE_CLASS} #reply-control.open {
     }
     async goToFloor(floor, updateHistory) {
       if (floor <= 1) {
-        this.articlePane.scrollTo({ top: 0, behavior: "smooth" });
+        this.articleScroll.scrollTo({ top: 0, behavior: "smooth" });
         const article = this.articlePane.querySelector(".topic-post");
         if (article) addHighlight(article);
         return;
@@ -2700,6 +3344,16 @@ html.${ACTIVE_CLASS} #reply-control.open {
         this.newRepliesButton.dataset.visible = "true";
         return;
       }
+      if (detail.type === "acted" && detail.currentReactionId !== void 0) {
+        if (detail.currentReactionId) {
+          this.reactionImages.set(detail.postId, {
+            id: detail.currentReactionId,
+            ...detail.currentReactionUrl ? { url: detail.currentReactionUrl } : {}
+          });
+        } else {
+          this.reactionImages.delete(detail.postId);
+        }
+      }
       void this.updateVisiblePost(detail);
     };
     async updateVisiblePost(detail) {
@@ -2745,7 +3399,7 @@ html.${ACTIVE_CLASS} #reply-control.open {
     saveState() {
       writeTopicState(this.route.topicId, {
         page: this.currentPage,
-        leftScrollTop: this.articlePane.scrollTop,
+        leftScrollTop: this.articleScroll.scrollTop,
         rightScrollTop: this.commentsPane.scrollTop,
         nativeMode: false
       });
@@ -2766,6 +3420,7 @@ html.${ACTIVE_CLASS} #reply-control.open {
     document.documentElement.classList.remove(ACTIVE_CLASS);
     document.querySelector(`.${ROOT_CLASS}`)?.remove();
     document.getElementById(STYLE_ID)?.remove();
+    clearPendingTopicLayout();
   }
   function handoffToNative(route, settings, floor, action) {
     const previous = readTopicState(route.topicId) || {
@@ -2794,8 +3449,7 @@ html.${ACTIVE_CLASS} #reply-control.open {
   async function refreshTopicLayout(settings, force = false) {
     latestSettings = settings;
     const route = parseTopicRoute(window.location.pathname);
-    const eligible = settings.enableSplitReading && window.innerWidth >= MIN_VIEWPORT_WIDTH && route;
-    if (!eligible) {
+    if (!settings.enableSplitReading || window.innerWidth < MIN_VIEWPORT_WIDTH || !route) {
       cleanupLayout();
       removeReturnButton();
       nativeAttemptKey = null;
@@ -2816,13 +3470,29 @@ html.${ACTIVE_CLASS} #reply-control.open {
       return;
     }
     if (!force && loadingKey === key) return;
-    cleanupLayout();
+    const retainedLayout = force && activeLayout?.matches(route, settings) ? activeLayout : null;
+    if (!retainedLayout) {
+      prepareTopicLayout(settings);
+      activeLayout?.destroy();
+      activeLayout = null;
+    }
+    loadingAbort?.abort();
     const version = ++refreshVersion;
     loadingKey = key;
-    loadingAbort = new AbortController();
+    const request = new AbortController();
+    loadingAbort = request;
+    let candidate = null;
     try {
-      const source = await TopicDataSource.create(route.topicId, loadingAbort.signal, route.floor);
-      if (version !== refreshVersion || source.isMegaTopic) return;
+      const source = await TopicDataSource.create(route.topicId, request.signal, route.floor);
+      if (version !== refreshVersion) return;
+      if (source.isMegaTopic) {
+        if (retainedLayout) {
+          showToast("\u4E3B\u9898\u5185\u5BB9\u8FC7\u591A\uFF0C\u5DF2\u4FDD\u7559\u5F53\u524D\u53CC\u680F\u5185\u5BB9");
+        } else {
+          cleanupLayout();
+        }
+        return;
+      }
       const pageCount = getPageCount(source.commentCount, settings.commentsPerPage);
       const session = readTopicState(route.topicId);
       const initialPage = deriveInitialPage({
@@ -2833,26 +3503,41 @@ html.${ACTIVE_CLASS} #reply-control.open {
         perPage: settings.commentsPerPage,
         pageCount
       });
-      const posts = await source.loadPage(initialPage, settings.commentsPerPage, loadingAbort.signal);
+      const articleRepliesRequest = (source.article.reply_count || 0) > 0 ? fetchPostReplies(source.article.id, 1, request.signal).catch((error) => {
+        if (error.name === "AbortError") throw error;
+        return [];
+      }) : Promise.resolve([]);
+      const [posts, articleReplies] = await Promise.all([
+        source.loadPage(initialPage, settings.commentsPerPage, request.signal),
+        articleRepliesRequest
+      ]);
       if (version !== refreshVersion) return;
-      const layout = new TopicLayout(route, source, settings, initialPage, {
+      retainedLayout?.persistState();
+      candidate = new TopicLayout(route, source, settings, initialPage, {
         requestRefresh: () => {
           const currentSettings = latestSettings;
           if (currentSettings) void refreshTopicLayout(currentSettings, true);
         },
         handoffNative: (floor, action) => handoffToNative(route, settings, floor, action)
       });
-      await layout.mount(posts);
+      candidate.mount(posts, articleReplies);
       if (version !== refreshVersion) {
-        layout.destroy();
+        candidate.destroy(false, Boolean(retainedLayout));
         return;
       }
-      activeLayout = layout;
+      retainedLayout?.destroy(false, true);
+      activeLayout = candidate;
+      candidate = null;
     } catch (error) {
-      if (error.name !== "AbortError") {
+      candidate?.destroy(false, Boolean(retainedLayout));
+      if (error.name === "AbortError") return;
+      if (retainedLayout && activeLayout === retainedLayout) {
+        console.warn("[Linux.do \u5DE5\u5177\u7BB1] \u53CC\u680F\u9605\u8BFB\u5237\u65B0\u5931\u8D25\uFF0C\u5DF2\u4FDD\u7559\u5F53\u524D\u53CC\u680F\u5185\u5BB9", error);
+        showToast("\u5237\u65B0\u5931\u8D25\uFF0C\u5DF2\u4FDD\u7559\u5F53\u524D\u53CC\u680F\u5185\u5BB9");
+      } else {
         console.warn("[Linux.do \u5DE5\u5177\u7BB1] \u53CC\u680F\u9605\u8BFB\u52A0\u8F7D\u5931\u8D25\uFF0C\u5DF2\u6062\u590D\u539F\u9875\u9762", error);
+        cleanupLayout();
       }
-      cleanupLayout();
     } finally {
       if (version === refreshVersion) {
         loadingKey = null;
@@ -2863,6 +3548,7 @@ html.${ACTIVE_CLASS} #reply-control.open {
   var topicLayoutOwnedSelectors = [
     `.${ROOT_CLASS}`,
     `#${STYLE_ID}`,
+    `#${PENDING_STYLE_ID}`,
     `#${RETURN_BUTTON_ID}`
   ];
 
@@ -2946,7 +3632,10 @@ html.${ACTIVE_CLASS} #reply-control.open {
     });
   }
   async function bootstrap() {
-    await Promise.all([getCachedSettings(), waitForDomReady()]);
+    prepareTopicLayout();
+    const settings = await getCachedSettings();
+    prepareTopicLayout(settings);
+    await waitForDomReady();
     init();
   }
   void bootstrap();

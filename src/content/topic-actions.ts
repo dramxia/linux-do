@@ -2,11 +2,13 @@
 
 export const TOPIC_ACTION_REQUEST_NAME = 'ldtk:topic-action-request';
 export const TOPIC_ACTION_RESULT_NAME = 'ldtk:topic-action-result';
+export const TOPIC_REACTION_PICKER_REQUEST_NAME = 'ldtk:reaction-picker-request';
 
 export const TOPIC_ACTIONS = [
   'like',
   'likeUsers',
   'bookmark',
+  'boost',
   'reply',
   'edit',
   'delete',
@@ -32,6 +34,14 @@ export interface TopicActionResult {
   ok: boolean;
   phase: TopicActionResultPhase;
   message?: string;
+}
+
+export interface TopicReactionPickerRequest {
+  topicId: number;
+  postId: number;
+  floor: number;
+  open: boolean;
+  routeUrl: string;
 }
 
 function parseSerialized(value: unknown): unknown {
@@ -92,5 +102,29 @@ export function parseTopicActionResult(value: unknown): TopicActionResult | null
     ok: detail.ok,
     phase: detail.phase as TopicActionResultPhase,
     ...(detail.message === undefined ? {} : { message: detail.message }),
+  };
+}
+
+export function parseTopicReactionPickerRequest(value: unknown): TopicReactionPickerRequest | null {
+  const parsed = parseSerialized(value);
+  if (!parsed || typeof parsed !== 'object') return null;
+  const detail = parsed as Partial<TopicReactionPickerRequest>;
+  if (
+    !isPositiveInteger(detail.topicId) ||
+    !isPositiveInteger(detail.postId) ||
+    !isPositiveInteger(detail.floor) ||
+    typeof detail.open !== 'boolean' ||
+    typeof detail.routeUrl !== 'string' ||
+    detail.routeUrl.length === 0 ||
+    detail.routeUrl.length > 2048
+  ) {
+    return null;
+  }
+  return {
+    topicId: detail.topicId,
+    postId: detail.postId,
+    floor: detail.floor,
+    open: detail.open,
+    routeUrl: detail.routeUrl,
   };
 }

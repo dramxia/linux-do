@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseTopicActionRequest, parseTopicActionResult } from '../src/content/topic-actions';
+import {
+  parseTopicActionRequest,
+  parseTopicActionResult,
+  parseTopicReactionPickerRequest,
+} from '../src/content/topic-actions';
 
 describe('topic action bridge validation', () => {
   it('parses a serialized action request and drops extra fields', () => {
@@ -41,9 +45,55 @@ describe('topic action bridge validation', () => {
     ).toEqual({ requestId: 'action:2', ok: true, phase: 'settled' });
   });
 
+  it('accepts the native Boost action', () => {
+    expect(
+      parseTopicActionRequest({
+        requestId: 'boost:1',
+        topicId: 123,
+        postId: 456,
+        floor: 7,
+        action: 'boost',
+        routeUrl: 'https://linux.do/t/topic/123/7',
+      })?.action,
+    ).toBe('boost');
+  });
+
   it('rejects results with an unknown phase', () => {
     expect(
       parseTopicActionResult({ requestId: 'action:2', ok: true, phase: 'finished' }),
+    ).toBeNull();
+  });
+
+  it('parses reaction picker hover requests and drops extra fields', () => {
+    expect(
+      parseTopicReactionPickerRequest(
+        JSON.stringify({
+          topicId: 123,
+          postId: 456,
+          floor: 7,
+          open: true,
+          routeUrl: 'https://linux.do/t/topic/123/7?ldo_comments_page=1',
+          token: 'ignored',
+        }),
+      ),
+    ).toEqual({
+      topicId: 123,
+      postId: 456,
+      floor: 7,
+      open: true,
+      routeUrl: 'https://linux.do/t/topic/123/7?ldo_comments_page=1',
+    });
+  });
+
+  it('rejects invalid reaction picker requests', () => {
+    expect(
+      parseTopicReactionPickerRequest({
+        topicId: 123,
+        postId: 456,
+        floor: 7,
+        open: 'yes',
+        routeUrl: '/t/topic/123/7',
+      }),
     ).toBeNull();
   });
 });

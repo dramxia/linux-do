@@ -7,8 +7,10 @@ import {
   parseTopicActionResult,
   TOPIC_ACTION_REQUEST_NAME,
   TOPIC_ACTION_RESULT_NAME,
+  TOPIC_REACTION_PICKER_REQUEST_NAME,
   type TopicAction,
   type TopicActionRequest,
+  type TopicReactionPickerRequest,
 } from './topic-actions';
 import { parseTopicEventDetail, TOPIC_EVENT_NAME, type TopicEventDetail } from './topic-events';
 import { TopicReadTracker } from './topic-read-tracking';
@@ -30,7 +32,9 @@ import {
 
 const ROOT_CLASS = 'ldtk-topic-reading-root';
 const ACTIVE_CLASS = 'ldtk-split-reading-active';
+const PENDING_CLASS = 'ldtk-split-reading-pending';
 const STYLE_ID = 'ldtk-topic-reading-style';
+const PENDING_STYLE_ID = 'ldtk-topic-reading-pending-style';
 const RETURN_BUTTON_ID = 'ldtk-native-return';
 const MIN_VIEWPORT_WIDTH = 1280;
 let nativeAttemptKey: string | null = null;
@@ -52,16 +56,40 @@ const NATIVE_ACTION_SELECTORS: Record<PendingNativeAction['action'], string> = {
   recover: '.post-action-menu__recover, button[title*="恢复"], button[aria-label*="恢复"]',
 };
 
+const PENDING_STYLE = `
+html.${PENDING_CLASS} #main-outlet,
+html.${PENDING_CLASS} .sidebar-wrapper,
+html.${PENDING_CLASS} .topic-navigation,
+html.${PENDING_CLASS} .timeline-container {
+  visibility: hidden !important;
+}
+`;
+
 const LAYOUT_STYLE = `
 html.${ACTIVE_CLASS},
 html.${ACTIVE_CLASS} body {
   overflow: hidden !important;
 }
-html.${ACTIVE_CLASS} #main-outlet,
+html.${ACTIVE_CLASS} #main-outlet {
+  position: relative !important;
+  z-index: 400 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 html.${ACTIVE_CLASS} .sidebar-wrapper,
 html.${ACTIVE_CLASS} .topic-navigation,
 html.${ACTIVE_CLASS} .timeline-container {
   display: none !important;
+}
+html.${ACTIVE_CLASS} #main-outlet .discourse-reactions-picker.is-expanded {
+  z-index: 410 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+html.${ACTIVE_CLASS} #main-outlet .discourse-boosts__input-container,
+html.${ACTIVE_CLASS} #main-outlet .discourse-boosts__input-container * {
+  visibility: visible !important;
+  pointer-events: auto !important;
 }
 html.${ACTIVE_CLASS} #reply-control {
   z-index: 400 !important;
@@ -106,7 +134,19 @@ html.${ACTIVE_CLASS} #reply-control.open {
   border-radius: 6px;
 }
 .ldtk-article-pane {
-  padding: 28px clamp(24px, 4vw, 64px) 56px;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+.ldtk-article-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 28px clamp(24px, 4vw, 64px) 40px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 .ldtk-article-header {
   max-width: 780px;
@@ -131,6 +171,136 @@ html.${ACTIVE_CLASS} #reply-control.open {
 .ldtk-article-content {
   max-width: 780px;
   margin: 0 auto;
+}
+.ldtk-article-footer {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  width: 100%;
+  max-height: min(38vh, 230px);
+  padding: 0 clamp(24px, 4vw, 64px) 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  color: var(--primary, #222);
+  background: var(--secondary, #fff);
+  border-top: 1px solid var(--primary-low, #e4e4e4);
+  box-shadow: 0 -4px 12px rgb(0 0 0 / 4%);
+  scrollbar-gutter: stable;
+}
+.ldtk-article-footer > * {
+  max-width: 780px;
+  margin-right: auto;
+  margin-left: auto;
+}
+.ldtk-article-reply-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 38px;
+  padding: 8px 0;
+  border-top: 1px solid var(--primary-low, #e4e4e4);
+}
+.ldtk-article-reply-summary[hidden] {
+  display: none;
+}
+.ldtk-article-reply-chip {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 5px;
+  min-height: 30px;
+  max-width: min(100%, 300px);
+  padding: 3px 9px 3px 4px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--primary-medium, #666);
+  background: var(--primary-very-low, #f5f5f5);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ldtk-article-reply-chip:hover {
+  color: var(--primary, #222);
+  background: var(--primary-low, #e9e9e9);
+}
+.ldtk-article-reply-chip:focus-visible {
+  outline: 2px solid var(--tertiary, #0088cc);
+  outline-offset: 2px;
+}
+.ldtk-article-reply-avatar {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.ldtk-article-reply-content {
+  min-width: 0;
+  padding-top: 2px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.45;
+  text-align: left;
+}
+.ldtk-article-reply-content img.emoji {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  margin: 0 1px;
+  border-radius: 0;
+  object-fit: contain;
+  vertical-align: -4px;
+}
+.ldtk-topic-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  min-height: 68px;
+  padding: 12px 0;
+  border-top: 1px solid var(--primary-low, #e4e4e4);
+  border-bottom: 1px solid var(--primary-low, #e4e4e4);
+}
+.ldtk-topic-stat {
+  display: grid;
+  gap: 2px;
+  min-width: 52px;
+  color: var(--primary-medium, #666);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.ldtk-topic-stat strong {
+  color: var(--tertiary, #0088cc);
+  font-size: 19px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.ldtk-topic-participants {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.ldtk-topic-participants a {
+  display: block;
+  margin-left: -5px;
+}
+.ldtk-topic-participants a:first-child {
+  margin-left: 0;
+}
+.ldtk-topic-participants img {
+  display: block;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--secondary, #fff);
+  border-radius: 50%;
+  background: var(--primary-low, #e4e4e4);
+}
+.ldtk-topic-read-time {
+  margin-left: auto;
+  text-align: right;
+}
+.ldtk-topic-read-time strong {
+  color: var(--primary-medium, #666);
 }
 .ldtk-comments-pane {
   position: relative;
@@ -369,6 +539,13 @@ html.${ACTIVE_CLASS} #reply-control.open {
   fill: currentColor;
   pointer-events: none;
 }
+.ldtk-post-menu-button .btn-toggle-reaction-emoji {
+  display: block;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  pointer-events: none;
+}
 .ldtk-post-menu-button.button-count {
   gap: 5px;
   color: var(--primary-medium, #777);
@@ -384,6 +561,65 @@ html.${ACTIVE_CLASS} #reply-control.open {
 .ldtk-post-menu-button.post-action-menu__reply {
   padding-inline: 9px;
   color: var(--primary-medium, #666);
+}
+.${ROOT_CLASS} .discourse-boosts__post-menu {
+  width: 100%;
+  padding: 4px 0;
+}
+.${ROOT_CLASS} .discourse-boosts__list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.${ROOT_CLASS} .discourse-boosts__bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 4px 8px 4px 4px;
+  border: 0;
+  border-radius: 50px;
+  color: var(--primary, #222);
+  background: var(--primary-100, var(--primary-very-low, #f2f2f2));
+  font-size: 12px;
+  line-height: 1;
+}
+.${ROOT_CLASS} .discourse-boosts__bubble > a {
+  flex: 0 0 auto;
+}
+.${ROOT_CLASS} .discourse-boosts__bubble .avatar {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.${ROOT_CLASS} .discourse-boosts__cooked {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.${ROOT_CLASS} .discourse-boosts__cooked p {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+}
+.${ROOT_CLASS} .discourse-boosts__cooked img.emoji,
+.${ROOT_CLASS} .discourse-boosts__cooked img.emoji.only-emoji {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  object-fit: contain;
+}
+.${ROOT_CLASS} .discourse-boosts__add-btn {
+  color: var(--primary-medium, #666);
+}
+.${ROOT_CLASS} .discourse-boosts__add-btn:hover {
+  color: var(--primary, #222);
 }
 .ldtk-inline-replies {
   margin-top: 8px;
@@ -524,6 +760,19 @@ function getAvatarUrl(template?: string): string | null {
   return url.startsWith('//') ? `${window.location.protocol}${url}` : url;
 }
 
+function formatCompactNumber(value: number): string {
+  const normalized = Math.max(0, value);
+  if (normalized < 1_000) return String(normalized);
+  const units = [
+    { threshold: 1_000_000, suffix: 'm' },
+    { threshold: 1_000, suffix: 'k' },
+  ];
+  const unit = units.find(({ threshold }) => normalized >= threshold);
+  if (!unit) return String(normalized);
+  const compact = normalized / unit.threshold;
+  return `${compact >= 100 ? Math.round(compact) : compact.toFixed(1).replace(/\.0$/, '')}${unit.suffix}`;
+}
+
 function createElement<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -610,6 +859,34 @@ function ensureLayoutStyle(): void {
   document.head.appendChild(style);
 }
 
+function ensurePendingStyle(): void {
+  if (document.getElementById(PENDING_STYLE_ID)) return;
+  const style = createElement('style');
+  style.id = PENDING_STYLE_ID;
+  style.textContent = PENDING_STYLE;
+  (document.head || document.documentElement).appendChild(style);
+}
+
+export function clearPendingTopicLayout(): void {
+  document.documentElement.classList.remove(PENDING_CLASS);
+  document.getElementById(PENDING_STYLE_ID)?.remove();
+}
+
+export function prepareTopicLayout(settings?: DiscourseSettings): boolean {
+  const route = parseTopicRoute(window.location.pathname);
+  const eligible =
+    Boolean(route) &&
+    window.innerWidth >= MIN_VIEWPORT_WIDTH &&
+    settings?.enableSplitReading !== false;
+  if (!eligible) {
+    clearPendingTopicLayout();
+    return false;
+  }
+  ensurePendingStyle();
+  document.documentElement.classList.add(PENDING_CLASS);
+  return true;
+}
+
 function addHighlight(element: HTMLElement): void {
   element.classList.add('ldtk-post-highlight');
   window.setTimeout(() => element.classList.remove('ldtk-post-highlight'), 1800);
@@ -651,6 +928,7 @@ function tryPendingNativeAction(route: TopicRoute, state: TopicReadingState): vo
 
 function ensureNativeMode(options: NativeModeOptions): void {
   ensureLayoutStyle();
+  clearPendingTopicLayout();
   document.documentElement.classList.remove(ACTIVE_CLASS);
   document.querySelector(`.${ROOT_CLASS}`)?.remove();
   let button = document.getElementById(RETURN_BUTTON_ID) as HTMLButtonElement | null;
@@ -687,6 +965,7 @@ interface LayoutCallbacks {
 class TopicLayout {
   readonly root = createElement('section', ROOT_CLASS);
   private readonly articlePane = createElement('section', 'ldtk-reading-pane ldtk-article-pane');
+  private readonly articleScroll = createElement('div', 'ldtk-article-scroll');
   private readonly commentsPane = createElement('section', 'ldtk-reading-pane ldtk-comments-pane');
   private readonly commentsList = createElement('div', 'ldtk-comments-list');
   private readonly pagination = createElement('nav', 'ldtk-pagination');
@@ -697,7 +976,9 @@ class TopicLayout {
   private readonly pageCount: number;
   private readonly state: TopicReadingState;
   private readonly eventVersions = new Map<number, number>();
+  private readonly reactionImages = new Map<number, { id: string; url?: string }>();
   private readonly replyAborts = new Map<number, AbortController>();
+  private articleReplies: TopicPost[] = [];
   private readTracker: TopicReadTracker | null = null;
   private pageAbort: AbortController | null = null;
   private newReplyCount = 0;
@@ -727,7 +1008,8 @@ class TopicLayout {
         };
   }
 
-  async mount(initialPosts: TopicPost[]): Promise<void> {
+  mount(initialPosts: TopicPost[], articleReplies: TopicPost[] = []): void {
+    this.articleReplies = articleReplies;
     this.ensureStyle();
     this.root.setAttribute('aria-label', '主题双栏阅读');
     const grid = createElement('div', 'ldtk-reading-grid');
@@ -739,13 +1021,18 @@ class TopicLayout {
     this.updateHeaderOffset();
     document.body.appendChild(this.root);
     document.documentElement.classList.add(ACTIVE_CLASS);
+    clearPendingTopicLayout();
     removeReturnButton();
 
-    this.articlePane.scrollTop = this.state.leftScrollTop;
+    this.articleScroll.scrollTop = this.state.leftScrollTop;
     this.commentsPane.scrollTop = this.state.rightScrollTop;
-    this.articlePane.addEventListener('scroll', this.scheduleSave, { passive: true });
+    this.articleScroll.addEventListener('scroll', this.scheduleSave, { passive: true });
     this.commentsPane.addEventListener('scroll', this.scheduleSave, { passive: true });
     this.root.addEventListener('click', this.handleClick);
+    this.root.addEventListener('pointerover', this.handleReactionPointerOver);
+    this.root.addEventListener('pointerout', this.handleReactionPointerOut);
+    this.root.addEventListener('focusin', this.handleReactionFocusIn);
+    this.root.addEventListener('focusout', this.handleReactionFocusOut);
     window.addEventListener('popstate', this.handlePopState);
     window.addEventListener('pagehide', this.handlePageHide);
     document.addEventListener(TOPIC_EVENT_NAME, this.handleTopicEvent as EventListener);
@@ -754,7 +1041,7 @@ class TopicLayout {
     if (this.route.floor) void this.goToFloor(this.route.floor, false);
   }
 
-  destroy(save = true): void {
+  destroy(save = true, preserveShell = false): void {
     if (this.destroyed) return;
     this.destroyed = true;
     if (save) this.saveState();
@@ -763,15 +1050,25 @@ class TopicLayout {
     this.replyAborts.forEach((controller) => controller.abort());
     this.replyAborts.clear();
     this.readTracker?.disconnect();
-    this.articlePane.removeEventListener('scroll', this.scheduleSave);
+    this.articleScroll.removeEventListener('scroll', this.scheduleSave);
     this.commentsPane.removeEventListener('scroll', this.scheduleSave);
     this.root.removeEventListener('click', this.handleClick);
+    this.root.removeEventListener('pointerover', this.handleReactionPointerOver);
+    this.root.removeEventListener('pointerout', this.handleReactionPointerOut);
+    this.root.removeEventListener('focusin', this.handleReactionFocusIn);
+    this.root.removeEventListener('focusout', this.handleReactionFocusOut);
     window.removeEventListener('popstate', this.handlePopState);
     window.removeEventListener('pagehide', this.handlePageHide);
     document.removeEventListener(TOPIC_EVENT_NAME, this.handleTopicEvent as EventListener);
     this.root.remove();
-    document.documentElement.classList.remove(ACTIVE_CLASS);
-    document.getElementById(STYLE_ID)?.remove();
+    if (!preserveShell) {
+      document.documentElement.classList.remove(ACTIVE_CLASS);
+      document.getElementById(STYLE_ID)?.remove();
+    }
+  }
+
+  persistState(): void {
+    this.saveState();
   }
 
   updateHeaderOffset(): void {
@@ -792,6 +1089,7 @@ class TopicLayout {
   }
 
   private renderArticle(): void {
+    const scrollTop = this.articleScroll.scrollTop;
     const header = createElement('header', 'ldtk-article-header');
     const title = createElement('h1');
     title.innerHTML = this.source.topic.fancy_title || this.source.topic.title;
@@ -810,10 +1108,24 @@ class TopicLayout {
     const body = createElement('div', 'topic-body');
     const cooked = createElement('div', 'cooked');
     cooked.innerHTML = this.source.article.cooked;
-    const controls = this.createPostControls(this.source.article);
-    body.append(cooked, controls);
+    const footer = createElement('footer', 'ldtk-article-footer');
+    footer.setAttribute('aria-label', '正文信息和操作');
+    footer.appendChild(this.createPostControls(this.source.article));
+    const boosts = this.createBoosts(this.source.article);
+    if (boosts) footer.appendChild(boosts);
+    const replySummary = this.createArticleReplySummary(this.source.article, this.articleReplies);
+    if (replySummary) {
+      footer.appendChild(replySummary);
+      const repliesButton = footer.querySelector<HTMLButtonElement>('[data-toggle-replies]');
+      repliesButton?.setAttribute('aria-expanded', 'true');
+    }
+    const summary = this.createTopicSummary();
+    if (summary) footer.appendChild(summary);
+    body.appendChild(cooked);
     content.appendChild(body);
-    this.articlePane.replaceChildren(header, content);
+    this.articleScroll.replaceChildren(header, content);
+    this.articlePane.replaceChildren(this.articleScroll, footer);
+    this.articleScroll.scrollTop = scrollTop;
   }
 
   private renderCommentsShell(): void {
@@ -896,6 +1208,8 @@ class TopicLayout {
       cooked.innerHTML = post.cooked;
     }
     body.append(heading, cooked, this.createPostControls(post));
+    const boosts = this.createBoosts(post);
+    if (boosts) body.appendChild(boosts);
     article.append(avatar, body);
     return article;
   }
@@ -908,6 +1222,9 @@ class TopicLayout {
     const like = post.actions_summary?.find((action) => action.id === 2);
     const likeCount = Math.max(0, post.reaction_users_count ?? like?.count ?? 0);
     const hasLiked = post.current_user_used_main_reaction ?? like?.acted === true;
+    const currentReactionId = post.current_user_reaction?.id;
+    const hasCustomReaction = Boolean(currentReactionId && !hasLiked);
+    const hasReaction = hasLiked || Boolean(currentReactionId);
     const replyCount = Math.max(0, post.reply_count || 0);
 
     const addNativeAction = (
@@ -953,14 +1270,25 @@ class TopicLayout {
     }
 
     if (like && post.yours !== true) {
+      const likeLabel = hasCustomReaction
+        ? `取消 ${currentReactionId} 表态`
+        : hasLiked
+          ? '取消赞'
+          : '赞';
+      const stateClass = hasLiked ? 'has-like' : hasCustomReaction ? 'has-reaction' : 'like';
       const likeButton = addNativeAction(
         actions,
         'like',
         hasLiked ? 'd-liked' : 'd-unliked',
-        hasLiked ? '取消赞' : '赞',
-        `post-action-menu__like toggle-like btn-icon ${hasLiked ? 'has-like' : 'like'}`,
+        likeLabel,
+        `post-action-menu__like toggle-like btn-icon ${stateClass}`,
       );
-      likeButton.setAttribute('aria-pressed', String(hasLiked));
+      if (hasCustomReaction && currentReactionId) {
+        const reactionImage = this.createCurrentReactionImage(post, currentReactionId);
+        if (reactionImage) likeButton.replaceChildren(reactionImage);
+      }
+      likeButton.setAttribute('aria-pressed', String(hasReaction));
+      likeButton.setAttribute('aria-haspopup', 'menu');
     }
 
     const copyLink = createPostMenuButton({
@@ -987,6 +1315,18 @@ class TopicLayout {
       bookmark.setAttribute('aria-haspopup', 'menu');
       bookmark.setAttribute('aria-expanded', 'false');
       bookmark.setAttribute('aria-pressed', String(post.bookmarked === true));
+    }
+
+    if (post.can_boost === true && (post.boosts?.length || 0) === 0) {
+      const boost = addNativeAction(
+        actions,
+        'boost',
+        'rocket',
+        '助推',
+        'post-action-menu__boost boost btn-flat',
+      );
+      boost.setAttribute('aria-haspopup', 'menu');
+      boost.setAttribute('aria-expanded', 'false');
     }
 
     const moreActions = createElement('span', 'ldtk-more-actions');
@@ -1045,6 +1385,224 @@ class TopicLayout {
 
     controls.append(extraControls, actions);
     return controls;
+  }
+
+  private createBoosts(post: TopicPost): HTMLElement | null {
+    const boosts = post.boosts || [];
+    if (boosts.length === 0) return null;
+
+    const postMenu = createElement('div', 'discourse-boosts__post-menu');
+    const wrapper = createElement('div', 'discourse-boosts');
+    const list = createElement('div', 'discourse-boosts__list');
+    boosts.forEach((boost) => {
+      const bubble = createElement('span', 'discourse-boosts__bubble');
+      const user = boost.user;
+      const avatarUrl = getAvatarUrl(user?.avatar_template);
+      if (user && avatarUrl) {
+        const profile = createElement('a');
+        profile.href = `/u/${encodeURIComponent(user.username)}`;
+        profile.dataset.userCard = user.username;
+        profile.title = user.name || user.username;
+        profile.setAttribute('aria-label', user.name || user.username);
+        const avatar = createElement('img', 'avatar');
+        avatar.src = avatarUrl;
+        avatar.alt = '';
+        avatar.width = 24;
+        avatar.height = 24;
+        avatar.loading = 'lazy';
+        profile.appendChild(avatar);
+        bubble.appendChild(profile);
+      }
+      const cooked = createElement('span', 'discourse-boosts__cooked');
+      cooked.innerHTML = boost.cooked;
+      bubble.appendChild(cooked);
+      list.appendChild(bubble);
+    });
+
+    if (post.can_boost === true) {
+      const addBoost = createPostMenuButton({
+        className: 'discourse-boosts__add-btn btn-flat',
+        icon: 'rocket',
+        label: '助推',
+      });
+      addBoost.dataset.topicAction = 'boost';
+      addBoost.dataset.postId = String(post.id);
+      addBoost.dataset.floor = String(post.post_number);
+      addBoost.setAttribute('aria-haspopup', 'menu');
+      addBoost.setAttribute('aria-expanded', 'false');
+      list.appendChild(addBoost);
+    }
+
+    wrapper.appendChild(list);
+    postMenu.appendChild(wrapper);
+    return postMenu;
+  }
+
+  private createReplySummaryContent(post: TopicPost): { element: HTMLElement; text: string } {
+    const cooked = createElement('div');
+    cooked.innerHTML = post.cooked;
+    const content = createElement('span', 'ldtk-article-reply-content');
+    const textParts: string[] = [];
+    const blockTags = new Set(['P', 'DIV', 'LI', 'BLOCKQUOTE', 'PRE', 'TR']);
+    const appendText = (value: string): void => {
+      content.appendChild(document.createTextNode(value));
+      textParts.push(value);
+    };
+    const appendNode = (node: Node): void => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        appendText(node.textContent || '');
+        return;
+      }
+      if (!(node instanceof HTMLElement)) return;
+      if (node instanceof HTMLImageElement) {
+        const alt = node.alt || node.title;
+        const isEmoji = node.classList.contains('emoji') || /^:[^:]+:$/.test(alt);
+        if (isEmoji && node.getAttribute('src')) {
+          const emoji = createElement('img', 'emoji');
+          emoji.src = node.getAttribute('src') || '';
+          emoji.alt = alt;
+          emoji.title = node.title;
+          emoji.width = 18;
+          emoji.height = 18;
+          emoji.loading = 'lazy';
+          content.appendChild(emoji);
+          textParts.push(alt);
+        } else if (alt) {
+          appendText(alt);
+        }
+        return;
+      }
+      if (node instanceof HTMLBRElement) {
+        appendText(' ');
+        return;
+      }
+      Array.from(node.childNodes).forEach(appendNode);
+      if (blockTags.has(node.tagName)) appendText(' ');
+    };
+    Array.from(cooked.childNodes).forEach(appendNode);
+    const text = textParts.join('').replace(/\s+/g, ' ').trim();
+    if (content.childNodes.length === 0) appendText(`查看 ${post.post_number} 楼回复`);
+    return { element: content, text: text || `查看 ${post.post_number} 楼回复` };
+  }
+
+  private createArticleReplySummary(
+    article: TopicPost,
+    replies: readonly TopicPost[],
+  ): HTMLElement | null {
+    if (replies.length === 0) return null;
+
+    const summary = createElement('div', 'ldtk-article-reply-summary');
+    summary.dataset.articleReplySummary = String(article.id);
+    summary.setAttribute('aria-label', '正文的直接回复');
+    replies.slice(0, 8).forEach((reply) => {
+      const replyContent = this.createReplySummaryContent(reply);
+      const button = createButton(
+        'ldtk-article-reply-chip',
+        '',
+        `跳转到 ${reply.username} 的 ${reply.post_number} 楼回复：${replyContent.text}`,
+      );
+      button.dataset.targetFloor = String(reply.post_number);
+      const avatarUrl = getAvatarUrl(reply.avatar_template);
+      if (avatarUrl) {
+        const avatar = createElement('img', 'ldtk-article-reply-avatar');
+        avatar.src = avatarUrl;
+        avatar.alt = '';
+        avatar.loading = 'lazy';
+        button.appendChild(avatar);
+      }
+      button.appendChild(replyContent.element);
+      summary.appendChild(button);
+    });
+    return summary;
+  }
+
+  private createTopicSummary(): HTMLElement | null {
+    const topic = this.source.topic;
+    const participants = topic.details?.participants || [];
+    const linkCount = topic.details?.links?.length;
+    const stats: Array<{ value: number; label: string }> = [];
+    if (typeof topic.views === 'number') stats.push({ value: topic.views, label: '浏览量' });
+    if (typeof topic.like_count === 'number') stats.push({ value: topic.like_count, label: '赞' });
+    if (typeof linkCount === 'number') stats.push({ value: linkCount, label: '链接' });
+    if (typeof topic.participant_count === 'number') {
+      stats.push({ value: topic.participant_count, label: '用户' });
+    }
+    const readMinutes =
+      typeof topic.word_count === 'number' && topic.word_count > 0
+        ? Math.max(1, Math.ceil(topic.word_count / 200))
+        : null;
+    if (stats.length === 0 && participants.length === 0 && readMinutes === null) return null;
+
+    const summary = createElement('section', 'ldtk-topic-summary');
+    summary.setAttribute('aria-label', '主题信息');
+    stats.forEach((stat) => {
+      const item = createElement('span', 'ldtk-topic-stat');
+      item.append(
+        createElement('strong', '', formatCompactNumber(stat.value)),
+        createElement('span', '', stat.label),
+      );
+      summary.appendChild(item);
+    });
+
+    if (participants.length > 0) {
+      const people = createElement('span', 'ldtk-topic-participants');
+      people.setAttribute('aria-label', '主要参与者');
+      participants.slice(0, 8).forEach((participant) => {
+        const avatarUrl = getAvatarUrl(participant.avatar_template);
+        if (!avatarUrl) return;
+        const profile = createElement('a');
+        profile.href = `/u/${encodeURIComponent(participant.username)}`;
+        profile.title = participant.name || participant.username;
+        profile.setAttribute('aria-label', participant.name || participant.username);
+        const avatar = createElement('img');
+        avatar.src = avatarUrl;
+        avatar.alt = '';
+        avatar.loading = 'lazy';
+        profile.appendChild(avatar);
+        people.appendChild(profile);
+      });
+      if (people.childElementCount > 0) summary.appendChild(people);
+    }
+
+    if (readMinutes !== null) {
+      const readTime = createElement('span', 'ldtk-topic-stat ldtk-topic-read-time');
+      readTime.append(
+        createElement('strong', '', `${formatCompactNumber(readMinutes)} 分钟`),
+        createElement('span', '', '阅读时间'),
+      );
+      summary.appendChild(readTime);
+    }
+    return summary;
+  }
+
+  private createCurrentReactionImage(post: TopicPost, reactionId: string): HTMLImageElement | null {
+    const nativePost = document.querySelector<HTMLElement>(
+      `#main-outlet .topic-post[data-post-id="${post.id}"], ` +
+        `#main-outlet .topic-post[data-post-number="${post.post_number}"]`,
+    );
+    const nativeImage = nativePost?.querySelector<HTMLImageElement>(
+      '.discourse-reactions-reaction-button .btn-toggle-reaction-emoji',
+    );
+    const expectedAlts = new Set([`:${reactionId}`, `:${reactionId}:`]);
+    let image: HTMLImageElement | null = null;
+    if (nativeImage && (!nativeImage.alt || expectedAlts.has(nativeImage.alt))) {
+      image = nativeImage.cloneNode(false) as HTMLImageElement;
+    } else {
+      const cached = this.reactionImages.get(post.id);
+      if (cached?.id === reactionId && cached.url) {
+        image = document.createElement('img');
+        image.src = cached.url;
+      }
+    }
+    if (!image) return null;
+    image.className = 'btn-toggle-reaction-emoji reaction-button';
+    image.alt = `:${reactionId}:`;
+    image.setAttribute('aria-hidden', 'true');
+    image.draggable = false;
+    image.removeAttribute('style');
+    image.removeAttribute('width');
+    image.removeAttribute('height');
+    return image;
   }
 
   private createInlineReply(post: TopicPost): HTMLElement {
@@ -1146,8 +1704,51 @@ class TopicLayout {
     }
   }
 
+  private async loadArticleReplySummary(button: HTMLButtonElement): Promise<void> {
+    const postId = Number(button.dataset.toggleReplies);
+    if (postId !== this.source.article.id) return;
+    this.replyAborts.get(postId)?.abort();
+    const request = new AbortController();
+    this.replyAborts.set(postId, request);
+    button.disabled = true;
+    try {
+      const replies = await fetchPostReplies(postId, 1, request.signal);
+      if (this.destroyed || request.signal.aborted) return;
+      this.articleReplies = replies;
+      const summary = this.createArticleReplySummary(this.source.article, replies);
+      if (!summary) {
+        showToast('暂无可见回复');
+        return;
+      }
+      button.closest('.ldtk-post-controls')?.insertAdjacentElement('afterend', summary);
+      button.setAttribute('aria-expanded', 'true');
+      button.setAttribute('aria-label', '收起回复');
+      setButtonIcon(button, 'chevron-up');
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') showToast('回复加载失败，请重试');
+    } finally {
+      if (this.replyAborts.get(postId) === request) this.replyAborts.delete(postId);
+      button.disabled = false;
+    }
+  }
+
   private toggleInlineReplies(button: HTMLButtonElement): void {
     const postId = Number(button.dataset.toggleReplies);
+    if (postId === this.source.article.id) {
+      const summary = this.root.querySelector<HTMLElement>(
+        `[data-article-reply-summary="${postId}"]`,
+      );
+      if (!summary) {
+        void this.loadArticleReplySummary(button);
+        return;
+      }
+      summary.hidden = !summary.hidden;
+      const expanded = !summary.hidden;
+      button.setAttribute('aria-expanded', String(expanded));
+      button.setAttribute('aria-label', `${expanded ? '收起' : '展开'}回复`);
+      setButtonIcon(button, expanded ? 'chevron-up' : 'chevron-down');
+      return;
+    }
     const postElement = this.root.querySelector<HTMLElement>(`[data-post-id="${postId}"]`);
     const panel = postElement?.querySelector<HTMLElement>('.ldtk-inline-replies');
     if (!panel) {
@@ -1176,7 +1777,7 @@ class TopicLayout {
       action,
       routeUrl: this.buildActionRoute(floor),
     };
-    const waitsForMenuClose = action === 'bookmark' || action === 'likeUsers';
+    const waitsForMenuClose = action === 'bookmark' || action === 'boost' || action === 'likeUsers';
     let triggered = false;
     const finish = (): void => {
       window.clearTimeout(timeout);
@@ -1208,6 +1809,9 @@ class TopicLayout {
       } else if (action === 'bookmark' && result.phase === 'settled') {
         finish();
         void this.updateVisiblePost({ topicId: request.topicId, postId, type: 'revised' });
+      } else if (action === 'boost' && result.phase === 'settled') {
+        finish();
+        void this.updateVisiblePost({ topicId: request.topicId, postId, type: 'revised' });
       } else if (action === 'likeUsers' && result.phase === 'settled') {
         finish();
       } else if (!waitsForMenuClose) {
@@ -1235,6 +1839,65 @@ class TopicLayout {
       }),
     );
   }
+
+  private requestReactionPicker(button: HTMLButtonElement, open: boolean): void {
+    const postId = Number(button.dataset.postId);
+    const floor = Number(button.dataset.floor);
+    if (!postId || !floor) return;
+    const request: TopicReactionPickerRequest = {
+      topicId: this.source.topic.id,
+      postId,
+      floor,
+      open,
+      routeUrl: this.buildActionRoute(floor),
+    };
+    button.dispatchEvent(
+      new CustomEvent(TOPIC_REACTION_PICKER_REQUEST_NAME, {
+        bubbles: true,
+        detail: JSON.stringify(request),
+      }),
+    );
+  }
+
+  private getReactionButton(target: EventTarget | null): HTMLButtonElement | null {
+    if (!(target instanceof Element)) return null;
+    const button = target.closest<HTMLButtonElement>(
+      '.post-action-menu__like[data-topic-action="like"]',
+    );
+    return button && this.root.contains(button) ? button : null;
+  }
+
+  private isWithinButton(button: HTMLButtonElement, target: EventTarget | null): boolean {
+    return target instanceof Node && button.contains(target);
+  }
+
+  private readonly handleReactionPointerOver = (event: Event): void => {
+    const pointerEvent = event as PointerEvent;
+    if (pointerEvent.pointerType !== 'mouse') return;
+    const button = this.getReactionButton(event.target);
+    if (!button || this.isWithinButton(button, pointerEvent.relatedTarget)) return;
+    this.requestReactionPicker(button, true);
+  };
+
+  private readonly handleReactionPointerOut = (event: Event): void => {
+    const pointerEvent = event as PointerEvent;
+    if (pointerEvent.pointerType !== 'mouse') return;
+    const button = this.getReactionButton(event.target);
+    if (!button || this.isWithinButton(button, pointerEvent.relatedTarget)) return;
+    this.requestReactionPicker(button, false);
+  };
+
+  private readonly handleReactionFocusIn = (event: Event): void => {
+    const button = this.getReactionButton(event.target);
+    if (button) this.requestReactionPicker(button, true);
+  };
+
+  private readonly handleReactionFocusOut = (event: Event): void => {
+    const focusEvent = event as FocusEvent;
+    const button = this.getReactionButton(event.target);
+    if (!button || this.isWithinButton(button, focusEvent.relatedTarget)) return;
+    this.requestReactionPicker(button, false);
+  };
 
   private buildActionRoute(floor: number): string {
     const url = new URL(buildNativeFloorUrl(floor));
@@ -1332,7 +1995,7 @@ class TopicLayout {
 
   private async goToFloor(floor: number, updateHistory: boolean): Promise<void> {
     if (floor <= 1) {
-      this.articlePane.scrollTo({ top: 0, behavior: 'smooth' });
+      this.articleScroll.scrollTo({ top: 0, behavior: 'smooth' });
       const article = this.articlePane.querySelector<HTMLElement>('.topic-post');
       if (article) addHighlight(article);
       return;
@@ -1456,6 +2119,16 @@ class TopicLayout {
       this.newRepliesButton.dataset.visible = 'true';
       return;
     }
+    if (detail.type === 'acted' && detail.currentReactionId !== undefined) {
+      if (detail.currentReactionId) {
+        this.reactionImages.set(detail.postId, {
+          id: detail.currentReactionId,
+          ...(detail.currentReactionUrl ? { url: detail.currentReactionUrl } : {}),
+        });
+      } else {
+        this.reactionImages.delete(detail.postId);
+      }
+    }
     void this.updateVisiblePost(detail);
   };
 
@@ -1505,7 +2178,7 @@ class TopicLayout {
   private saveState(): void {
     writeTopicState(this.route.topicId, {
       page: this.currentPage,
-      leftScrollTop: this.articlePane.scrollTop,
+      leftScrollTop: this.articleScroll.scrollTop,
       rightScrollTop: this.commentsPane.scrollTop,
       nativeMode: false,
     });
@@ -1528,6 +2201,7 @@ function cleanupLayout(): void {
   document.documentElement.classList.remove(ACTIVE_CLASS);
   document.querySelector(`.${ROOT_CLASS}`)?.remove();
   document.getElementById(STYLE_ID)?.remove();
+  clearPendingTopicLayout();
 }
 
 function handoffToNative(
@@ -1566,8 +2240,7 @@ export async function refreshTopicLayout(
 ): Promise<void> {
   latestSettings = settings;
   const route = parseTopicRoute(window.location.pathname);
-  const eligible = settings.enableSplitReading && window.innerWidth >= MIN_VIEWPORT_WIDTH && route;
-  if (!eligible) {
+  if (!settings.enableSplitReading || window.innerWidth < MIN_VIEWPORT_WIDTH || !route) {
     cleanupLayout();
     removeReturnButton();
     nativeAttemptKey = null;
@@ -1591,13 +2264,29 @@ export async function refreshTopicLayout(
   }
   if (!force && loadingKey === key) return;
 
-  cleanupLayout();
+  const retainedLayout = force && activeLayout?.matches(route, settings) ? activeLayout : null;
+  if (!retainedLayout) {
+    prepareTopicLayout(settings);
+    activeLayout?.destroy();
+    activeLayout = null;
+  }
+  loadingAbort?.abort();
   const version = ++refreshVersion;
   loadingKey = key;
-  loadingAbort = new AbortController();
+  const request = new AbortController();
+  loadingAbort = request;
+  let candidate: TopicLayout | null = null;
   try {
-    const source = await TopicDataSource.create(route.topicId, loadingAbort.signal, route.floor);
-    if (version !== refreshVersion || source.isMegaTopic) return;
+    const source = await TopicDataSource.create(route.topicId, request.signal, route.floor);
+    if (version !== refreshVersion) return;
+    if (source.isMegaTopic) {
+      if (retainedLayout) {
+        showToast('主题内容过多，已保留当前双栏内容');
+      } else {
+        cleanupLayout();
+      }
+      return;
+    }
     const pageCount = getPageCount(source.commentCount, settings.commentsPerPage);
     const session = readTopicState(route.topicId);
     const initialPage = deriveInitialPage({
@@ -1608,26 +2297,44 @@ export async function refreshTopicLayout(
       perPage: settings.commentsPerPage,
       pageCount,
     });
-    const posts = await source.loadPage(initialPage, settings.commentsPerPage, loadingAbort.signal);
+    const articleRepliesRequest =
+      (source.article.reply_count || 0) > 0
+        ? fetchPostReplies(source.article.id, 1, request.signal).catch((error: unknown) => {
+            if ((error as Error).name === 'AbortError') throw error;
+            return [];
+          })
+        : Promise.resolve([]);
+    const [posts, articleReplies] = await Promise.all([
+      source.loadPage(initialPage, settings.commentsPerPage, request.signal),
+      articleRepliesRequest,
+    ]);
     if (version !== refreshVersion) return;
-    const layout = new TopicLayout(route, source, settings, initialPage, {
+    retainedLayout?.persistState();
+    candidate = new TopicLayout(route, source, settings, initialPage, {
       requestRefresh: () => {
         const currentSettings = latestSettings;
         if (currentSettings) void refreshTopicLayout(currentSettings, true);
       },
       handoffNative: (floor, action) => handoffToNative(route, settings, floor, action),
     });
-    await layout.mount(posts);
+    candidate.mount(posts, articleReplies);
     if (version !== refreshVersion) {
-      layout.destroy();
+      candidate.destroy(false, Boolean(retainedLayout));
       return;
     }
-    activeLayout = layout;
+    retainedLayout?.destroy(false, true);
+    activeLayout = candidate;
+    candidate = null;
   } catch (error) {
-    if ((error as Error).name !== 'AbortError') {
+    candidate?.destroy(false, Boolean(retainedLayout));
+    if ((error as Error).name === 'AbortError') return;
+    if (retainedLayout && activeLayout === retainedLayout) {
+      console.warn('[Linux.do 工具箱] 双栏阅读刷新失败，已保留当前双栏内容', error);
+      showToast('刷新失败，已保留当前双栏内容');
+    } else {
       console.warn('[Linux.do 工具箱] 双栏阅读加载失败，已恢复原页面', error);
+      cleanupLayout();
     }
-    cleanupLayout();
   } finally {
     if (version === refreshVersion) {
       loadingKey = null;
@@ -1639,5 +2346,6 @@ export async function refreshTopicLayout(
 export const topicLayoutOwnedSelectors = [
   `.${ROOT_CLASS}`,
   `#${STYLE_ID}`,
+  `#${PENDING_STYLE_ID}`,
   `#${RETURN_BUTTON_ID}`,
 ] as const;

@@ -4,6 +4,9 @@ export const TOPIC_EVENT_NAME = 'ldtk:topic-event';
 
 export const TOPIC_EVENT_TYPES = [
   'created',
+  'acted',
+  'boost_added',
+  'boost_removed',
   'revised',
   'rebaked',
   'deleted',
@@ -18,6 +21,8 @@ export interface TopicEventDetail {
   type: TopicEventType;
   postId: number;
   updatedAt?: string;
+  currentReactionId?: string | null;
+  currentReactionUrl?: string;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -27,6 +32,24 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function toPositiveInteger(value: unknown): number | null {
   const number = typeof value === 'string' ? Number(value) : value;
   return typeof number === 'number' && Number.isInteger(number) && number > 0 ? number : null;
+}
+
+function isReactionId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 100 &&
+    !/[\u0000-\u001f]/.test(value)
+  );
+}
+
+function isSafeReactionUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) return false;
+  try {
+    return new URL(value, 'https://linux.do').protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 export function sanitizeTopicMessage(topicId: number, value: unknown): TopicEventDetail | null {
@@ -69,7 +92,12 @@ export function parseTopicEventDetail(value: unknown): TopicEventDetail | null {
     !Number.isInteger(detail.postId) ||
     Number(detail.postId) <= 0 ||
     !TOPIC_EVENT_TYPES.includes(detail.type as TopicEventType) ||
-    (detail.updatedAt !== undefined && typeof detail.updatedAt !== 'string')
+    (detail.updatedAt !== undefined && typeof detail.updatedAt !== 'string') ||
+    (detail.currentReactionId !== undefined &&
+      detail.currentReactionId !== null &&
+      !isReactionId(detail.currentReactionId)) ||
+    (detail.currentReactionUrl !== undefined &&
+      (!isReactionId(detail.currentReactionId) || !isSafeReactionUrl(detail.currentReactionUrl)))
   ) {
     return null;
   }
@@ -78,5 +106,11 @@ export function parseTopicEventDetail(value: unknown): TopicEventDetail | null {
     type: detail.type as TopicEventType,
     postId: detail.postId as number,
     ...(detail.updatedAt === undefined ? {} : { updatedAt: detail.updatedAt }),
+    ...(detail.currentReactionId === undefined
+      ? {}
+      : { currentReactionId: detail.currentReactionId }),
+    ...(detail.currentReactionUrl === undefined
+      ? {}
+      : { currentReactionUrl: detail.currentReactionUrl }),
   };
 }

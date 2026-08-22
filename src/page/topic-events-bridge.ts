@@ -1,13 +1,21 @@
 /* Linux.do 工具箱 - MAIN world Discourse MessageBus 事件桥 */
 
-import { sanitizeTopicMessage, TOPIC_EVENT_NAME } from '../content/topic-events';
+import {
+  parseTopicEventDetail,
+  sanitizeTopicMessage,
+  TOPIC_EVENT_NAME,
+  type TopicEventDetail,
+} from '../content/topic-events';
 import {
   parseTopicActionRequest,
+  parseTopicReactionPickerRequest,
   TOPIC_ACTION_REQUEST_NAME,
   TOPIC_ACTION_RESULT_NAME,
+  TOPIC_REACTION_PICKER_REQUEST_NAME,
   type TopicAction,
   type TopicActionRequest,
   type TopicActionResult,
+  type TopicReactionPickerRequest,
 } from '../content/topic-actions';
 
 const MAX_DISCOVERY_ATTEMPTS = 40;
@@ -27,6 +35,7 @@ interface MessageBusClient {
 
 interface PluginApi {
   onPageChange: (callback: () => void) => void;
+  onAppEvent?: (name: string, callback: (value: unknown) => void) => void;
   container?: DiscourseContainer;
 }
 
@@ -47,6 +56,10 @@ interface DiscourseUrlModule {
     routeTo?: (url: string) => void;
   };
   routeTo?: (url: string) => void;
+}
+
+interface DiscourseTextModule {
+  emojiUrlFor?: (code: string) => string | undefined;
 }
 
 interface DiscourseContainer {
@@ -78,6 +91,7 @@ const ACTION_SELECTORS: Record<TopicAction, readonly string[]> = {
   ],
   likeUsers: ['.discourse-reactions-counter', '.post-action-menu__like-count'],
   bookmark: ['.post-action-menu__bookmark'],
+  boost: ['.post-action-menu__boost', '.discourse-boosts__add-btn'],
   reply: ['.post-action-menu__reply'],
   edit: ['.post-action-menu__edit'],
   delete: ['.post-action-menu__delete'],
@@ -87,12 +101,20 @@ const ACTION_SELECTORS: Record<TopicAction, readonly string[]> = {
 };
 
 const COLLAPSED_ACTIONS = new Set<TopicAction>(['edit', 'delete', 'recover', 'flag', 'share']);
+const REACTION_CONTROL_SELECTOR =
+  '.discourse-reactions-actions-button-shim .discourse-reactions-reaction-button';
+
+type TopicTargetRequest = Pick<
+  TopicActionRequest | TopicReactionPickerRequest,
+  'topicId' | 'postId' | 'floor' | 'routeUrl'
+>;
 
 const pageWindow = window as PageWindow;
 let activeChannel: string | null = null;
 let activeCallback: MessageCallback | null = null;
 let pluginHookInstalled = false;
 let discourseContainer: DiscourseContainer | null = null;
+const pendingReactionPickers = new WeakMap<Element, () => void>();
 
 function getTopicId(): number | null {
   const parts = window.location.pathname.split('/').filter(Boolean);
@@ -113,14 +135,14 @@ function dispatchActionResult(
   );
 }
 
-function getNativePost(request: TopicActionRequest): HTMLElement | null {
+function getNativePost(request: TopicTargetRequest): HTMLElement | null {
   return document.querySelector<HTMLElement>(
     `#main-outlet .topic-post[data-post-id="${request.postId}"], ` +
       `#main-outlet .topic-post[data-post-number="${request.floor}"]`,
   );
 }
 
-function validateActionRoute(request: TopicActionRequest): URL | null {
+function validateActionRoute(request: TopicTargetRequest): URL | null {
   try {
     const url = new URL(request.routeUrl, window.location.origin);
     if (url.origin !== window.location.origin) return null;
@@ -136,6 +158,92 @@ function anchorControlToTarget(control: HTMLElement, target: Element): void {
   const original = control.getBoundingClientRect.bind(control);
   control.getBoundingClientRect = () =>
     target.isConnected ? target.getBoundingClientRect() : original();
+}
+
+function dispatchReactionPointer(
+  control: HTMLElement,
+  target: Element,
+  type: 'pointerover' | 'pointerout',
+): void {
+  anchorControlToTarget(control, target);
+  const pointerEvent =
+    typeof window.PointerEvent === 'function'
+      ? new PointerEvent(type, {
+          bubbles: true,
+          pointerType: 'mouse',
+        })
+      : new MouseEvent(type, {
+          bubbles: true,
+        });
+  if (!('pointerType' in pointerEvent)) {
+    Object.defineProperty(pointerEvent, 'pointerType', { value: 'mouse' });
+  }
+  control.dispatchEvent(pointerEvent);
+}
+
+function queryNativeReactionControl(request: TopicReactionPickerRequest): HTMLElement | null {
+  return getNativePost(request)?.querySelector<HTMLElement>(REACTION_CONTROL_SELECTOR) || null;
+}
+
+function cancelPendingReactionPicker(target: Element): void {
+  pendingReactionPickers.get(target)?.();
+  pendingReactionPickers.delete(target);
+}
+
+function routeToReactionPicker(
+  target: Element,
+  request: TopicReactionPickerRequest,
+  url: URL,
+): void {
+  if (!pageWindow.require) return;
+
+  let timeout = 0;
+  const cleanup = (): void => {
+    observer.disconnect();
+    window.clearTimeout(timeout);
+    if (pendingReactionPickers.get(target) === cleanup) pendingReactionPickers.delete(target);
+  };
+  const attemptOpen = (): void => {
+    const control = queryNativeReactionControl(request);
+    if (!control) return;
+    cleanup();
+    dispatchReactionPointer(control, target, 'pointerover');
+  };
+  const observer = new MutationObserver(attemptOpen);
+  observer.observe(document.body, { childList: true, subtree: true });
+  timeout = window.setTimeout(cleanup, 8_000);
+  pendingReactionPickers.set(target, cleanup);
+
+  try {
+    const module = pageWindow.require('discourse/lib/url') as DiscourseUrlModule | undefined;
+    const routeTo = module?.default?.routeTo || module?.routeTo;
+    if (!routeTo) throw new Error('routeTo unavailable');
+    routeTo.call(module?.default || module, `${url.pathname}${url.search}${url.hash}`);
+    window.setTimeout(attemptOpen, 0);
+  } catch {
+    cleanup();
+  }
+}
+
+function handleReactionPickerRequest(event: Event): void {
+  if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
+  const request = parseTopicReactionPickerRequest(event.detail);
+  if (!request || request.topicId !== getTopicId()) return;
+  const url = validateActionRoute(request);
+  if (!url) return;
+  const target = event.target;
+  cancelPendingReactionPicker(target);
+
+  const control = queryNativeReactionControl(request);
+  if (!request.open) {
+    if (control) dispatchReactionPointer(control, target, 'pointerout');
+    return;
+  }
+  if (control) {
+    dispatchReactionPointer(control, target, 'pointerover');
+  } else {
+    routeToReactionPicker(target, request, url);
+  }
 }
 
 function isMenuExpanded(control: HTMLElement, action: TopicAction): boolean {
@@ -355,7 +463,11 @@ async function triggerNativeAction(
   }
 
   anchorControlToTarget(control, target);
-  if (request.action === 'bookmark' || request.action === 'likeUsers') {
+  if (
+    request.action === 'bookmark' ||
+    request.action === 'boost' ||
+    request.action === 'likeUsers'
+  ) {
     watchMenuClose(control, target, request);
   }
   control.click();
@@ -452,11 +564,46 @@ function handleActionRequest(event: Event): void {
 function forwardEvent(topicId: number, value: unknown): void {
   const detail = sanitizeTopicMessage(topicId, value);
   if (!detail) return;
+  dispatchTopicEvent(detail);
+}
+
+function dispatchTopicEvent(detail: TopicEventDetail): void {
   document.dispatchEvent(
     new CustomEvent(TOPIC_EVENT_NAME, {
       detail: JSON.stringify(detail),
     }),
   );
+}
+
+function forwardReactionToggle(value: unknown): void {
+  const topicId = getTopicId();
+  const post = readProperty(value, 'post');
+  const postId = Number(readProperty(post, 'id'));
+  if (!topicId || !Number.isInteger(postId) || postId <= 0) return;
+
+  const reaction = readProperty(value, 'reaction') ?? readProperty(post, 'current_user_reaction');
+  const reactionIdValue = readProperty(reaction, 'id');
+  const currentReactionId =
+    typeof reactionIdValue === 'string' && reactionIdValue.length > 0 ? reactionIdValue : null;
+  let currentReactionUrl: string | undefined;
+  if (currentReactionId) {
+    try {
+      const textModule = pageWindow.require?.('discourse/lib/text') as
+        DiscourseTextModule | undefined;
+      currentReactionUrl = textModule?.emojiUrlFor?.(currentReactionId);
+    } catch {
+      currentReactionUrl = undefined;
+    }
+  }
+
+  const detail = parseTopicEventDetail({
+    topicId,
+    postId,
+    type: 'acted',
+    currentReactionId,
+    ...(currentReactionUrl ? { currentReactionUrl } : {}),
+  });
+  if (detail) dispatchTopicEvent(detail);
 }
 
 function unsubscribe(): void {
@@ -492,6 +639,7 @@ function installPluginHook(): boolean {
     module.withPluginApi('1.0.0', (api) => {
       discourseContainer = api.container || null;
       api.onPageChange(() => subscribeToCurrentTopic());
+      api.onAppEvent?.('discourse-reactions:reaction-toggled', forwardReactionToggle);
       subscribeToCurrentTopic();
     });
     pluginHookInstalled = true;
@@ -511,4 +659,5 @@ function discover(attempt = 0): void {
 window.addEventListener('popstate', () => subscribeToCurrentTopic());
 document.addEventListener('DOMContentLoaded', () => subscribeToCurrentTopic(), { once: true });
 document.addEventListener(TOPIC_ACTION_REQUEST_NAME, handleActionRequest);
+document.addEventListener(TOPIC_REACTION_PICKER_REQUEST_NAME, handleReactionPickerRequest);
 discover();
