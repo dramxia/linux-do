@@ -241,6 +241,21 @@
       outline: none;
       box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.28);
     }
+    .setting-select {
+      min-width: 66px;
+      height: 30px;
+      padding: 0 8px;
+      border: 1px solid var(--border-glass-strong);
+      border-radius: 6px;
+      color: var(--fg);
+      background: #172033;
+      font: inherit;
+      cursor: pointer;
+    }
+    .setting-select:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
 
     /* ═══════════════ 底部提示 ═══════════════ */
     .hint {
@@ -303,6 +318,18 @@
     功能开关
   </div>
   <div class="setting-list glass">
+    <label class="setting-item">
+      <span>主题正文 / 评论双栏阅读</span>
+      <input id="enableSplitReading" type="checkbox">
+      <span class="switch" aria-hidden="true"></span>
+    </label>
+    <label class="setting-item" for="commentsPerPage">
+      <span>每页评论数</span>
+      <select class="setting-select" id="commentsPerPage">
+        <option value="10">10 条</option>
+        <option value="20">20 条</option>
+      </select>
+    </label>
     <label class="setting-item">
       <span>显示楼层复制 / 下载按钮</span>
       <input id="enablePostActions" type="checkbox">

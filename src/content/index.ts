@@ -6,6 +6,7 @@ import { getCachedSettings, onSettingsChanged } from '../common/settings';
 import type { DiscourseSettings } from '../common/settings';
 import { RefreshScheduler } from './refresh-state';
 import { ManagedObserver } from './managed-observer';
+import { refreshTopicLayout, topicLayoutOwnedSelectors } from './topic-layout';
 
 interface Enhancement {
   refresh: (settings: DiscourseSettings) => void | Promise<void>;
@@ -18,6 +19,10 @@ const selectionToolsEnhancement: Enhancement = {
 };
 
 const enhancements: readonly Enhancement[] = [
+  {
+    refresh: refreshTopicLayout,
+    ownedSelectors: topicLayoutOwnedSelectors,
+  },
   {
     refresh: injectButtons,
     ownedSelectors: ['.ldtk-shadow-host'],
@@ -79,6 +84,7 @@ function bindDynamicPageEvents(): void {
   window.addEventListener('pageshow', (event) => {
     if (event.persisted) handleNavigation();
   });
+  window.addEventListener('resize', handleNavigation, { passive: true });
 }
 
 function init(): void {

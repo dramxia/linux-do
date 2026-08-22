@@ -1,6 +1,8 @@
 /* Linux.do 工具箱 — 设置模块 */
 
 export interface DiscourseSettings {
+  enableSplitReading: boolean;
+  commentsPerPage: 10 | 20;
   enablePostActions: boolean;
   enableBase64Decode: boolean;
   includeMetadata: boolean;
@@ -12,6 +14,8 @@ export type SettingKey = keyof DiscourseSettings;
 type SettingsCallback = (settings: DiscourseSettings) => void;
 
 export const DEFAULT_SETTINGS: Readonly<DiscourseSettings> = Object.freeze({
+  enableSplitReading: false,
+  commentsPerPage: 10,
   enablePostActions: true,
   enableBase64Decode: true,
   includeMetadata: true,
@@ -19,6 +23,8 @@ export const DEFAULT_SETTINGS: Readonly<DiscourseSettings> = Object.freeze({
 });
 
 export const SETTING_KEYS: readonly SettingKey[] = Object.freeze([
+  'enableSplitReading',
+  'commentsPerPage',
   'enablePostActions',
   'enableBase64Decode',
   'includeMetadata',
@@ -30,7 +36,11 @@ function hasChromeStorage(): boolean {
 }
 
 function normalizeSettings(value: Partial<DiscourseSettings> = {}): DiscourseSettings {
-  return { ...DEFAULT_SETTINGS, ...value };
+  return {
+    ...DEFAULT_SETTINGS,
+    ...value,
+    commentsPerPage: value.commentsPerPage === 20 ? 20 : 10,
+  };
 }
 
 export function getSettings(): Promise<DiscourseSettings> {

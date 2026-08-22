@@ -11,7 +11,14 @@ const root = resolve(__dirname, '..');
 const dist = join(root, 'dist');
 
 const STATIC_FILES = ['manifest.json', 'popup.html', 'README.md'];
-const GENERATED_FILES = ['content.js', 'popup.js', 'content.js.map', 'popup.js.map'];
+const GENERATED_FILES = [
+  'content.js',
+  'popup.js',
+  'topic-events-bridge.js',
+  'content.js.map',
+  'popup.js.map',
+  'topic-events-bridge.js.map',
+];
 
 async function ensureDir(dir) {
   await mkdir(dir, { recursive: true });
@@ -54,6 +61,7 @@ try {
     entryPoints: {
       content: join(root, 'src/content/index.ts'),
       popup: join(root, 'src/popup/index.ts'),
+      'topic-events-bridge': join(root, 'src/page/topic-events-bridge.ts'),
     },
     bundle: true,
     format: 'iife',

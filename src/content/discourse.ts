@@ -28,11 +28,16 @@ export function getTopicUrl(): string {
 }
 
 export function getTopicId(): string | null {
-  const match = window.location.pathname.match(/\/t\/[^/]+\/(\d+)/);
-  return match ? match[1] : null;
+  const parts = window.location.pathname.split('/').filter(Boolean);
+  if (parts[0] !== 't') return null;
+  return parts.slice(1).find((part) => /^\d+$/.test(part)) || null;
 }
 
 export function getPostElements(): HTMLElement[] {
+  const readingPosts = Array.from(
+    document.querySelectorAll('.ldtk-topic-reading-root .topic-post'),
+  ).filter((el): el is HTMLElement => isHTMLElement(el));
+  if (readingPosts.length > 0) return readingPosts;
   return Array.from(document.querySelectorAll('.topic-post')).filter((el): el is HTMLElement =>
     isHTMLElement(el),
   );
@@ -44,9 +49,14 @@ export function getPostMeta(postEl: HTMLElement): PostMeta {
   const author =
     postEl.querySelector('.names .username')?.textContent?.trim() ||
     postEl.querySelector('.creator .username')?.textContent?.trim() ||
+    postEl.dataset.username ||
     'Unknown';
   const timeEl = postEl.querySelector('time');
-  const date = timeEl?.getAttribute('datetime') || timeEl?.textContent?.trim() || '';
+  const date =
+    timeEl?.getAttribute('datetime') ||
+    timeEl?.textContent?.trim() ||
+    postEl.dataset.createdAt ||
+    '';
   return { postId, postNumber, author, date };
 }
 

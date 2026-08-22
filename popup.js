@@ -2,12 +2,16 @@
 (() => {
   // src/common/settings.ts
   var DEFAULT_SETTINGS = Object.freeze({
+    enableSplitReading: false,
+    commentsPerPage: 10,
     enablePostActions: true,
     enableBase64Decode: true,
     includeMetadata: true,
     replaceUploadUrls: true
   });
   var SETTING_KEYS = Object.freeze([
+    "enableSplitReading",
+    "commentsPerPage",
     "enablePostActions",
     "enableBase64Decode",
     "includeMetadata",
@@ -17,7 +21,11 @@
     return typeof chrome !== "undefined" && Boolean(chrome.storage?.sync);
   }
   function normalizeSettings(value = {}) {
-    return { ...DEFAULT_SETTINGS, ...value };
+    return {
+      ...DEFAULT_SETTINGS,
+      ...value,
+      commentsPerPage: value.commentsPerPage === 20 ? 20 : 10
+    };
   }
   function getSettings() {
     if (!hasChromeStorage()) {
@@ -75,21 +83,38 @@
     const infoEl = document.getElementById("info");
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabId = tab?.id;
-    const settingInputs = new Map(
-      SETTING_KEYS.map((key) => [key, document.getElementById(key)])
+    const booleanSettingKeys = SETTING_KEYS.filter(
+      (key) => key !== "commentsPerPage"
     );
+    const settingInputs = new Map(
+      booleanSettingKeys.map((key) => [key, document.getElementById(key)])
+    );
+    const commentsPerPage = document.getElementById("commentsPerPage");
     async function loadSettings() {
       const settings = await getSettings();
       settingInputs.forEach((input, key) => {
         if (input) input.checked = settings[key];
       });
+      if (commentsPerPage) commentsPerPage.value = String(settings.commentsPerPage);
     }
     settingInputs.forEach((input, key) => {
       if (!input) return;
-      input.addEventListener("change", () => {
-        saveSettings({ [key]: input.checked }).catch((err) => {
+      input.addEventListener("change", async () => {
+        try {
+          await saveSettings({ [key]: input.checked });
+          if (key === "enableSplitReading" && tabId !== void 0) {
+            await chrome.tabs.reload(tabId);
+            window.close();
+          }
+        } catch (err) {
           if (infoEl) infoEl.textContent = `\u26A0\uFE0F \u8BBE\u7F6E\u4FDD\u5B58\u5931\u8D25\uFF1A${err.message}`;
-        });
+        }
+      });
+    });
+    commentsPerPage?.addEventListener("change", () => {
+      const value = commentsPerPage.value === "20" ? 20 : 10;
+      saveSettings({ commentsPerPage: value }).catch((err) => {
+        if (infoEl) infoEl.textContent = `\u26A0\uFE0F \u8BBE\u7F6E\u4FDD\u5B58\u5931\u8D25\uFF1A${err.message}`;
       });
     });
     await loadSettings();

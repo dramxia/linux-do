@@ -40,6 +40,8 @@ describe('getSettings (normalizeSettings via mocked chrome.storage)', () => {
 
   it('returns all overridden values when full input is stored', async () => {
     const full = {
+      enableSplitReading: true,
+      commentsPerPage: 20 as const,
       enablePostActions: false,
       enableBase64Decode: false,
       includeMetadata: false,
@@ -119,6 +121,8 @@ describe('saveSettings', () => {
 
   it('stores a full settings object', async () => {
     const full = {
+      enableSplitReading: true,
+      commentsPerPage: 20 as const,
       enablePostActions: false,
       enableBase64Decode: false,
       includeMetadata: false,
@@ -148,5 +152,10 @@ describe('saveSettings', () => {
     await expect(saveSettings({ includeMetadata: false })).resolves.toBeUndefined();
 
     (globalThis as { chrome?: ChromeMock }).chrome = savedChrome;
+  });
+
+  it('normalizes unsupported comments-per-page values to 10', async () => {
+    chromeMock.storage.sync.set({ commentsPerPage: 99 });
+    expect((await getSettings()).commentsPerPage).toBe(10);
   });
 });
