@@ -122,32 +122,23 @@ describe('topic split layout lifecycle', () => {
     expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
   });
 
-  it('follows the native sidebar directly without narrowing the opposite edge', async () => {
+  it('updates to the centered sidebar layout without animation', async () => {
     const header = document.querySelector<HTMLElement>('.d-header');
     const toggle = header?.querySelector<HTMLButtonElement>('.header-sidebar-toggle');
     const sidebarWrapper = document.querySelector<HTMLElement>('.sidebar-wrapper');
     const sidebarContainer = sidebarWrapper?.querySelector<HTMLElement>('.sidebar-container');
     let sidebarOpen = false;
-    let presentationShift = 0;
     vi.spyOn(header as HTMLElement, 'getBoundingClientRect').mockReturnValue(
       new DOMRect(0, 0, 1200, 48),
     );
-    vi.spyOn(sidebarWrapper as HTMLElement, 'getBoundingClientRect').mockImplementation(() =>
-      sidebarOpen
-        ? new DOMRect(120 - presentationShift, 48, 280, 800)
-        : new DOMRect(120 - presentationShift, 48, 0, 800),
-    );
-    const nativeGetComputedStyle = window.getComputedStyle.bind(window);
-    vi.spyOn(window, 'getComputedStyle').mockImplementation((element) => {
-      const style = nativeGetComputedStyle(element);
-      if (element !== sidebarWrapper) return style;
-      return new Proxy(style, {
-        get(target, property, receiver) {
-          return property === 'translate'
-            ? `${-presentationShift}px 0px`
-            : Reflect.get(target, property, receiver);
-        },
-      });
+    vi.spyOn(sidebarWrapper as HTMLElement, 'getBoundingClientRect').mockImplementation(() => {
+      const shift =
+        Number.parseFloat(
+          sidebarWrapper?.style.getPropertyValue('--ldtk-sidebar-center-shift') || '',
+        ) || 0;
+      return sidebarOpen
+        ? new DOMRect(120 - shift, 48, 280, 800)
+        : new DOMRect(120 - shift, 48, 0, 800);
     });
     toggle?.addEventListener('click', () => {
       sidebarOpen = !sidebarOpen;
@@ -171,16 +162,6 @@ describe('topic split layout lifecycle', () => {
 
     toggle?.click();
     await vi.waitFor(() => {
-      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-start-inset')).toBe('400px');
-      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-end-inset')).toBe('120px');
-    });
-    presentationShift = 30;
-    await vi.waitFor(() => {
-      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-start-inset')).toBe('370px');
-      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-end-inset')).toBe('90px');
-    });
-    presentationShift = 60;
-    await vi.waitFor(() => {
       expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-start-inset')).toBe('340px');
       expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-end-inset')).toBe('60px');
     });
@@ -197,7 +178,12 @@ describe('topic split layout lifecycle', () => {
     expect(sidebarRect.right).toBeLessThanOrEqual(window.innerWidth);
     expect((sidebarRect.left + shellRight) / 2).toBe(window.innerWidth / 2);
     expect(shellRight - sidebarRect.right).toBe(1040);
-    expect(startInsetHistory).toEqual([400, 370, 340]);
+    expect(
+      getComputedStyle(document.documentElement)
+        .getPropertyValue('--d-sidebar-animation-time')
+        .trim(),
+    ).toBe('0ms');
+    expect(startInsetHistory).toEqual([340]);
 
     startInsetHistory.length = 0;
     toggle?.click();

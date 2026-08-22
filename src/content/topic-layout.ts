@@ -38,7 +38,6 @@ const LOADING_STYLE_ID = 'ldtk-topic-reading-loading-style';
 const LOADING_ROOT_ID = 'ldtk-topic-reading-loading';
 const RETURN_BUTTON_ID = 'ldtk-native-return';
 const MIN_VIEWPORT_WIDTH = 1280;
-const SHELL_OFFSET_MAX_MS = 650;
 const SHELL_OFFSET_EPSILON = 0.2;
 let nativeAttemptKey: string | null = null;
 let actionRequestSequence = 0;
@@ -54,6 +53,9 @@ const NATIVE_ACTION_SELECTORS: Record<PendingNativeAction['action'], string> = {
 };
 
 const LAYOUT_STYLE = `
+html.${ACTIVE_CLASS} {
+  --d-sidebar-animation-time: 0ms;
+}
 html.${ACTIVE_CLASS} #main-outlet .ldtk-shadow-host {
   visibility: hidden !important;
   pointer-events: none !important;
@@ -83,14 +85,9 @@ html.${ACTIVE_CLASS} #reply-control.open {
   opacity: 1 !important;
   pointer-events: auto !important;
 }
-html.${ACTIVE_CLASS} .sidebar-wrapper {
-  transition:
-    translate var(--d-sidebar-animation-time, 250ms)
-    var(--d-sidebar-animation-ease, ease-in-out);
-}
+html.${ACTIVE_CLASS} .sidebar-wrapper { transition: none !important; }
 html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   translate: calc(0px - var(--ldtk-sidebar-center-shift, 0px)) 0;
-  will-change: translate;
 }
 .${ROOT_CLASS} {
   position: fixed;
@@ -997,7 +994,6 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  html.${ACTIVE_CLASS} .sidebar-wrapper { transition: none !important; }
   .${ROOT_CLASS} *, #${RETURN_BUTTON_ID} { scroll-behavior: auto !important; }
   .${ROOT_CLASS} .heart-animation { animation: none !important; }
   .${ROOT_CLASS} button { transition: none !important; }
@@ -1530,13 +1526,15 @@ class TopicLayout {
       this.setSidebarCenterShift(sidebar, centerShift);
       if (canAlign) alignedSidebars.add(sidebar);
 
-      const visibleWidth = Math.min(viewportWidth, rect.right) - Math.max(0, rect.left);
+      const alignedLeft = baseLeft - centerShift;
+      const alignedRight = baseRight - centerShift;
+      const visibleWidth = Math.min(viewportWidth, alignedRight) - Math.max(0, alignedLeft);
       const isVisible = canAlign && rect.width > 0 && visibleWidth > 0;
       if (!isVisible) continue;
 
-      const start = Math.max(0, rect.right);
+      const start = Math.max(0, alignedRight);
       if (start > geometry.start) {
-        geometry = { start, end: Math.max(0, rect.left) };
+        geometry = { start, end: Math.max(0, alignedLeft) };
       }
     }
 
@@ -1591,18 +1589,11 @@ class TopicLayout {
 
   private scheduleShellOffsetUpdates(): void {
     if (this.shellOffsetFrame !== null) window.cancelAnimationFrame(this.shellOffsetFrame);
-    const startedAt = window.performance.now();
-    const trackSidebar = (): void => {
+    this.shellOffsetFrame = window.requestAnimationFrame(() => {
       this.shellOffsetFrame = null;
       if (this.destroyed) return;
-      const frameAt = window.performance.now();
-      const target = this.getShellGeometry(this.shellHeaderHeight);
-      this.applyShellGeometry(target);
-      if (frameAt - startedAt < SHELL_OFFSET_MAX_MS) {
-        this.shellOffsetFrame = window.requestAnimationFrame(trackSidebar);
-      }
-    };
-    this.shellOffsetFrame = window.requestAnimationFrame(trackSidebar);
+      this.updateHeaderOffset();
+    });
   }
 
   private readonly handleNativeShellClick = (event: MouseEvent): void => {
