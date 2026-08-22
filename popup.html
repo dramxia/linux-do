@@ -3,115 +3,332 @@
 <head>
   <meta charset="UTF-8">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      width: 300px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #1a1a2e;
-      color: #e0e0e0;
-      padding: 16px;
+    /* ═══════════════ Design Tokens — 暗色玻璃拟态 ═══════════════ */
+    :root {
+      --bg: #0b1120;
+      --fg: #f8fafc;
+      --muted-fg: #94a3b8;
+      --muted-fg-2: #7c8aa0;
+      --primary: #f59e0b;
+      --primary-strong: #fbbf24;
+      --accent: #8b5cf6;
+      --border-glass: rgba(255, 255, 255, 0.09);
+      --border-glass-strong: rgba(255, 255, 255, 0.16);
+      --glass: linear-gradient(165deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+      --blur: 16px;
+      --radius: 14px;
+      --ease: cubic-bezier(0.22, 1, 0.36, 1);
     }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      padding: 14px;
+      position: relative;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* 环境光晕 —— 为毛玻璃提供可折射的底色 */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background:
+        radial-gradient(240px 180px at 88% -8%, rgba(139, 92, 246, 0.3), transparent 70%),
+        radial-gradient(220px 200px at -12% 32%, rgba(245, 158, 11, 0.15), transparent 70%),
+        radial-gradient(280px 220px at 62% 112%, rgba(59, 130, 246, 0.18), transparent 70%);
+      pointer-events: none;
+    }
+    body > * { position: relative; z-index: 1; }
+
+    /* ═══════════════ 玻璃拟态基元 ═══════════════ */
+    .glass {
+      background: var(--glass);
+      -webkit-backdrop-filter: blur(var(--blur));
+      backdrop-filter: blur(var(--blur));
+      border: 1px solid var(--border-glass);
+      border-radius: var(--radius);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.07),
+        0 12px 28px rgba(2, 6, 23, 0.45);
+    }
+
+    /* ═══════════════ 头部 ═══════════════ */
     .header {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin-bottom: 12px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid #333;
+      gap: 10px;
+      padding: 11px 13px;
+      margin-bottom: 10px;
     }
-    .header h1 { font-size: 14px; font-weight: 600; color: #fff; }
-    .header .icon { font-size: 20px; }
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      flex-shrink: 0;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      color: #0f172a;
+      box-shadow: 0 4px 14px rgba(245, 158, 11, 0.35);
+    }
+    .header h1 { font-size: 13.5px; font-weight: 650; letter-spacing: 0.01em; }
+    .header .sub {
+      font-size: 10px;
+      color: var(--muted-fg);
+      letter-spacing: 0.12em;
+      margin-top: 1px;
+    }
+
+    /* ═══════════════ 页面信息 ═══════════════ */
     .info {
+      padding: 10px 13px;
+      margin-bottom: 10px;
       font-size: 12px;
-      color: #aaa;
-      margin-bottom: 14px;
-      line-height: 1.6;
+      color: var(--muted-fg);
+      line-height: 1.55;
     }
-    .info .title { color: #e0e0e0; font-weight: 500; }
+    .info .title {
+      color: var(--fg);
+      font-weight: 550;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      margin-bottom: 2px;
+    }
+
+    /* ═══════════════ 操作按钮 ═══════════════ */
     .btn-group { display: flex; flex-direction: column; gap: 8px; }
     .btn {
-      display: flex; align-items: center; justify-content: center; gap: 6px;
-      padding: 10px 12px; border: 1px solid #444; border-radius: 8px;
-      background: #16213e; color: #e0e0e0; font-size: 13px; cursor: pointer;
-      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      width: 100%;
+      padding: 10px 13px;
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 550;
+      color: var(--fg);
+      cursor: pointer;
+      text-align: left;
+      transition: transform 0.16s var(--ease), border-color 0.16s var(--ease),
+        box-shadow 0.16s var(--ease), background 0.16s var(--ease);
     }
-    .btn:hover { background: #1a3a5c; border-color: #555; }
-    .btn:active { transform: scale(0.98); }
-    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
-    .btn svg { flex-shrink: 0; }
-    .btn.primary { background: #0f3460; border-color: #1a5276; }
-    .btn.primary:hover { background: #1a5276; }
+    .btn:hover {
+      border-color: var(--border-glass-strong);
+      transform: translateY(-1px);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.09),
+        0 14px 30px rgba(2, 6, 23, 0.55);
+    }
+    .btn:active { transform: scale(0.985); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    .btn:focus-visible {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.28);
+    }
+    .btn-icon {
+      width: 28px;
+      height: 28px;
+      flex-shrink: 0;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--muted-fg);
+    }
+    .btn-label { flex: 1; min-width: 0; }
+    /* 主 CTA —— 金色渐变，每屏仅一个 */
+    .btn.primary {
+      background: linear-gradient(135deg, var(--primary-strong), var(--primary) 55%, #d97706);
+      border-color: rgba(251, 191, 36, 0.55);
+      color: #1c1005;
+      font-weight: 650;
+      box-shadow:
+        0 8px 22px rgba(245, 158, 11, 0.28),
+        inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    }
+    .btn.primary:hover {
+      box-shadow:
+        0 12px 28px rgba(245, 158, 11, 0.38),
+        inset 0 1px 0 rgba(255, 255, 255, 0.4);
+    }
+    .btn.primary .btn-icon {
+      background: rgba(15, 23, 42, 0.16);
+      border-color: rgba(15, 23, 42, 0.2);
+      color: #1c1005;
+    }
+
+    /* ═══════════════ 分区标题 ═══════════════ */
     .section-title {
-      margin: 14px 0 8px;
-      font-size: 12px;
-      color: #8fb3ff;
-      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 14px 2px 8px;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--muted-fg);
+      letter-spacing: 0.16em;
     }
+    .section-title svg { color: var(--accent); }
+
+    /* ═══════════════ 设置 —— 开关 ═══════════════ */
     .setting-list {
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      padding: 10px;
-      border: 1px solid #333;
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.03);
+      gap: 2px;
+      padding: 5px;
     }
     .setting-item {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
+      padding: 8px 9px;
+      border-radius: 9px;
       font-size: 12px;
-      color: #cfcfcf;
+      color: #d6dce8;
       line-height: 1.4;
+      cursor: pointer;
+      transition: background 0.15s var(--ease);
     }
-    .setting-item input { accent-color: #1a5276; }
+    .setting-item:hover { background: rgba(255, 255, 255, 0.045); }
+    .setting-item input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .switch {
+      position: relative;
+      width: 32px;
+      height: 18px;
+      flex-shrink: 0;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      transition: background 0.2s var(--ease), border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+    }
+    .switch::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #cbd5e1;
+      transition: transform 0.22s var(--ease), background 0.2s var(--ease);
+    }
+    .setting-item input:checked + .switch {
+      background: linear-gradient(135deg, var(--primary-strong), var(--primary));
+      border-color: rgba(251, 191, 36, 0.6);
+      box-shadow: 0 2px 10px rgba(245, 158, 11, 0.35);
+    }
+    .setting-item input:checked + .switch::after {
+      transform: translateX(14px);
+      background: #1c1005;
+    }
+    .setting-item input:focus-visible + .switch {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.28);
+    }
+
+    /* ═══════════════ 底部提示 ═══════════════ */
     .hint {
-      font-size: 11px; color: #777; text-align: center; margin-top: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      font-size: 10.5px;
+      color: var(--muted-fg-2);
+      text-align: center;
+      margin-top: 12px;
       line-height: 1.6;
+    }
+    .hint svg { flex-shrink: 0; color: var(--primary); opacity: 0.8; }
+
+    ::selection { background: rgba(245, 158, 11, 0.35); }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
     }
   </style>
 </head>
 <body>
-  <div class="header">
-    <span class="icon">📋</span>
-    <h1>Linux.do 工具箱</h1>
-  </div>
+  <header class="header glass">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+    </span>
+    <div>
+      <h1>Linux.do 工具箱</h1>
+      <div class="sub">Markdown 导出与阅读辅助</div>
+    </div>
+  </header>
 
-  <div class="info" id="info">正在检测页面...</div>
+  <!-- 页面信息（由 popup.js 填充） -->
+  <div class="info glass" id="info">正在检测页面…</div>
 
+  <!-- 操作按钮 -->
   <div class="btn-group">
     <button class="btn primary" id="copyTopic">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-      复制当前已加载楼层
+      <span class="btn-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      </span>
+      <span class="btn-label">复制当前已加载楼层</span>
     </button>
-    <button class="btn primary" id="downloadTopic">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-      下载当前已加载楼层 (.md)
+    <button class="btn glass" id="downloadTopic">
+      <span class="btn-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M4 19h16"/></svg>
+      </span>
+      <span class="btn-label">下载当前已加载楼层 (.md)</span>
     </button>
   </div>
 
-  <div class="section-title">功能开关</div>
-  <div class="setting-list">
+  <!-- 功能开关 -->
+  <div class="section-title">
+    <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><circle cx="9" cy="7" r="2.2"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="15" cy="17" r="2.2"/></svg>
+    功能开关
+  </div>
+  <div class="setting-list glass">
     <label class="setting-item">
       <span>显示楼层复制 / 下载按钮</span>
       <input id="enablePostActions" type="checkbox">
+      <span class="switch" aria-hidden="true"></span>
     </label>
     <label class="setting-item">
       <span>启用选中文本 Base64 解码</span>
       <input id="enableBase64Decode" type="checkbox">
+      <span class="switch" aria-hidden="true"></span>
     </label>
     <label class="setting-item">
       <span>导出时保留来源元信息</span>
       <input id="includeMetadata" type="checkbox">
+      <span class="switch" aria-hidden="true"></span>
     </label>
     <label class="setting-item">
       <span>替换 upload:// 图片链接</span>
       <input id="replaceUploadUrls" type="checkbox">
+      <span class="switch" aria-hidden="true"></span>
     </label>
   </div>
 
-  <div class="hint">💡 整帖导出范围为页面当前已加载楼层</div>
+  <div class="hint">
+    <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.3 11 2.7 2.7 0 0 1 1.3 2.3V17h4v-.7a2.7 2.7 0 0 1 1.3-2.3A6 6 0 0 0 12 3z"/></svg>
+    整帖导出范围为页面当前已加载楼层
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>

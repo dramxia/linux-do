@@ -6,68 +6,58 @@ import { getSettings, type DiscourseSettings } from '../common/settings';
 import { handleError } from './error-handler';
 
 const COPY_ICON =
-  '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const DOWNLOAD_ICON =
-  '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>';
+  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
 
 const SHADOW_HOST_CLASS = 'ldtk-shadow-host';
 
 const BUTTON_SHADOW_STYLE = `
 :host {
   all: initial;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
 }
 .ldcopy-actions {
   display: inline-flex;
-  gap: 4px;
-  margin-left: 8px;
+  gap: 2px;
+  margin-left: 4px;
   vertical-align: middle;
 }
 .ldcopy-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border: 1px solid var(--primary-low-mid, #ccc);
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
   border-radius: 4px;
-  background: var(--secondary, #f5f5f5);
-  color: var(--primary, #333);
-  font-size: 12px;
-  font-family: inherit;
+  background: transparent;
+  color: var(--primary-low-mid, #919191);
   cursor: pointer;
-  transition: all 0.15s ease;
-  line-height: 1.2;
-  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
 }
 .ldcopy-btn:hover {
-  background: var(--highlight-bg, #e8e8e8);
-  border-color: var(--primary-medium, #999);
+  background: var(--d-hover, #e9e9e9);
+  color: var(--primary, #1a1a1a);
 }
 .ldcopy-btn:active {
-  transform: scale(0.96);
+  transform: scale(0.92);
 }
 .ldcopy-btn:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.4;
 }
 .ldcopy-btn svg {
-  flex-shrink: 0;
-  opacity: 0.8;
+  display: block;
 }
-:host-context(html.dark) .ldcopy-btn,
-:host-context(body.dark) .ldcopy-btn {
-  background: #2a2a3e;
-  border-color: #444;
-  color: #ddd;
-}
-:host-context(html.dark) .ldcopy-btn:hover,
-:host-context(body.dark) .ldcopy-btn:hover {
-  background: #3a3a5e;
-  border-color: #666;
-}
-@media (max-width: 768px) {
-  .ldcopy-btn span {
-    display: none;
+@media (prefers-reduced-motion: reduce) {
+  .ldcopy-btn {
+    transition: none;
+  }
+  .ldcopy-btn:active {
+    transform: none;
   }
 }
 `;
@@ -78,7 +68,6 @@ function removeInjectedActions(): void {
 
 interface ActionButtonOptions {
   title: string;
-  label: string;
   icon: string;
   errorContext: string;
   action: () => Promise<void>;
@@ -88,7 +77,8 @@ function createActionButton(options: ActionButtonOptions): HTMLButtonElement {
   const button = document.createElement('button');
   button.className = 'ldcopy-btn';
   button.title = options.title;
-  button.innerHTML = `${options.icon} <span>${options.label}</span>`;
+  button.innerHTML = options.icon;
+  button.setAttribute('aria-label', options.title);
 
   button.addEventListener('click', async (event) => {
     event.preventDefault();
@@ -113,7 +103,6 @@ function createActions(postEl: HTMLElement): HTMLDivElement {
   wrapper.appendChild(
     createActionButton({
       title: '复制本楼原始 Markdown',
-      label: '复制',
       icon: COPY_ICON,
       errorContext: '复制楼层',
       action: async () => {
@@ -127,7 +116,6 @@ function createActions(postEl: HTMLElement): HTMLDivElement {
   wrapper.appendChild(
     createActionButton({
       title: '下载本楼为 Markdown 文件',
-      label: '下载',
       icon: DOWNLOAD_ICON,
       errorContext: '下载楼层',
       action: async () => {
