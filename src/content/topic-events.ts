@@ -2,7 +2,7 @@
 
 export const TOPIC_EVENT_NAME = 'ldtk:topic-event';
 
-export const TOPIC_EVENT_TYPES = [
+const TOPIC_EVENT_TYPES = [
   'created',
   'acted',
   'boost_added',
@@ -14,7 +14,7 @@ export const TOPIC_EVENT_TYPES = [
   'recovered',
 ] as const;
 
-export type TopicEventType = (typeof TOPIC_EVENT_TYPES)[number];
+type TopicEventType = (typeof TOPIC_EVENT_TYPES)[number];
 
 export interface TopicEventDetail {
   topicId: number;

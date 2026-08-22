@@ -34,17 +34,14 @@ const ROOT_CLASS = 'ldtk-topic-reading-root';
 const ACTIVE_CLASS = 'ldtk-split-reading-active';
 const PENDING_CLASS = 'ldtk-split-reading-pending';
 const STYLE_ID = 'ldtk-topic-reading-style';
-const PENDING_STYLE_ID = 'ldtk-topic-reading-pending-style';
+const LOADING_STYLE_ID = 'ldtk-topic-reading-loading-style';
+const LOADING_ROOT_ID = 'ldtk-topic-reading-loading';
 const RETURN_BUTTON_ID = 'ldtk-native-return';
 const MIN_VIEWPORT_WIDTH = 1280;
+const SHELL_OFFSET_MAX_MS = 650;
+const SHELL_OFFSET_EPSILON = 0.2;
 let nativeAttemptKey: string | null = null;
 let actionRequestSequence = 0;
-
-const DISCOURSE_ICON_REPLACEMENTS: Readonly<Record<string, string>> = {
-  'd-liked': 'heart',
-  'd-unliked': 'far-heart',
-  'd-post-share': 'arrow-up-from-bracket',
-};
 
 const NATIVE_ACTION_SELECTORS: Record<PendingNativeAction['action'], string> = {
   like: '.post-action-menu__like, button[title*="赞"], button[aria-label*="赞"]',
@@ -56,27 +53,11 @@ const NATIVE_ACTION_SELECTORS: Record<PendingNativeAction['action'], string> = {
   recover: '.post-action-menu__recover, button[title*="恢复"], button[aria-label*="恢复"]',
 };
 
-const PENDING_STYLE = `
-html.${PENDING_CLASS} #main-outlet,
-html.${PENDING_CLASS} .sidebar-wrapper,
-html.${PENDING_CLASS} .topic-navigation,
-html.${PENDING_CLASS} .timeline-container {
-  visibility: hidden !important;
-}
-`;
-
 const LAYOUT_STYLE = `
-html.${ACTIVE_CLASS},
-html.${ACTIVE_CLASS} body {
-  overflow: hidden !important;
-}
-html.${ACTIVE_CLASS} #main-outlet {
-  position: relative !important;
-  z-index: 400 !important;
+html.${ACTIVE_CLASS} #main-outlet .ldtk-shadow-host {
   visibility: hidden !important;
   pointer-events: none !important;
 }
-html.${ACTIVE_CLASS} .sidebar-wrapper,
 html.${ACTIVE_CLASS} .topic-navigation,
 html.${ACTIVE_CLASS} .timeline-container {
   display: none !important;
@@ -91,6 +72,9 @@ html.${ACTIVE_CLASS} #main-outlet .discourse-boosts__input-container * {
   visibility: visible !important;
   pointer-events: auto !important;
 }
+html.${ACTIVE_CLASS} #main-outlet .discourse-boosts__input-container {
+  z-index: 410 !important;
+}
 html.${ACTIVE_CLASS} #reply-control {
   z-index: 400 !important;
 }
@@ -99,28 +83,50 @@ html.${ACTIVE_CLASS} #reply-control.open {
   opacity: 1 !important;
   pointer-events: auto !important;
 }
+html.${ACTIVE_CLASS} .sidebar-wrapper {
+  transition:
+    translate var(--d-sidebar-animation-time, 250ms)
+    var(--d-sidebar-animation-ease, ease-in-out);
+}
+html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
+  translate: calc(0px - var(--ldtk-sidebar-center-shift, 0px)) 0;
+  will-change: translate;
+}
 .${ROOT_CLASS} {
   position: fixed;
-  inset: var(--ldtk-header-height, 60px) 0 0;
+  inset:
+    var(--ldtk-header-height, 60px) var(--ldtk-sidebar-end-inset, 0px) 0
+    var(--ldtk-sidebar-start-inset, 0px);
   z-index: 90;
+  --ldtk-background: var(--secondary, #fff);
+  --ldtk-foreground: var(--primary, #18181b);
+  --ldtk-muted: var(--primary-very-low, #f4f4f5);
+  --ldtk-muted-foreground: var(--primary-medium, #71717a);
+  --ldtk-border: var(--primary-low, #e4e4e7);
+  --ldtk-accent: var(--primary-very-low, #f4f4f5);
+  --ldtk-accent-foreground: var(--primary, #18181b);
+  --ldtk-ring: var(--tertiary, #0f766e);
+  --ldtk-brand: var(--tertiary, #0f766e);
+  --ldtk-radius: 10px;
   box-sizing: border-box;
+  contain: layout paint;
   overflow: hidden;
-  color: var(--primary, #222);
-  background: var(--secondary, #fff);
-  font-family: var(--font-family, Arial, sans-serif);
+  color: var(--ldtk-foreground);
+  background: var(--ldtk-muted);
+  font-family: var(--font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif);
   letter-spacing: 0;
 }
 .${ROOT_CLASS} *, .${ROOT_CLASS} *::before, .${ROOT_CLASS} *::after {
   box-sizing: border-box;
 }
 .ldtk-reading-grid {
-  width: min(100%, 1920px);
+  width: min(100%, 1880px);
   height: 100%;
   margin: 0 auto;
-  padding: 16px 24px;
+  padding: 10px;
   display: grid;
-  grid-template-columns: minmax(0, 58fr) minmax(420px, 42fr);
-  gap: 24px;
+  grid-template-columns: minmax(0, 3fr) minmax(420px, 2fr);
+  gap: 10px;
 }
 .ldtk-reading-pane {
   min-width: 0;
@@ -129,9 +135,10 @@ html.${ACTIVE_CLASS} #reply-control.open {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  background: var(--secondary, #fff);
-  border: 1px solid var(--primary-low, #e4e4e4);
-  border-radius: 6px;
+  background: var(--ldtk-background);
+  border: 1px solid var(--ldtk-border);
+  border-radius: var(--ldtk-radius);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 5%);
 }
 .ldtk-article-pane {
   display: flex;
@@ -142,34 +149,62 @@ html.${ACTIVE_CLASS} #reply-control.open {
 .ldtk-article-scroll {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 28px clamp(24px, 4vw, 64px) 40px;
+  padding: 28px clamp(24px, 3.5vw, 56px) 36px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 .ldtk-article-header {
-  max-width: 780px;
-  margin: 0 auto 28px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--primary-low, #e4e4e4);
+  max-width: 760px;
+  margin: 0 auto 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--ldtk-border);
 }
 .ldtk-article-header h1 {
-  margin: 0 0 12px;
-  color: var(--primary, #222);
-  font-size: 28px;
-  line-height: 1.3;
-  font-weight: 650;
+  margin: 0 0 14px;
+  color: var(--ldtk-foreground);
+  font-size: 27px;
+  line-height: 1.25;
+  font-weight: 700;
   overflow-wrap: anywhere;
   letter-spacing: 0;
+  text-wrap: balance;
 }
-.ldtk-article-header p,
+.ldtk-article-byline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ldtk-article-byline-avatar {
+  display: block;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: 50%;
+  background: var(--ldtk-muted);
+  object-fit: cover;
+}
+.ldtk-article-byline-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.ldtk-article-byline strong {
+  color: var(--ldtk-foreground);
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+.ldtk-article-byline time,
 .ldtk-comment-status,
 .ldtk-post-meta {
-  color: var(--primary-medium, #6b6b6b);
+  color: var(--ldtk-muted-foreground);
 }
 .ldtk-article-content {
-  max-width: 780px;
+  max-width: 760px;
   margin: 0 auto;
 }
 .ldtk-article-footer {
@@ -177,18 +212,18 @@ html.${ACTIVE_CLASS} #reply-control.open {
   z-index: 2;
   flex: 0 0 auto;
   width: 100%;
-  max-height: min(38vh, 230px);
-  padding: 0 clamp(24px, 4vw, 64px) 12px;
+  max-height: min(42vh, 260px);
+  padding: 0 clamp(24px, 3.5vw, 56px) 8px;
   overflow-x: hidden;
   overflow-y: auto;
-  color: var(--primary, #222);
-  background: var(--secondary, #fff);
-  border-top: 1px solid var(--primary-low, #e4e4e4);
-  box-shadow: 0 -4px 12px rgb(0 0 0 / 4%);
+  color: var(--ldtk-foreground);
+  background: var(--ldtk-background);
+  border-top: 1px solid var(--ldtk-border);
+  box-shadow: 0 -6px 18px rgb(0 0 0 / 5%);
   scrollbar-gutter: stable;
 }
 .ldtk-article-footer > * {
-  max-width: 780px;
+  max-width: 760px;
   margin-right: auto;
   margin-left: auto;
 }
@@ -199,7 +234,7 @@ html.${ACTIVE_CLASS} #reply-control.open {
   gap: 6px;
   min-height: 38px;
   padding: 8px 0;
-  border-top: 1px solid var(--primary-low, #e4e4e4);
+  border-top: 1px solid var(--ldtk-border);
 }
 .ldtk-article-reply-summary[hidden] {
   display: none;
@@ -207,40 +242,52 @@ html.${ACTIVE_CLASS} #reply-control.open {
 .ldtk-article-reply-chip {
   display: inline-flex;
   align-items: flex-start;
-  gap: 5px;
-  min-height: 30px;
-  max-width: min(100%, 300px);
-  padding: 3px 9px 3px 4px;
-  border: 0;
-  border-radius: 8px;
-  color: var(--primary-medium, #666);
-  background: var(--primary-very-low, #f5f5f5);
+  gap: 6px;
+  min-height: 32px;
+  max-width: min(100%, 360px);
+  padding: 4px 9px 4px 4px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: calc(var(--ldtk-radius) - 2px);
+  color: var(--ldtk-muted-foreground);
+  background: var(--ldtk-background);
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 .ldtk-article-reply-chip:hover {
-  color: var(--primary, #222);
-  background: var(--primary-low, #e9e9e9);
+  color: var(--ldtk-accent-foreground);
+  background: var(--ldtk-accent);
 }
 .ldtk-article-reply-chip:focus-visible {
-  outline: 2px solid var(--tertiary, #0088cc);
+  outline: 2px solid var(--ldtk-ring);
   outline-offset: 2px;
+}
+.ldtk-article-reply-chip:active:not(:disabled) {
+  transform: scale(0.98);
 }
 .ldtk-article-reply-avatar {
   flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   object-fit: cover;
 }
 .ldtk-article-reply-content {
+  display: -webkit-box;
   min-width: 0;
   padding-top: 2px;
+  overflow: hidden;
   overflow-wrap: anywhere;
   white-space: normal;
   line-height: 1.45;
   text-align: left;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 .ldtk-article-reply-content img.emoji {
   display: inline-block;
@@ -255,24 +302,24 @@ html.${ACTIVE_CLASS} #reply-control.open {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 14px 20px;
-  min-height: 68px;
-  padding: 12px 0;
-  border-top: 1px solid var(--primary-low, #e4e4e4);
-  border-bottom: 1px solid var(--primary-low, #e4e4e4);
+  gap: 10px 20px;
+  min-height: 56px;
+  padding: 10px 0;
+  border-top: 1px solid var(--ldtk-border);
+  border-bottom: 1px solid var(--ldtk-border);
 }
 .ldtk-topic-stat {
   display: grid;
   gap: 2px;
   min-width: 52px;
-  color: var(--primary-medium, #666);
+  color: var(--ldtk-muted-foreground);
   font-size: 12px;
   line-height: 1.2;
 }
 .ldtk-topic-stat strong {
-  color: var(--tertiary, #0088cc);
-  font-size: 19px;
-  font-weight: 500;
+  color: var(--ldtk-foreground);
+  font-size: 16px;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
 .ldtk-topic-participants {
@@ -289,22 +336,22 @@ html.${ACTIVE_CLASS} #reply-control.open {
 }
 .ldtk-topic-participants img {
   display: block;
-  width: 30px;
-  height: 30px;
-  border: 2px solid var(--secondary, #fff);
+  width: 26px;
+  height: 26px;
+  border: 2px solid var(--ldtk-background);
   border-radius: 50%;
-  background: var(--primary-low, #e4e4e4);
+  background: var(--ldtk-muted);
 }
 .ldtk-topic-read-time {
   margin-left: auto;
   text-align: right;
 }
 .ldtk-topic-read-time strong {
-  color: var(--primary-medium, #666);
+  color: var(--ldtk-foreground);
 }
 .ldtk-comments-pane {
   position: relative;
-  background: var(--secondary, #fff);
+  background: var(--ldtk-background);
 }
 .ldtk-comments-toolbar {
   position: sticky;
@@ -312,43 +359,48 @@ html.${ACTIVE_CLASS} #reply-control.open {
   z-index: 4;
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 54px;
-  padding: 8px 12px;
-  background: var(--secondary, #fff);
-  border-bottom: 1px solid var(--primary-low, #e4e4e4);
+  gap: 6px;
+  min-height: 44px;
+  padding: 6px 10px 6px 14px;
+  background: var(--ldtk-background);
+  border-bottom: 1px solid var(--ldtk-border);
 }
 .ldtk-comments-toolbar h2 {
   margin: 0 auto 0 0;
-  font-size: 16px;
+  font-size: 13px;
   line-height: 1.3;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0;
 }
 .ldtk-toolbar-button,
 .ldtk-pagination button,
 .ldtk-reply-target {
-  min-width: 32px;
-  min-height: 32px;
-  padding: 6px 9px;
-  border: 1px solid var(--primary-low, #ddd);
-  border-radius: 4px;
-  color: var(--primary, #222);
-  background: var(--secondary, #fff);
+  min-width: 30px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: calc(var(--ldtk-radius) - 2px);
+  color: var(--ldtk-foreground);
+  background: var(--ldtk-background);
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 .ldtk-toolbar-button:hover,
 .ldtk-pagination button:hover,
 .ldtk-reply-target:hover {
-  background: var(--primary-very-low, #f5f5f5);
+  background: var(--ldtk-accent);
 }
 .ldtk-toolbar-button:focus-visible,
 .ldtk-pagination button:focus-visible,
 .ldtk-reply-target:focus-visible {
-  outline: 2px solid var(--tertiary, #0088cc);
+  outline: 2px solid var(--ldtk-ring);
   outline-offset: 2px;
 }
 .ldtk-toolbar-button:disabled,
@@ -356,34 +408,59 @@ html.${ACTIVE_CLASS} #reply-control.open {
   cursor: not-allowed;
   opacity: 0.5;
 }
+.ldtk-toolbar-button:active:not(:disabled),
+.ldtk-pagination button:active:not(:disabled),
+.ldtk-reply-target:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.ldtk-toolbar-button {
+  padding: 0;
+}
+.ldtk-toolbar-button .d-icon {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+.ldtk-toolbar-button[aria-busy="true"] .d-icon {
+  animation: ldtk-refresh-spin 700ms linear infinite;
+}
 .ldtk-new-replies {
   display: none;
   width: calc(100% - 24px);
-  margin: 10px 12px 0;
-  padding: 9px 12px;
-  border: 1px solid var(--tertiary-low, #b9dff3);
-  border-radius: 4px;
-  color: var(--tertiary, #0088cc);
-  background: var(--tertiary-very-low, #edf7fc);
+  margin: 8px 12px 0;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: calc(var(--ldtk-radius) - 2px);
+  color: var(--ldtk-brand);
+  background: var(--ldtk-muted);
   font: inherit;
   cursor: pointer;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
 }
+.ldtk-new-replies:hover { background: var(--ldtk-accent); }
+.ldtk-new-replies:active:not(:disabled) { transform: scale(0.99); }
+.ldtk-new-replies:disabled { cursor: wait; opacity: 0.5; }
 .ldtk-new-replies[data-visible="true"] { display: block; }
 .ldtk-comments-list {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  padding: 0 16px;
+  padding: 0 14px;
 }
 .${ROOT_CLASS} .topic-post {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-columns: 36px minmax(0, 1fr);
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  gap: 12px;
-  padding: 20px 0;
-  border-bottom: 1px solid var(--primary-low, #e4e4e4);
+  gap: 10px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--ldtk-border);
   background: transparent;
 }
 .${ROOT_CLASS} .topic-post:last-child { border-bottom: 0; }
@@ -394,8 +471,9 @@ html.${ACTIVE_CLASS} #reply-control.open {
 }
 .${ROOT_CLASS} .topic-avatar img {
   display: block;
-  width: 42px;
-  height: 42px;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--ldtk-border);
   border-radius: 50%;
 }
 .${ROOT_CLASS} .topic-body {
@@ -408,11 +486,12 @@ html.${ACTIVE_CLASS} #reply-control.open {
   align-items: baseline;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 10px;
+  margin-bottom: 7px;
 }
 .${ROOT_CLASS} .names .username {
-  color: var(--primary, #222);
-  font-weight: 650;
+  color: var(--ldtk-foreground);
+  font-size: 13px;
+  font-weight: 600;
   text-decoration: none;
 }
 .ldtk-post-meta {
@@ -422,22 +501,21 @@ html.${ACTIVE_CLASS} #reply-control.open {
   text-decoration: none;
 }
 .ldtk-reply-target {
-  min-height: 24px;
+  min-height: 22px;
   padding: 3px 6px;
-  border-color: var(--tertiary-low, #9ccfe8);
-  color: var(--tertiary-hover, #006699);
-  background: var(--tertiary-very-low, #e7f5fc);
-  box-shadow: inset 3px 0 0 var(--tertiary, #0088cc);
-  font-size: 12px;
+  border-color: var(--ldtk-border);
+  color: var(--ldtk-muted-foreground);
+  background: var(--ldtk-muted);
+  font-size: 11px;
   font-weight: 600;
   line-height: 1.25;
   overflow-wrap: anywhere;
   text-align: left;
 }
 .ldtk-reply-target:hover {
-  border-color: var(--tertiary, #0088cc);
-  color: var(--tertiary-hover, #005580);
-  background: var(--tertiary-low, #d7edf8);
+  border-color: var(--ldtk-muted-foreground);
+  color: var(--ldtk-foreground);
+  background: var(--ldtk-accent);
 }
 .${ROOT_CLASS} .cooked {
   width: 100%;
@@ -446,8 +524,85 @@ html.${ACTIVE_CLASS} #reply-control.open {
   overflow-x: auto;
   overscroll-behavior-inline: contain;
   overflow-wrap: anywhere;
-  font-size: 15px;
+  color: var(--ldtk-foreground);
+  font-size: 14px;
   line-height: 1.65;
+}
+.${ROOT_CLASS} .ldtk-article-content .cooked {
+  font-size: 15px;
+  line-height: 1.75;
+}
+.${ROOT_CLASS} .cooked > :first-child {
+  margin-top: 0;
+}
+.${ROOT_CLASS} .cooked > :last-child {
+  margin-bottom: 0;
+}
+.${ROOT_CLASS} .cooked p,
+.${ROOT_CLASS} .cooked ul,
+.${ROOT_CLASS} .cooked ol,
+.${ROOT_CLASS} .cooked blockquote,
+.${ROOT_CLASS} .cooked pre,
+.${ROOT_CLASS} .cooked table,
+.${ROOT_CLASS} .cooked .onebox {
+  margin-top: 0;
+  margin-bottom: 0.9em;
+}
+.${ROOT_CLASS} .cooked h1,
+.${ROOT_CLASS} .cooked h2,
+.${ROOT_CLASS} .cooked h3,
+.${ROOT_CLASS} .cooked h4,
+.${ROOT_CLASS} .cooked h5,
+.${ROOT_CLASS} .cooked h6 {
+  margin: 1.4em 0 0.6em;
+  color: var(--ldtk-foreground);
+  line-height: 1.35;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+.${ROOT_CLASS} .cooked h1 { font-size: 1.65em; }
+.${ROOT_CLASS} .cooked h2 { font-size: 1.4em; }
+.${ROOT_CLASS} .cooked h3 { font-size: 1.2em; }
+.${ROOT_CLASS} .cooked h4 { font-size: 1.05em; }
+.${ROOT_CLASS} .cooked h5,
+.${ROOT_CLASS} .cooked h6 { font-size: 1em; }
+.${ROOT_CLASS} .cooked a {
+  color: var(--ldtk-brand);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.${ROOT_CLASS} .cooked blockquote {
+  padding: 8px 12px;
+  border-left: 3px solid var(--ldtk-border);
+  color: var(--ldtk-muted-foreground);
+  background: var(--ldtk-muted);
+}
+.${ROOT_CLASS} .cooked blockquote > :last-child {
+  margin-bottom: 0;
+}
+.${ROOT_CLASS} .cooked ul,
+.${ROOT_CLASS} .cooked ol {
+  padding-left: 1.5em;
+}
+.${ROOT_CLASS} .cooked li + li {
+  margin-top: 0.35em;
+}
+.${ROOT_CLASS} .cooked li > ul,
+.${ROOT_CLASS} .cooked li > ol {
+  margin-top: 0.35em;
+  margin-bottom: 0;
+}
+.${ROOT_CLASS} .cooked code:not(pre code) {
+  padding: 0.15em 0.35em;
+  border: 1px solid var(--ldtk-border);
+  border-radius: 4px;
+  background: var(--ldtk-muted);
+  font-size: 0.88em;
+}
+.${ROOT_CLASS} .cooked hr {
+  margin: 2em 0;
+  border: 0;
+  border-top: 1px solid var(--ldtk-border);
 }
 .${ROOT_CLASS} .cooked pre,
 .${ROOT_CLASS} .cooked table,
@@ -458,10 +613,65 @@ html.${ACTIVE_CLASS} #reply-control.open {
   overscroll-behavior-inline: contain;
 }
 .${ROOT_CLASS} .cooked pre {
+  padding: 12px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: calc(var(--ldtk-radius) - 2px);
+  background: var(--ldtk-muted);
   white-space: pre;
+}
+.${ROOT_CLASS} .cooked pre code {
+  font-size: 13px;
+  line-height: 1.65;
 }
 .${ROOT_CLASS} .cooked table {
   display: block;
+  border: 1px solid var(--ldtk-border);
+  border-radius: calc(var(--ldtk-radius) - 2px);
+  border-spacing: 0;
+}
+.${ROOT_CLASS} .cooked th,
+.${ROOT_CLASS} .cooked td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--ldtk-border);
+  text-align: left;
+  vertical-align: top;
+}
+.${ROOT_CLASS} .cooked th {
+  background: var(--ldtk-muted);
+  font-size: 0.92em;
+  font-weight: 600;
+}
+.${ROOT_CLASS} .cooked tr:last-child td {
+  border-bottom: 0;
+}
+.${ROOT_CLASS} .cooked th + th,
+.${ROOT_CLASS} .cooked td + td {
+  border-left: 1px solid var(--ldtk-border);
+}
+.${ROOT_CLASS} .cooked figure {
+  margin: 1.5em 0;
+}
+.${ROOT_CLASS} .cooked figcaption {
+  margin-top: 8px;
+  color: var(--ldtk-muted-foreground);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+.${ROOT_CLASS} .cooked details {
+  margin: 0.9em 0;
+  padding: 9px 12px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: calc(var(--ldtk-radius) - 2px);
+  background: var(--ldtk-muted);
+}
+.${ROOT_CLASS} .cooked summary {
+  color: var(--ldtk-foreground);
+  font-weight: 600;
+  cursor: pointer;
+}
+.${ROOT_CLASS} .cooked details[open] summary {
+  margin-bottom: 8px;
 }
 .${ROOT_CLASS} .cooked p,
 .${ROOT_CLASS} .cooked li,
@@ -480,15 +690,16 @@ html.${ACTIVE_CLASS} #reply-control.open {
 .${ROOT_CLASS} .cooked img,
 .${ROOT_CLASS} .cooked video {
   height: auto;
+  border-radius: calc(var(--ldtk-radius) - 2px);
 }
 .ldtk-post-controls {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  min-height: 40px;
-  margin-top: 16px;
-  color: var(--primary-medium, #6b6b6b);
+  gap: 4px;
+  min-height: 32px;
+  margin-top: 10px;
+  color: var(--ldtk-muted-foreground);
 }
 .ldtk-post-extra-controls,
 .ldtk-post-actions,
@@ -507,26 +718,34 @@ html.${ACTIVE_CLASS} #reply-control.open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-width: 32px;
-  min-height: 32px;
-  padding: 6px 8px;
+  gap: 5px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 6px;
   border: 0;
-  border-radius: 4px;
-  color: var(--primary-low-mid, #919191);
+  border-radius: calc(var(--ldtk-radius) - 2px);
+  color: var(--ldtk-muted-foreground);
   background: transparent;
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 .ldtk-post-menu-button:hover {
-  color: var(--primary, #222);
-  background: var(--d-hover, var(--primary-very-low, #f2f2f2));
+  color: var(--ldtk-accent-foreground);
+  background: var(--ldtk-accent);
 }
 .ldtk-post-menu-button:focus-visible {
-  outline: 2px solid var(--tertiary, #0088cc);
+  outline: 2px solid var(--ldtk-ring);
   outline-offset: 2px;
+}
+.ldtk-post-menu-button:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .ldtk-post-menu-button:disabled,
 .ldtk-post-menu-button[aria-busy="true"] {
@@ -534,21 +753,21 @@ html.${ACTIVE_CLASS} #reply-control.open {
   opacity: 0.5;
 }
 .ldtk-post-menu-button .d-icon {
-  width: 16px;
-  height: 16px;
-  fill: currentColor;
+  width: 15px;
+  height: 15px;
+  display: block;
   pointer-events: none;
 }
 .ldtk-post-menu-button .btn-toggle-reaction-emoji {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   object-fit: contain;
   pointer-events: none;
 }
 .ldtk-post-menu-button.button-count {
   gap: 5px;
-  color: var(--primary-medium, #777);
+  color: var(--ldtk-muted-foreground);
   font-variant-numeric: tabular-nums;
 }
 .ldtk-post-menu-button.like-count .d-icon,
@@ -556,11 +775,12 @@ html.${ACTIVE_CLASS} #reply-control.open {
   color: var(--love, #fa6c8d);
 }
 .ldtk-post-menu-button.bookmarked {
-  color: var(--tertiary, #0088cc);
+  color: var(--ldtk-brand);
 }
 .ldtk-post-menu-button.post-action-menu__reply {
   padding-inline: 9px;
-  color: var(--primary-medium, #666);
+  color: var(--ldtk-foreground);
+  border: 1px solid var(--ldtk-border);
 }
 .${ROOT_CLASS} .discourse-boosts__post-menu {
   width: 100%;
@@ -578,10 +798,10 @@ html.${ACTIVE_CLASS} #reply-control.open {
   gap: 4px;
   max-width: 100%;
   padding: 4px 8px 4px 4px;
-  border: 0;
-  border-radius: 50px;
-  color: var(--primary, #222);
-  background: var(--primary-100, var(--primary-very-low, #f2f2f2));
+  border: 1px solid var(--ldtk-border);
+  border-radius: 999px;
+  color: var(--ldtk-foreground);
+  background: var(--ldtk-muted);
   font-size: 12px;
   line-height: 1;
 }
@@ -616,29 +836,31 @@ html.${ACTIVE_CLASS} #reply-control.open {
   object-fit: contain;
 }
 .${ROOT_CLASS} .discourse-boosts__add-btn {
-  color: var(--primary-medium, #666);
+  color: var(--ldtk-muted-foreground);
 }
 .${ROOT_CLASS} .discourse-boosts__add-btn:hover {
-  color: var(--primary, #222);
+  color: var(--ldtk-foreground);
 }
 .ldtk-inline-replies {
   margin-top: 8px;
-  border-top: 1px solid var(--primary-low, #e4e4e4);
+  padding-left: 10px;
+  border-top: 1px solid var(--ldtk-border);
+  border-left: 2px solid var(--ldtk-border);
 }
 .ldtk-inline-replies[hidden] {
   display: none;
 }
 .ldtk-inline-reply {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: 10px;
-  padding: 14px 0;
-  border-bottom: 1px solid var(--primary-low, #e4e4e4);
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--ldtk-border);
 }
 .ldtk-inline-reply-avatar img {
   display: block;
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
 }
 .ldtk-inline-reply-body {
@@ -647,46 +869,46 @@ html.${ACTIVE_CLASS} #reply-control.open {
 .ldtk-inline-reply-heading {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: 6px;
+  margin-bottom: 4px;
 }
 .ldtk-inline-reply-heading strong {
-  color: var(--primary, #222);
-  font-size: 13px;
+  color: var(--ldtk-foreground);
+  font-size: 12px;
 }
 .ldtk-inline-reply-floor {
   margin-left: auto;
   padding: 2px 0;
   border: 0;
-  color: var(--primary-medium, #777);
+  color: var(--ldtk-muted-foreground);
   background: transparent;
   font: inherit;
   font-size: 12px;
   cursor: pointer;
 }
 .ldtk-inline-reply .cooked {
-  font-size: 14px;
+  font-size: 13px;
 }
 .ldtk-inline-replies-status,
 .ldtk-load-more-replies {
   width: 100%;
-  padding: 10px;
+  padding: 8px;
   border: 0;
-  color: var(--primary-medium, #666);
+  color: var(--ldtk-muted-foreground);
   background: transparent;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   text-align: center;
 }
 .ldtk-load-more-replies {
   cursor: pointer;
 }
 .ldtk-load-more-replies:hover {
-  color: var(--tertiary, #0088cc);
-  background: var(--primary-very-low, #f5f5f5);
+  color: var(--ldtk-brand);
+  background: var(--ldtk-accent);
 }
 .ldtk-deleted-placeholder {
-  color: var(--primary-medium, #666);
+  color: var(--ldtk-muted-foreground);
   font-style: italic;
 }
 .ldtk-destroyed-post > .ldtk-deleted-placeholder {
@@ -694,8 +916,9 @@ html.${ACTIVE_CLASS} #reply-control.open {
   margin: 0;
 }
 .ldtk-comment-status {
-  padding: 36px 16px;
+  padding: 24px 12px;
   text-align: center;
+  font-size: 13px;
 }
 .ldtk-pagination {
   position: sticky;
@@ -705,40 +928,120 @@ html.${ACTIVE_CLASS} #reply-control.open {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  min-height: 52px;
-  padding: 8px 12px;
-  background: var(--secondary, #fff);
-  border-top: 1px solid var(--primary-low, #e4e4e4);
+  min-height: 46px;
+  padding: 8px 10px;
+  background: var(--ldtk-background);
+  border-top: 1px solid var(--ldtk-border);
 }
 .ldtk-pagination button[aria-current="page"] {
-  color: var(--secondary, #fff);
-  border-color: var(--tertiary, #0088cc);
-  background: var(--tertiary, #0088cc);
+  color: var(--ldtk-background);
+  border-color: var(--ldtk-foreground);
+  background: var(--ldtk-foreground);
 }
-.ldtk-pagination-ellipsis { padding: 0 3px; color: var(--primary-medium, #666); }
+.ldtk-pagination .d-icon {
+  width: 13px;
+  height: 13px;
+  display: block;
+  pointer-events: none;
+}
+.ldtk-pagination-ellipsis { padding: 0 3px; color: var(--ldtk-muted-foreground); }
 .ldtk-post-highlight {
-  outline: 3px solid var(--tertiary, #0088cc);
-  outline-offset: -3px;
-  background: var(--tertiary-very-low, #edf7fc) !important;
+  outline: 2px solid var(--ldtk-ring);
+  outline-offset: -2px;
+  background: var(--ldtk-muted) !important;
 }
 #${RETURN_BUTTON_ID} {
   position: fixed;
-  right: 24px;
-  bottom: 24px;
+  right: 20px;
+  bottom: 20px;
   z-index: 2147483646;
-  min-height: 40px;
-  padding: 9px 14px;
-  border: 1px solid var(--tertiary, #0088cc);
-  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid var(--primary, #18181b);
+  border-radius: 8px;
   color: var(--secondary, #fff);
-  background: var(--tertiary, #0088cc);
-  box-shadow: 0 4px 14px rgb(0 0 0 / 20%);
-  font: 600 14px/1.2 var(--font-family, Arial, sans-serif);
+  background: var(--primary, #18181b);
+  box-shadow:
+    0 4px 6px -1px rgb(0 0 0 / 0.1),
+    0 2px 4px -2px rgb(0 0 0 / 0.1);
+  font: 500 12px/1.2 var(--font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif);
   cursor: pointer;
+  transition:
+    opacity 120ms ease,
+    transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+#${RETURN_BUTTON_ID}:hover { opacity: 0.9; }
+#${RETURN_BUTTON_ID}:active { transform: scale(0.98); }
+#${RETURN_BUTTON_ID}:focus-visible {
+  outline: 2px solid var(--tertiary, #0f766e);
+  outline-offset: 3px;
+}
+@keyframes ldtk-refresh-spin {
+  to { transform: rotate(-360deg); }
+}
+@media (max-width: 1439px) {
+  .ldtk-reading-grid {
+    grid-template-columns: minmax(0, 56fr) minmax(420px, 44fr);
+  }
+  .ldtk-article-scroll {
+    padding-inline: 28px;
+  }
+  .ldtk-article-footer {
+    padding-inline: 28px;
+  }
+  .ldtk-article-header h1 {
+    font-size: 24px;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
+  html.${ACTIVE_CLASS} .sidebar-wrapper { transition: none !important; }
   .${ROOT_CLASS} *, #${RETURN_BUTTON_ID} { scroll-behavior: auto !important; }
   .${ROOT_CLASS} .heart-animation { animation: none !important; }
+  .${ROOT_CLASS} button { transition: none !important; }
+  .${ROOT_CLASS} button:active { transform: none !important; }
+  .ldtk-toolbar-button[aria-busy="true"] .d-icon { animation: none !important; }
+  #${RETURN_BUTTON_ID} { transition: none !important; }
+  #${RETURN_BUTTON_ID}:active { transform: none !important; }
+}
+`;
+
+/* ═══════ 双栏加载遮罩 —— 与 shadcn 主题一致的 spinner ═══════ */
+const LOADING_STYLE = `
+#${LOADING_ROOT_ID} {
+  position: fixed;
+  inset: var(--ldtk-header-height, 60px) 0 0;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--secondary, #fff);
+  color: var(--primary-medium, #71717a);
+  font: 500 13px/1.5 var(--font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif);
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+#${LOADING_ROOT_ID}[data-visible="true"] {
+  opacity: 1;
+}
+#${LOADING_ROOT_ID} .ldtk-loading-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2.5px solid var(--primary-low, #e4e4e7);
+  border-top-color: var(--primary, #18181b);
+  animation: ldtk-loading-spin 700ms linear infinite;
+}
+@keyframes ldtk-loading-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #${LOADING_ROOT_ID} { transition: none !important; }
+  #${LOADING_ROOT_ID} .ldtk-loading-spinner { animation-duration: 1.4s !important; }
 }
 `;
 
@@ -792,22 +1095,79 @@ function createButton(className: string, text: string, label = text): HTMLButton
 }
 
 function createDiscourseIcon(name: string): SVGSVGElement {
-  const symbolName = DISCOURSE_ICON_REPLACEMENTS[name] || name;
+  const resolved = LUCIDE_NAME_MAP[name] || name;
+  const icon = createLucideIcon(name);
+  icon.classList.add('d-icon', `d-icon-${name}`, `d-icon-lucide-${resolved}`);
+  return icon;
+}
+
+/* lucide 图标路径 —— 正文操作栏与评论操作栏共用同一图标体系（24x24，stroke 2，圆角端点） */
+const LUCIDE_ICONS: Readonly<Record<string, string>> = {
+  'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+  'arrow-up-from-bracket':
+    '<path d="M7 17V7h10"/><path d="m7 7 10 10"/><path d="M12 3v9"/><path d="m8 7 4-4 4 4"/>',
+  bookmark: '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z"/>',
+  'bookmark-clock':
+    '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4"/><circle cx="18" cy="16" r="4"/><path d="M18 14v2l1.5 1.5"/>',
+  'chevron-down': '<path d="m6 9 6 6 6-6"/>',
+  'chevron-left': '<path d="m15 18-6-6 6-6"/>',
+  'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+  'chevron-up': '<path d="m18 15-6-6-6 6"/>',
+  ellipsis:
+    '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  'far-bookmark': '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z"/>',
+  'far-heart':
+    '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+  flag: '<path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 5.5 2q1.5.5 3 0a1 1 0 0 1 1 .6c.2.3.5.8.5 1.4v8a1 1 0 0 1-.4.8A6 6 0 0 1 14 16c-3 0-5-2-5.5-2q-1.5-.5-3 0a1 1 0 0 0-.5.4V22"/>',
+  heart:
+    '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  pencil:
+    '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  reply: '<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>',
+  rocket:
+    '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
+  'rotate-left':
+    '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  'trash-can':
+    '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
+};
+/* Discourse 图标名 → lucide 图标名 */
+const LUCIDE_NAME_MAP: Readonly<Record<string, string>> = {
+  'd-liked': 'heart',
+  'd-unliked': 'far-heart',
+  'd-post-share': 'arrow-up-from-bracket',
+  'discourse-bookmark-clock': 'bookmark-clock',
+};
+/* 需要填充（而非描边）表示“已激活”状态的图标 */
+const LUCIDE_FILLED_ICONS: ReadonlySet<string> = new Set(['heart', 'bookmark']);
+
+function createLucideIcon(name: string, size = 15): SVGSVGElement {
   const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  icon.classList.add('fa', 'd-icon', `d-icon-${name}`, 'svg-icon', 'svg-string');
+  const resolved = LUCIDE_NAME_MAP[name] || name;
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('width', String(size));
+  icon.setAttribute('height', String(size));
+  icon.setAttribute('fill', LUCIDE_FILLED_ICONS.has(resolved) ? 'currentColor' : 'none');
+  icon.setAttribute('stroke', 'currentColor');
+  icon.setAttribute('stroke-width', '2');
+  icon.setAttribute('stroke-linecap', 'round');
+  icon.setAttribute('stroke-linejoin', 'round');
   icon.setAttribute('aria-hidden', 'true');
-  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-  use.setAttribute('href', `#${symbolName}`);
-  icon.appendChild(use);
+  icon.innerHTML = LUCIDE_ICONS[resolved] || LUCIDE_ICONS[name] || '';
   return icon;
 }
 
 function setButtonIcon(button: HTMLButtonElement, name: string): void {
-  const use = button.querySelector('use');
-  if (!use) return;
-  use.setAttribute('href', `#${DISCOURSE_ICON_REPLACEMENTS[name] || name}`);
-  const icon = use.closest('svg');
-  if (icon) icon.setAttribute('class', `fa d-icon d-icon-${name} svg-icon svg-string`);
+  const oldIcon = button.querySelector('svg.d-icon');
+  if (!oldIcon) return;
+  const next = createDiscourseIcon(name);
+  const size = oldIcon.getAttribute('width');
+  if (size) {
+    next.setAttribute('width', size);
+    next.setAttribute('height', size);
+  }
+  oldIcon.replaceWith(next);
 }
 
 interface PostMenuButtonOptions {
@@ -825,6 +1185,13 @@ function createPostMenuButton(options: PostMenuButtonOptions): HTMLButtonElement
   button.title = options.label;
   button.appendChild(createDiscourseIcon(options.icon));
   if (options.visibleLabel) button.appendChild(createElement('span', '', options.visibleLabel));
+  return button;
+}
+
+function createIconButton(className: string, icon: string, label: string): HTMLButtonElement {
+  const button = createButton(className, '', label);
+  button.title = label;
+  button.appendChild(createDiscourseIcon(icon));
   return button;
 }
 
@@ -851,6 +1218,44 @@ function removeReturnButton(): void {
   document.getElementById(RETURN_BUTTON_ID)?.remove();
 }
 
+/* 双栏加载遮罩：数据拉取期间覆盖页面，避免原生界面闪动 */
+function showLoadingOverlay(): void {
+  if (document.getElementById(LOADING_ROOT_ID)) return;
+  if (!document.getElementById(LOADING_STYLE_ID)) {
+    const style = createElement('style');
+    style.id = LOADING_STYLE_ID;
+    style.textContent = LOADING_STYLE;
+    (document.head || document.documentElement).appendChild(style);
+  }
+  const overlay = createElement('div');
+  overlay.id = LOADING_ROOT_ID;
+  overlay.setAttribute('role', 'status');
+  overlay.setAttribute('aria-live', 'polite');
+  overlay.dataset.visible = 'false';
+  const spinner = createElement('div', 'ldtk-loading-spinner');
+  spinner.setAttribute('aria-hidden', 'true');
+  overlay.append(spinner, createElement('div', '', '正在加载双栏阅读…'));
+  (document.body || document.documentElement).appendChild(overlay);
+  const header = document.querySelector<HTMLElement>('.d-header-wrap, .d-header');
+  const height = Math.max(0, Math.round(header?.getBoundingClientRect().bottom || 0));
+  overlay.style.setProperty('--ldtk-header-height', `${height || 60}px`);
+  requestAnimationFrame(() => {
+    overlay.dataset.visible = 'true';
+  });
+}
+
+function hideLoadingOverlay(): void {
+  const overlay = document.getElementById(LOADING_ROOT_ID);
+  if (!overlay) return;
+  overlay.dataset.visible = 'false';
+  window.setTimeout(() => {
+    overlay.remove();
+    if (!document.getElementById(LOADING_ROOT_ID)) {
+      document.getElementById(LOADING_STYLE_ID)?.remove();
+    }
+  }, 200);
+}
+
 function ensureLayoutStyle(): void {
   if (document.getElementById(STYLE_ID)) return;
   const style = createElement('style');
@@ -859,17 +1264,8 @@ function ensureLayoutStyle(): void {
   document.head.appendChild(style);
 }
 
-function ensurePendingStyle(): void {
-  if (document.getElementById(PENDING_STYLE_ID)) return;
-  const style = createElement('style');
-  style.id = PENDING_STYLE_ID;
-  style.textContent = PENDING_STYLE;
-  (document.head || document.documentElement).appendChild(style);
-}
-
 export function clearPendingTopicLayout(): void {
   document.documentElement.classList.remove(PENDING_CLASS);
-  document.getElementById(PENDING_STYLE_ID)?.remove();
 }
 
 export function prepareTopicLayout(settings?: DiscourseSettings): boolean {
@@ -882,7 +1278,6 @@ export function prepareTopicLayout(settings?: DiscourseSettings): boolean {
     clearPendingTopicLayout();
     return false;
   }
-  ensurePendingStyle();
   document.documentElement.classList.add(PENDING_CLASS);
   return true;
 }
@@ -935,6 +1330,7 @@ function ensureNativeMode(options: NativeModeOptions): void {
   if (!button) {
     button = createButton('', '返回双栏阅读');
     button.id = RETURN_BUTTON_ID;
+    button.prepend(createLucideIcon('arrow-left', 13));
     document.body.appendChild(button);
   }
   button.onclick = () => {
@@ -958,8 +1354,13 @@ function ensureNativeMode(options: NativeModeOptions): void {
 }
 
 interface LayoutCallbacks {
-  requestRefresh: () => void;
+  requestRefresh: () => Promise<void>;
   handoffNative: (floor: number, action?: PendingNativeAction['action']) => void;
+}
+
+interface ShellGeometry {
+  start: number;
+  end: number;
 }
 
 class TopicLayout {
@@ -970,7 +1371,11 @@ class TopicLayout {
   private readonly commentsList = createElement('div', 'ldtk-comments-list');
   private readonly pagination = createElement('nav', 'ldtk-pagination');
   private readonly newRepliesButton = createButton('ldtk-new-replies', '有新回复，点击刷新');
-  private readonly refreshButton = createButton('ldtk-toolbar-button', '刷新', '刷新评论');
+  private readonly refreshButton = createIconButton(
+    'ldtk-toolbar-button',
+    'rotate-left',
+    '刷新评论',
+  );
   private readonly status = createElement('div', 'ldtk-comment-status');
   private currentPage: number;
   private readonly pageCount: number;
@@ -984,6 +1389,10 @@ class TopicLayout {
   private newReplyCount = 0;
   private destroyed = false;
   private saveTimer: number | null = null;
+  private shellOffsetFrame: number | null = null;
+  private shellHeaderHeight = 60;
+  private shellGeometry: ShellGeometry | null = null;
+  private readonly alignedSidebars = new Set<HTMLElement>();
 
   constructor(
     readonly route: TopicRoute,
@@ -1035,6 +1444,8 @@ class TopicLayout {
     this.root.addEventListener('focusout', this.handleReactionFocusOut);
     window.addEventListener('popstate', this.handlePopState);
     window.addEventListener('pagehide', this.handlePageHide);
+    document.addEventListener('click', this.handleNativeShellClick, true);
+    document.addEventListener('transitionend', this.handleNativeShellTransitionEnd, true);
     document.addEventListener(TOPIC_EVENT_NAME, this.handleTopicEvent as EventListener);
     injectButtons(this.settings);
 
@@ -1046,6 +1457,8 @@ class TopicLayout {
     this.destroyed = true;
     if (save) this.saveState();
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
+    if (this.shellOffsetFrame !== null) window.cancelAnimationFrame(this.shellOffsetFrame);
+    this.clearSidebarAlignments();
     this.pageAbort?.abort();
     this.replyAborts.forEach((controller) => controller.abort());
     this.replyAborts.clear();
@@ -1059,6 +1472,8 @@ class TopicLayout {
     this.root.removeEventListener('focusout', this.handleReactionFocusOut);
     window.removeEventListener('popstate', this.handlePopState);
     window.removeEventListener('pagehide', this.handlePageHide);
+    document.removeEventListener('click', this.handleNativeShellClick, true);
+    document.removeEventListener('transitionend', this.handleNativeShellTransitionEnd, true);
     document.removeEventListener(TOPIC_EVENT_NAME, this.handleTopicEvent as EventListener);
     this.root.remove();
     if (!preserveShell) {
@@ -1072,9 +1487,13 @@ class TopicLayout {
   }
 
   updateHeaderOffset(): void {
-    const header = document.querySelector<HTMLElement>('.d-header-wrap, .d-header');
-    const height = Math.max(0, Math.round(header?.getBoundingClientRect().bottom || 0));
-    this.root.style.setProperty('--ldtk-header-height', `${height || 60}px`);
+    const height = Array.from(
+      document.querySelectorAll<HTMLElement>('.d-header-wrap, .d-header'),
+    ).reduce((bottom, header) => Math.max(bottom, header.getBoundingClientRect().bottom), 0);
+    this.shellHeaderHeight = height || 60;
+    this.root.style.setProperty('--ldtk-header-height', `${this.shellHeaderHeight}px`);
+    const target = this.getShellGeometry(this.shellHeaderHeight);
+    this.applyShellGeometry(target);
   }
 
   matches(route: TopicRoute, settings: DiscourseSettings): boolean {
@@ -1088,17 +1507,144 @@ class TopicLayout {
     ensureLayoutStyle();
   }
 
+  private getShellGeometry(headerHeight: number): ShellGeometry {
+    const viewportWidth = Math.max(0, window.innerWidth);
+    const alignedSidebars = new Set<HTMLElement>();
+    let geometry: ShellGeometry = { start: 0, end: 0 };
+
+    for (const sidebar of document.querySelectorAll<HTMLElement>('.sidebar-wrapper')) {
+      const style = getComputedStyle(sidebar);
+      const rect = sidebar.getBoundingClientRect();
+      const currentShift = this.getSidebarPresentationShift(sidebar, style);
+      const baseLeft = rect.left + currentShift;
+      const baseRight = rect.right + currentShift;
+      const canAlign =
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        rect.height > 0 &&
+        rect.bottom > headerHeight &&
+        baseLeft >= 0 &&
+        baseLeft < viewportWidth / 2 &&
+        baseRight <= viewportWidth * 0.55;
+      const centerShift = canAlign ? baseLeft / 2 : 0;
+      this.setSidebarCenterShift(sidebar, centerShift);
+      if (canAlign) alignedSidebars.add(sidebar);
+
+      const visibleWidth = Math.min(viewportWidth, rect.right) - Math.max(0, rect.left);
+      const isVisible = canAlign && rect.width > 0 && visibleWidth > 0;
+      if (!isVisible) continue;
+
+      const start = Math.max(0, rect.right);
+      if (start > geometry.start) {
+        geometry = { start, end: Math.max(0, rect.left) };
+      }
+    }
+
+    for (const sidebar of this.alignedSidebars) {
+      if (!alignedSidebars.has(sidebar)) this.setSidebarCenterShift(sidebar, 0);
+    }
+    this.alignedSidebars.clear();
+    alignedSidebars.forEach((sidebar) => this.alignedSidebars.add(sidebar));
+    return geometry;
+  }
+
+  private getSidebarPresentationShift(sidebar: HTMLElement, style: CSSStyleDeclaration): number {
+    const translatedPixels = /^(-?[\d.]+)px(?:\s|$)/.exec(style.translate || '');
+    if (translatedPixels) return Math.max(0, -Number(translatedPixels[1]));
+    return Number.parseFloat(sidebar.style.getPropertyValue('--ldtk-sidebar-center-shift')) || 0;
+  }
+
+  private setSidebarCenterShift(sidebar: HTMLElement, shift: number): void {
+    if (shift <= SHELL_OFFSET_EPSILON) {
+      sidebar.classList.remove('ldtk-sidebar-center-target');
+      sidebar.style.removeProperty('--ldtk-sidebar-center-shift');
+      return;
+    }
+    const currentShift =
+      Number.parseFloat(sidebar.style.getPropertyValue('--ldtk-sidebar-center-shift')) || 0;
+    sidebar.classList.add('ldtk-sidebar-center-target');
+    if (Math.abs(currentShift - shift) <= SHELL_OFFSET_EPSILON) return;
+    sidebar.style.setProperty(
+      '--ldtk-sidebar-center-shift',
+      `${Math.round(shift * 1000) / 1000}px`,
+    );
+  }
+
+  private clearSidebarAlignments(): void {
+    for (const sidebar of this.alignedSidebars) this.setSidebarCenterShift(sidebar, 0);
+    this.alignedSidebars.clear();
+  }
+
+  private applyShellGeometry(geometry: ShellGeometry): void {
+    if (
+      this.shellGeometry &&
+      Math.abs(this.shellGeometry.start - geometry.start) <= SHELL_OFFSET_EPSILON &&
+      Math.abs(this.shellGeometry.end - geometry.end) <= SHELL_OFFSET_EPSILON
+    ) {
+      return;
+    }
+    const format = (value: number): string => `${Math.round(value * 1000) / 1000}px`;
+    this.shellGeometry = geometry;
+    this.root.style.setProperty('--ldtk-sidebar-start-inset', format(geometry.start));
+    this.root.style.setProperty('--ldtk-sidebar-end-inset', format(geometry.end));
+  }
+
+  private scheduleShellOffsetUpdates(): void {
+    if (this.shellOffsetFrame !== null) window.cancelAnimationFrame(this.shellOffsetFrame);
+    const startedAt = window.performance.now();
+    const trackSidebar = (): void => {
+      this.shellOffsetFrame = null;
+      if (this.destroyed) return;
+      const frameAt = window.performance.now();
+      const target = this.getShellGeometry(this.shellHeaderHeight);
+      this.applyShellGeometry(target);
+      if (frameAt - startedAt < SHELL_OFFSET_MAX_MS) {
+        this.shellOffsetFrame = window.requestAnimationFrame(trackSidebar);
+      }
+    };
+    this.shellOffsetFrame = window.requestAnimationFrame(trackSidebar);
+  }
+
+  private readonly handleNativeShellClick = (event: MouseEvent): void => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target?.closest('.d-header-wrap, .d-header')) return;
+    this.scheduleShellOffsetUpdates();
+  };
+
+  private readonly handleNativeShellTransitionEnd = (event: TransitionEvent): void => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target?.closest('.sidebar-wrapper')) return;
+    this.updateHeaderOffset();
+  };
+
   private renderArticle(): void {
     const scrollTop = this.articleScroll.scrollTop;
     const header = createElement('header', 'ldtk-article-header');
     const title = createElement('h1');
     title.innerHTML = this.source.topic.fancy_title || this.source.topic.title;
-    const meta = createElement(
-      'p',
-      '',
-      `${this.source.article.display_username || this.source.article.username} · ${formatDate(this.source.article.created_at)}`,
+    const byline = createElement('div', 'ldtk-article-byline');
+    const avatarUrl = getAvatarUrl(this.source.article.avatar_template);
+    if (avatarUrl) {
+      const avatar = createElement('img', 'ldtk-article-byline-avatar');
+      avatar.src = avatarUrl;
+      avatar.alt = '';
+      avatar.width = 32;
+      avatar.height = 32;
+      byline.appendChild(avatar);
+    }
+    const bylineCopy = createElement('div', 'ldtk-article-byline-copy');
+    bylineCopy.appendChild(
+      createElement(
+        'strong',
+        '',
+        this.source.article.display_username || this.source.article.username,
+      ),
     );
-    header.append(title, meta);
+    const publishedAt = createElement('time', '', formatDate(this.source.article.created_at));
+    publishedAt.dateTime = this.source.article.created_at;
+    bylineCopy.appendChild(publishedAt);
+    byline.appendChild(bylineCopy);
+    header.append(title, byline);
 
     const content = createElement('article', 'ldtk-article-content topic-post');
     content.dataset.postId = String(this.source.article.id);
@@ -1132,10 +1678,13 @@ class TopicLayout {
     const toolbar = createElement('header', 'ldtk-comments-toolbar');
     const heading = createElement('h2', '', `评论 ${this.source.commentCount}`);
     this.refreshButton.title = '从服务器重新加载主题和评论';
-    this.refreshButton.addEventListener('click', this.callbacks.requestRefresh);
+    this.refreshButton.addEventListener('click', this.requestCommentsRefresh);
     toolbar.append(heading, this.refreshButton);
     this.newRepliesButton.dataset.visible = 'false';
-    this.newRepliesButton.addEventListener('click', this.callbacks.requestRefresh);
+    this.newRepliesButton.addEventListener('click', this.requestCommentsRefresh);
+    this.status.setAttribute('role', 'status');
+    this.status.setAttribute('aria-live', 'polite');
+    this.status.setAttribute('aria-atomic', 'true');
     this.pagination.setAttribute('aria-label', '评论分页');
     this.commentsPane.append(
       toolbar,
@@ -1160,8 +1709,8 @@ class TopicLayout {
       const image = createElement('img');
       image.src = avatarUrl;
       image.alt = '';
-      image.width = 42;
-      image.height = 42;
+      image.width = 34;
+      image.height = 34;
       image.loading = 'lazy';
       avatar.appendChild(image);
     }
@@ -1929,7 +2478,7 @@ class TopicLayout {
 
   private renderPagination(): void {
     const fragment = document.createDocumentFragment();
-    const previous = createButton('', '上一页');
+    const previous = createIconButton('', 'chevron-left', '上一页');
     previous.disabled = this.currentPage <= 1;
     previous.dataset.page = String(this.currentPage - 1);
     fragment.appendChild(previous);
@@ -1943,12 +2492,27 @@ class TopicLayout {
       if (item === this.currentPage) page.setAttribute('aria-current', 'page');
       fragment.appendChild(page);
     });
-    const next = createButton('', '下一页');
+    const next = createIconButton('', 'chevron-right', '下一页');
     next.disabled = this.currentPage >= this.pageCount;
     next.dataset.page = String(this.currentPage + 1);
     fragment.appendChild(next);
     this.pagination.replaceChildren(fragment);
   }
+
+  private setCommentsLoading(loading: boolean): void {
+    this.refreshButton.disabled = loading;
+    this.newRepliesButton.disabled = loading;
+    if (loading) this.refreshButton.setAttribute('aria-busy', 'true');
+    else this.refreshButton.removeAttribute('aria-busy');
+  }
+
+  private readonly requestCommentsRefresh = (): void => {
+    if (this.refreshButton.disabled) return;
+    this.setCommentsLoading(true);
+    void this.callbacks.requestRefresh().finally(() => {
+      if (!this.destroyed) this.setCommentsLoading(false);
+    });
+  };
 
   private async loadPage(
     page: number,
@@ -1963,7 +2527,7 @@ class TopicLayout {
     this.readTracker?.flush();
     this.status.hidden = false;
     this.status.textContent = '正在加载评论...';
-    this.refreshButton.disabled = true;
+    this.setCommentsLoading(true);
     Array.from(this.pagination.querySelectorAll('button')).forEach((button) => {
       button.disabled = true;
     });
@@ -1989,7 +2553,7 @@ class TopicLayout {
       this.status.textContent = '评论加载失败，请重试';
       this.renderPagination();
     } finally {
-      if (this.pageAbort === request) this.refreshButton.disabled = false;
+      if (this.pageAbort === request) this.setCommentsLoading(false);
     }
   }
 
@@ -2202,6 +2766,7 @@ function cleanupLayout(): void {
   document.querySelector(`.${ROOT_CLASS}`)?.remove();
   document.getElementById(STYLE_ID)?.remove();
   clearPendingTopicLayout();
+  hideLoadingOverlay();
 }
 
 function handoffToNative(
@@ -2267,6 +2832,7 @@ export async function refreshTopicLayout(
   const retainedLayout = force && activeLayout?.matches(route, settings) ? activeLayout : null;
   if (!retainedLayout) {
     prepareTopicLayout(settings);
+    showLoadingOverlay();
     activeLayout?.destroy();
     activeLayout = null;
   }
@@ -2313,7 +2879,7 @@ export async function refreshTopicLayout(
     candidate = new TopicLayout(route, source, settings, initialPage, {
       requestRefresh: () => {
         const currentSettings = latestSettings;
-        if (currentSettings) void refreshTopicLayout(currentSettings, true);
+        return currentSettings ? refreshTopicLayout(currentSettings, true) : Promise.resolve();
       },
       handoffNative: (floor, action) => handoffToNative(route, settings, floor, action),
     });
@@ -2325,6 +2891,7 @@ export async function refreshTopicLayout(
     retainedLayout?.destroy(false, true);
     activeLayout = candidate;
     candidate = null;
+    hideLoadingOverlay();
   } catch (error) {
     candidate?.destroy(false, Boolean(retainedLayout));
     if ((error as Error).name === 'AbortError') return;
@@ -2346,6 +2913,5 @@ export async function refreshTopicLayout(
 export const topicLayoutOwnedSelectors = [
   `.${ROOT_CLASS}`,
   `#${STYLE_ID}`,
-  `#${PENDING_STYLE_ID}`,
   `#${RETURN_BUTTON_ID}`,
 ] as const;

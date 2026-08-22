@@ -3,6 +3,10 @@ import { copyToClipboard, showToast } from './output';
 import type { DiscourseSettings } from '../common/settings';
 import { handleError } from './error-handler';
 
+/* lucide: binary */
+const BASE64_ICON =
+  '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 3px;"><rect x="14" y="14" width="4" height="6" rx="2"/><rect x="6" y="4" width="4" height="6" rx="2"/><path d="M6 20h4"/><path d="M14 10h4"/><path d="M6 14h2v6"/><path d="M14 4h2v6"/></svg>';
+
 export function decodeBase64Utf8(text: string): string {
   const normalized = text.replace(/\s+/g, '');
   const binary = atob(normalized);
@@ -58,7 +62,7 @@ function createSelectionToolButton(options: SelectionToolOptions): HTMLButtonEle
     try {
       const selectedText = getSelectedText();
       if (!selectedText) {
-        showToast('❌ 未选中文字');
+        showToast('未选中文字');
         return;
       }
       await copyToClipboard(options.transform(selectedText));
@@ -87,11 +91,10 @@ export function injectBase64Button(settings: DiscourseSettings): void {
     base64Btn = createSelectionToolButton({
       className: 'ldcopy-base64-btn',
       title: 'Base64 解码并复制',
-      content:
-        '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="vertical-align: middle; margin-right: 2px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>base64',
+      content: `${BASE64_ICON}base64`,
       order: -2,
       transform: decodeBase64Utf8,
-      successMessage: '✅ Base64 解码已复制',
+      successMessage: 'Base64 解码已复制',
       errorContext: 'Base64 解码',
     });
     quoteContainer.insertBefore(base64Btn, quoteContainer.firstChild);
@@ -104,7 +107,7 @@ export function injectBase64Button(settings: DiscourseSettings): void {
       content: '去中文',
       order: -1,
       transform: stripChineseText,
-      successMessage: '✅ 已去中文并复制',
+      successMessage: '已去中文并复制',
       errorContext: '去中文',
     });
     base64Btn.insertAdjacentElement('afterend', stripChineseBtn);

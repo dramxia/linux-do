@@ -31,12 +31,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     input.addEventListener('change', async () => {
       try {
         await saveSettings({ [key]: input.checked });
-        if (key === 'enableSplitReading' && tabId !== undefined) {
-          await chrome.tabs.reload(tabId);
-          window.close();
-        }
       } catch (err) {
-        if (infoEl) infoEl.textContent = `⚠️ 设置保存失败：${(err as Error).message}`;
+        if (infoEl) infoEl.textContent = `设置保存失败：${(err as Error).message}`;
       }
     });
   });
@@ -44,14 +40,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   commentsPerPage?.addEventListener('change', () => {
     const value = commentsPerPage.value === '20' ? 20 : 10;
     saveSettings({ commentsPerPage: value }).catch((err: Error) => {
-      if (infoEl) infoEl.textContent = `⚠️ 设置保存失败：${err.message}`;
+      if (infoEl) infoEl.textContent = `设置保存失败：${err.message}`;
     });
   });
 
   await loadSettings();
 
   if (!isSupportedPageUrl(tab?.url)) {
-    if (infoEl) infoEl.textContent = '⚠️ 请在 linux.do 的帖子页面使用此插件';
+    if (infoEl) infoEl.textContent = '请在 linux.do 的帖子页面使用此插件';
     document.querySelectorAll<HTMLButtonElement>('.btn').forEach((button) => {
       button.disabled = true;
     });
@@ -59,7 +55,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   if (tabId === undefined) {
-    if (infoEl) infoEl.textContent = '⚠️ 页面未加载完成，请刷新后重试';
+    if (infoEl) infoEl.textContent = '页面未加载完成，请刷新后重试';
     return;
   }
 
@@ -69,7 +65,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     {},
     (res: PageInfoResponse | undefined) => {
       if (chrome.runtime.lastError || !res) {
-        if (infoEl) infoEl.textContent = '⚠️ 页面未加载完成，请刷新后重试';
+        if (infoEl) infoEl.textContent = '页面未加载完成，请刷新后重试';
         return;
       }
       if (infoEl) {

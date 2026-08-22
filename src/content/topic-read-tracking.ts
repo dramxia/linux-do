@@ -23,7 +23,7 @@ export function buildTimingsBody(topicId: number, timings: ReadonlyMap<number, n
   return body.toString();
 }
 
-export async function sendReadTimings(
+async function sendReadTimings(
   topicId: number,
   timings: ReadonlyMap<number, number>,
   keepalive = false,

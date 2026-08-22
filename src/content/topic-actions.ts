@@ -4,7 +4,7 @@ export const TOPIC_ACTION_REQUEST_NAME = 'ldtk:topic-action-request';
 export const TOPIC_ACTION_RESULT_NAME = 'ldtk:topic-action-result';
 export const TOPIC_REACTION_PICKER_REQUEST_NAME = 'ldtk:reaction-picker-request';
 
-export const TOPIC_ACTIONS = [
+const TOPIC_ACTIONS = [
   'like',
   'likeUsers',
   'bookmark',
@@ -18,7 +18,7 @@ export const TOPIC_ACTIONS = [
 ] as const;
 
 export type TopicAction = (typeof TOPIC_ACTIONS)[number];
-export type TopicActionResultPhase = 'triggered' | 'settled';
+type TopicActionResultPhase = 'triggered' | 'settled';
 
 export interface TopicActionRequest {
   requestId: string;

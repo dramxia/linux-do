@@ -1,6 +1,6 @@
 /* Linux.do 工具箱 - Discourse 主题 JSON 客户端 */
 
-export const MEGA_TOPIC_POST_LIMIT = 10_000;
+const MEGA_TOPIC_POST_LIMIT = 10_000;
 const POST_BATCH_SIZE = 20;
 
 export interface TopicPostAction {
@@ -121,7 +121,7 @@ function isFinitePositiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
 }
 
-export function isTopicPost(value: unknown): value is TopicPost {
+function isTopicPost(value: unknown): value is TopicPost {
   if (!value || typeof value !== 'object') return false;
   const post = value as Partial<TopicPost>;
   return (
@@ -153,7 +153,7 @@ export function parseTopicResponse(value: unknown): TopicResponse {
   return topic as TopicResponse;
 }
 
-export async function fetchTopic(
+async function fetchTopic(
   topicId: string,
   signal?: AbortSignal,
   floor?: number,

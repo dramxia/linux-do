@@ -1,7 +1,7 @@
 /* Linux.do 工具箱 — Markdown 转换模块 */
 
 // 检测内容是否为 HTML（而非纯 Markdown）。
-export function isHtmlContent(text: string): boolean {
+function isHtmlContent(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
 

@@ -7,13 +7,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
-      exclude: [
-        'src/**/*.test.ts',
-        'src/chrome-runtime.d.ts',
-        'src/background.ts',
-        'src/content/index.ts',
-        'src/popup/index.ts',
-      ],
+      exclude: ['src/**/*.test.ts', 'src/chrome-runtime.d.ts', 'src/content/index.ts', 'src/popup/index.ts'],
     },
   },
 });

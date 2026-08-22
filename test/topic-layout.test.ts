@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, type DiscourseSettings } from '../src/common/settings';
+import { injectButtons } from '../src/content/buttons';
 import { prepareTopicLayout, refreshTopicLayout } from '../src/content/topic-layout';
 import type { TopicPost, TopicResponse } from '../src/content/topic-api';
 import {
@@ -51,7 +52,7 @@ function jsonResponse(value: unknown, status = 200): Response {
 
 beforeEach(() => {
   document.documentElement.innerHTML =
-    '<head></head><body><header class="d-header"></header><main id="main-outlet"><article class="topic-post" data-post-number="1"></article></main></body>';
+    '<head></head><body><div class="sidebar-wrapper"><div class="sidebar-container"></div></div><div class="d-header-wrap"><header class="d-header"><button class="header-sidebar-toggle" type="button" aria-label="显示侧边栏">菜单</button><a class="title" href="/">LINUX DO</a></header></div><main id="main-outlet"><article class="topic-post" data-post-number="1"></article></main></body>';
   window.history.replaceState({}, '', '/t/topic/123');
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
   sessionStorage.clear();
@@ -64,11 +65,53 @@ afterEach(async () => {
 });
 
 describe('topic split layout lifecycle', () => {
-  it('hides the native topic while the initial split layout is pending', async () => {
+  it('preserves the native header while the topic content is replaced', async () => {
+    const headerWrap = document.querySelector<HTMLElement>('.d-header-wrap');
+    const header = document.querySelector<HTMLElement>('.d-header');
+    const headerAction = header?.querySelector<HTMLButtonElement>('button');
+    const sidebarWrapper = document.querySelector<HTMLElement>('.sidebar-wrapper');
+    const mainOutlet = document.getElementById('main-outlet') as HTMLElement;
+
+    // Some Discourse themes mount the header inside the same page tree as the topic.
+    mainOutlet.prepend(sidebarWrapper as HTMLElement);
+    vi.spyOn(headerWrap as HTMLElement, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 0, 1200, 0),
+    );
+    vi.spyOn(header as HTMLElement, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 0, 1200, 48),
+    );
+
+    expect(prepareTopicLayout(enabledSettings)).toBe(true);
+    expect(getComputedStyle(mainOutlet).visibility).toBe('visible');
+    expect(getComputedStyle(sidebarWrapper as HTMLElement).visibility).toBe('visible');
+    expect(getComputedStyle(sidebarWrapper as HTMLElement).display).not.toBe('none');
+    expect(getComputedStyle(headerWrap as HTMLElement).visibility).toBe('visible');
+    expect(getComputedStyle(header as HTMLElement).visibility).toBe('visible');
+    expect(getComputedStyle(headerAction as HTMLButtonElement).visibility).toBe('visible');
+    expect(getComputedStyle(headerAction as HTMLButtonElement).pointerEvents).toBe('auto');
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
+    await refreshTopicLayout(enabledSettings);
+
+    const splitRoot = document.querySelector<HTMLElement>('.ldtk-topic-reading-root');
+    expect(getComputedStyle(mainOutlet).visibility).toBe('visible');
+    expect(getComputedStyle(mainOutlet).pointerEvents).toBe('auto');
+    expect(getComputedStyle(mainOutlet).zIndex).not.toBe('400');
+    expect(getComputedStyle(sidebarWrapper as HTMLElement).display).not.toBe('none');
+    expect(getComputedStyle(headerWrap as HTMLElement).visibility).toBe('visible');
+    expect(getComputedStyle(header as HTMLElement).visibility).toBe('visible');
+    expect(getComputedStyle(headerAction as HTMLButtonElement).pointerEvents).toBe('auto');
+    expect(getComputedStyle(splitRoot as HTMLElement).position).toBe('fixed');
+    expect(getComputedStyle(splitRoot as HTMLElement).zIndex).toBe('90');
+    expect(splitRoot?.style.getPropertyValue('--ldtk-header-height')).toBe('48px');
+    expect(getComputedStyle(document.body).overflow).not.toBe('hidden');
+  });
+
+  it('keeps the native page intact while the initial split layout is pending', async () => {
     expect(prepareTopicLayout(enabledSettings)).toBe(true);
     expect(document.documentElement.classList.contains('ldtk-split-reading-pending')).toBe(true);
     expect(getComputedStyle(document.getElementById('main-outlet') as HTMLElement).visibility).toBe(
-      'hidden',
+      'visible',
     );
 
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
@@ -77,6 +120,93 @@ describe('topic split layout lifecycle', () => {
     expect(document.documentElement.classList.contains('ldtk-split-reading-pending')).toBe(false);
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
     expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
+  });
+
+  it('follows the native sidebar directly without narrowing the opposite edge', async () => {
+    const header = document.querySelector<HTMLElement>('.d-header');
+    const toggle = header?.querySelector<HTMLButtonElement>('.header-sidebar-toggle');
+    const sidebarWrapper = document.querySelector<HTMLElement>('.sidebar-wrapper');
+    const sidebarContainer = sidebarWrapper?.querySelector<HTMLElement>('.sidebar-container');
+    let sidebarOpen = false;
+    let presentationShift = 0;
+    vi.spyOn(header as HTMLElement, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 0, 1200, 48),
+    );
+    vi.spyOn(sidebarWrapper as HTMLElement, 'getBoundingClientRect').mockImplementation(() =>
+      sidebarOpen
+        ? new DOMRect(120 - presentationShift, 48, 280, 800)
+        : new DOMRect(120 - presentationShift, 48, 0, 800),
+    );
+    const nativeGetComputedStyle = window.getComputedStyle.bind(window);
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element) => {
+      const style = nativeGetComputedStyle(element);
+      if (element !== sidebarWrapper) return style;
+      return new Proxy(style, {
+        get(target, property, receiver) {
+          return property === 'translate'
+            ? `${-presentationShift}px 0px`
+            : Reflect.get(target, property, receiver);
+        },
+      });
+    });
+    toggle?.addEventListener('click', () => {
+      sidebarOpen = !sidebarOpen;
+    });
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
+    await refreshTopicLayout(enabledSettings);
+    const splitRoot = document.querySelector<HTMLElement>('.ldtk-topic-reading-root');
+    expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-start-inset')).toBe('0px');
+    expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-end-inset')).toBe('0px');
+    const startInsetHistory: number[] = [];
+    const setProperty = splitRoot?.style.setProperty.bind(splitRoot.style);
+    vi.spyOn(splitRoot?.style as CSSStyleDeclaration, 'setProperty').mockImplementation(
+      (property, value, priority) => {
+        if (property === '--ldtk-sidebar-start-inset') {
+          startInsetHistory.push(Number.parseFloat(value));
+        }
+        setProperty?.(property, value, priority);
+      },
+    );
+
+    toggle?.click();
+    await vi.waitFor(() => {
+      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-start-inset')).toBe('400px');
+      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-end-inset')).toBe('120px');
+    });
+    presentationShift = 30;
+    await vi.waitFor(() => {
+      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-start-inset')).toBe('370px');
+      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-end-inset')).toBe('90px');
+    });
+    presentationShift = 60;
+    await vi.waitFor(() => {
+      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-start-inset')).toBe('340px');
+      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-end-inset')).toBe('60px');
+    });
+    expect(sidebarOpen).toBe(true);
+    expect(sidebarWrapper?.classList.contains('ldtk-sidebar-center-target')).toBe(true);
+    expect(sidebarWrapper?.style.getPropertyValue('--ldtk-sidebar-center-shift')).toBe('60px');
+    expect(sidebarContainer?.classList.contains('ldtk-sidebar-center-target')).toBe(false);
+    expect(sidebarContainer?.style.translate).toBe('');
+    const sidebarRect = sidebarWrapper?.getBoundingClientRect() as DOMRect;
+    const shellRight =
+      window.innerWidth -
+      Number.parseFloat(splitRoot?.style.getPropertyValue('--ldtk-sidebar-end-inset') || '0');
+    expect(sidebarRect.left).toBeGreaterThanOrEqual(0);
+    expect(sidebarRect.right).toBeLessThanOrEqual(window.innerWidth);
+    expect((sidebarRect.left + shellRight) / 2).toBe(window.innerWidth / 2);
+    expect(shellRight - sidebarRect.right).toBe(1040);
+    expect(startInsetHistory).toEqual([400, 370, 340]);
+
+    startInsetHistory.length = 0;
+    toggle?.click();
+    await vi.waitFor(() => {
+      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-start-inset')).toBe('0px');
+      expect(splitRoot?.style.getPropertyValue('--ldtk-sidebar-end-inset')).toBe('0px');
+    });
+    expect(sidebarOpen).toBe(false);
+    expect(startInsetHistory).toEqual([0]);
   });
 
   it('mounts article post 1 on the left and comments on the right', async () => {
@@ -93,8 +223,18 @@ describe('topic split layout lifecycle', () => {
     const articleScroll = root?.querySelector<HTMLElement>('.ldtk-article-scroll');
     const articleFooter = root?.querySelector<HTMLElement>('.ldtk-article-footer');
     const articlePost = root?.querySelector<HTMLElement>('.ldtk-article-content.topic-post');
+    const articleByline = root?.querySelector<HTMLElement>('.ldtk-article-byline');
+    const publishedAt = articleByline?.querySelector<HTMLTimeElement>('time');
+    const refreshIcon = root?.querySelector<SVGSVGElement>('.ldtk-toolbar-button svg');
+    const commentStatus = root?.querySelector<HTMLElement>('.ldtk-comment-status');
+    const previousIcon = root?.querySelector<SVGSVGElement>(
+      '.ldtk-pagination button:first-child svg',
+    );
+    const nextIcon = root?.querySelector<SVGSVGElement>('.ldtk-pagination button:last-child svg');
     expect(getComputedStyle(grid as HTMLElement).display).toBe('grid');
+    expect(getComputedStyle(grid as HTMLElement).gap).toBe('10px');
     expect(getComputedStyle(articlePane as HTMLElement).display).toBe('flex');
+    expect(getComputedStyle(articlePane as HTMLElement).borderRadius).toBe('var(--ldtk-radius)');
     expect(getComputedStyle(articlePane as HTMLElement).overflowX).toBe('hidden');
     expect(getComputedStyle(articlePane as HTMLElement).overflowY).toBe('hidden');
     expect(getComputedStyle(articleScroll as HTMLElement).overflowY).toBe('auto');
@@ -102,6 +242,36 @@ describe('topic split layout lifecycle', () => {
     expect(articleScroll?.contains(articleFooter as HTMLElement)).toBe(false);
     expect(articlePane?.lastElementChild).toBe(articleFooter);
     expect(getComputedStyle(articlePost as HTMLElement).display).toBe('block');
+    expect(articleByline?.querySelector('strong')?.textContent).toBe('user-1');
+    expect(publishedAt?.dateTime).toBe('2026-08-22T00:00:00.000Z');
+    expect(refreshIcon?.classList.contains('d-icon-lucide-rotate-left')).toBe(true);
+    expect(commentStatus?.getAttribute('role')).toBe('status');
+    expect(commentStatus?.getAttribute('aria-live')).toBe('polite');
+    expect(previousIcon?.classList.contains('d-icon-lucide-chevron-left')).toBe(true);
+    expect(nextIcon?.classList.contains('d-icon-lucide-chevron-right')).toBe(true);
+  });
+
+  it('keeps native export actions behind the split reading surface', async () => {
+    const nativePost = document.querySelector<HTMLElement>('#main-outlet .topic-post');
+    nativePost?.appendChild(document.createElement('nav')).classList.add('post-controls');
+    const settings = { ...enabledSettings, enablePostActions: true };
+    injectButtons(settings);
+
+    const nativeHost = nativePost?.querySelector<HTMLElement>('.ldtk-shadow-host');
+    expect(nativeHost?.style.visibility).toBe('inherit');
+    expect(nativeHost?.style.pointerEvents).toBe('inherit');
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
+    await refreshTopicLayout(settings);
+
+    expect(getComputedStyle(document.getElementById('main-outlet') as HTMLElement).visibility).toBe(
+      'visible',
+    );
+    expect(document.getElementById('ldtk-topic-reading-style')?.textContent).toContain(
+      '#main-outlet .ldtk-shadow-host',
+    );
+    expect(document.querySelectorAll('#main-outlet .ldtk-shadow-host')).toHaveLength(1);
+    expect(document.querySelectorAll('.ldtk-topic-reading-root .ldtk-shadow-host')).toHaveLength(3);
   });
 
   it('keeps the current split layout visible until a forced refresh is ready', async () => {
@@ -117,18 +287,25 @@ describe('topic split layout lifecycle', () => {
     await refreshTopicLayout(enabledSettings);
 
     const previousRoot = document.querySelector('.ldtk-topic-reading-root');
-    const refreshPromise = refreshTopicLayout(enabledSettings, true);
+    const refreshButton = previousRoot?.querySelector<HTMLButtonElement>('.ldtk-toolbar-button');
+    refreshButton?.click();
     await Promise.resolve();
 
     expect(previousRoot?.isConnected).toBe(true);
+    expect(refreshButton?.disabled).toBe(true);
+    expect(refreshButton?.getAttribute('aria-busy')).toBe('true');
     expect(document.querySelectorAll('.ldtk-topic-reading-root')).toHaveLength(1);
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
     expect(getComputedStyle(document.getElementById('main-outlet') as HTMLElement).visibility).toBe(
-      'hidden',
+      'visible',
     );
 
     resolveRefresh(jsonResponse(topic({ title: 'After refresh' })));
-    await refreshPromise;
+    await vi.waitFor(() => {
+      expect(document.querySelector('.ldtk-topic-reading-root h1')?.textContent).toBe(
+        'After refresh',
+      );
+    });
 
     const nextRoot = document.querySelector('.ldtk-topic-reading-root');
     expect(previousRoot?.isConnected).toBe(false);
@@ -146,10 +323,14 @@ describe('topic split layout lifecycle', () => {
     vi.stubGlobal('fetch', fetchMock);
     await refreshTopicLayout(enabledSettings);
     const previousRoot = document.querySelector('.ldtk-topic-reading-root');
+    const refreshButton = previousRoot?.querySelector<HTMLButtonElement>('.ldtk-toolbar-button');
 
-    await refreshTopicLayout(enabledSettings, true);
+    refreshButton?.click();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(refreshButton?.getAttribute('aria-busy')).toBeNull());
 
     expect(previousRoot?.isConnected).toBe(true);
+    expect(refreshButton?.disabled).toBe(false);
     expect(document.querySelector('.ldtk-topic-reading-root')).toBe(previousRoot);
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
   });
@@ -292,14 +473,16 @@ describe('topic split layout lifecycle', () => {
     const addBoost = footer?.querySelector<HTMLButtonElement>('.discourse-boosts__add-btn');
     expect(addBoost?.dataset.topicAction).toBe('boost');
     expect(addBoost?.getAttribute('aria-haspopup')).toBe('menu');
-    expect(addBoost?.querySelector('use')?.getAttribute('href')).toBe('#rocket');
+    expect(addBoost?.querySelector('svg')?.classList.contains('d-icon-lucide-rocket')).toBe(true);
     expect(footer?.querySelector('.post-action-menu__boost')).toBeNull();
 
     const commentBoost = document.querySelector<HTMLButtonElement>(
       '.ldtk-comments-list [data-post-id="2"] .post-action-menu__boost',
     );
     expect(commentBoost?.dataset.topicAction).toBe('boost');
-    expect(commentBoost?.querySelector('use')?.getAttribute('href')).toBe('#rocket');
+    expect(commentBoost?.querySelector('svg')?.classList.contains('d-icon-lucide-rocket')).toBe(
+      true,
+    );
 
     const nativeBoostInput = document.createElement('div');
     nativeBoostInput.className = 'discourse-boosts__input-container';
@@ -445,11 +628,13 @@ describe('topic split layout lifecycle', () => {
     const replies = comment?.querySelector<HTMLButtonElement>('.post-action-menu__show-replies');
     const actions = comment?.querySelector('.ldtk-post-actions');
     expect(likeCount?.textContent).toContain('19');
-    expect(likeCount?.querySelector('use')?.getAttribute('href')).toBe('#heart');
+    expect(likeCount?.querySelector('svg')?.classList.contains('d-icon-lucide-heart')).toBe(true);
     expect(replies?.textContent).toContain('14 个回复');
     const likeButton = actions?.querySelector<HTMLButtonElement>('.post-action-menu__like');
     expect(likeButton?.getAttribute('aria-pressed')).toBe('false');
-    expect(likeButton?.querySelector('use')?.getAttribute('href')).toBe('#far-heart');
+    expect(likeButton?.querySelector('svg')?.classList.contains('d-icon-lucide-far-heart')).toBe(
+      true,
+    );
     expect(actions?.querySelector('.post-action-menu__copy-link')).not.toBeNull();
     expect(actions?.querySelector('.post-action-menu__bookmark')).not.toBeNull();
     expect(actions?.querySelector('.post-action-menu__show-more')).not.toBeNull();
@@ -459,9 +644,11 @@ describe('topic split layout lifecycle', () => {
     expect(actions?.querySelector<HTMLElement>('.ldtk-more-actions')?.hidden).toBe(false);
     expect(actions?.querySelector('.post-action-menu__flag')).not.toBeNull();
     expect(actions?.querySelector('.post-action-menu__edit')).not.toBeNull();
-    expect(actions?.querySelector('.post-action-menu__share use')?.getAttribute('href')).toBe(
-      '#arrow-up-from-bracket',
-    );
+    expect(
+      actions
+        ?.querySelector('.post-action-menu__share svg')
+        ?.classList.contains('d-icon-lucide-arrow-up-from-bracket'),
+    ).toBe(true);
 
     actions?.querySelector<HTMLButtonElement>('.post-action-menu__like')?.click();
     expect(requests).toHaveLength(1);
@@ -529,7 +716,7 @@ describe('topic split layout lifecycle', () => {
       getComputedStyle(document.getElementById('main-outlet') as HTMLElement).display,
     ).not.toBe('none');
     expect(getComputedStyle(document.getElementById('main-outlet') as HTMLElement).visibility).toBe(
-      'hidden',
+      'visible',
     );
     const nativePicker = document.createElement('div');
     nativePicker.className = 'discourse-reactions-picker is-expanded';
@@ -691,7 +878,9 @@ describe('topic split layout lifecycle', () => {
       expect(parentElement?.querySelectorAll('.ldtk-inline-reply')).toHaveLength(2);
     });
     expect(repliesButton?.getAttribute('aria-expanded')).toBe('true');
-    expect(repliesButton?.querySelector('use')?.getAttribute('href')).toBe('#chevron-up');
+    expect(
+      repliesButton?.querySelector('svg')?.classList.contains('d-icon-lucide-chevron-up'),
+    ).toBe(true);
     expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
   });
 
@@ -820,6 +1009,9 @@ describe('topic split layout lifecycle', () => {
 
     document.querySelector<HTMLButtonElement>('.ldtk-pagination [data-page="2"]')?.click();
     await Promise.resolve();
+    const refreshButton = document.querySelector<HTMLButtonElement>('.ldtk-toolbar-button');
+    expect(refreshButton?.disabled).toBe(true);
+    expect(refreshButton?.getAttribute('aria-busy')).toBe('true');
     window.history.replaceState({}, '', '/t/topic/123?ldo_comments_page=3');
     window.dispatchEvent(new PopStateEvent('popstate'));
 
@@ -839,5 +1031,7 @@ describe('topic split layout lifecycle', () => {
     expect(document.querySelector('.ldtk-comments-list')?.textContent).toContain('content-22');
     expect(document.querySelector('.ldtk-comments-list')?.textContent).not.toContain('content-12');
     expect(document.querySelector('.ldtk-pagination [aria-current="page"]')?.textContent).toBe('3');
+    expect(refreshButton?.disabled).toBe(false);
+    expect(refreshButton?.getAttribute('aria-busy')).toBeNull();
   });
 });

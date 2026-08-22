@@ -18,21 +18,43 @@ const TOAST_SHADOW_STYLE = `
 }
 .ldcopy-toast {
   position: fixed;
-  bottom: 40px;
+  bottom: 32px;
   left: 50%;
-  transform: translateX(-50%) translateY(20px);
-  padding: 10px 20px;
-  background: #1a1a2e;
-  color: #fff;
-  border: 1px solid #333;
+  transform: translateX(-50%) translateY(12px);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  background: #18181b;
+  color: #fafafa;
+  border: 1px solid #27272a;
   border-radius: 8px;
-  font-size: 14px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.3s, transform 0.3s;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow:
+    0 4px 6px -1px rgb(0 0 0 / 0.1),
+    0 2px 4px -2px rgb(0 0 0 / 0.1);
   white-space: nowrap;
+}
+.ldcopy-toast::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  background: currentColor;
+  -webkit-mask: var(--ldtk-toast-icon) center / contain no-repeat;
+  mask: var(--ldtk-toast-icon) center / contain no-repeat;
+}
+.ldcopy-toast[data-tone="success"] {
+  --ldtk-toast-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234ade80' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+}
+.ldcopy-toast[data-tone="error"] {
+  --ldtk-toast-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f87171' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cline x1='12' x2='12' y1='8' y2='12'/%3E%3Cline x1='12' x2='12.01' y1='16' y2='16'/%3E%3C/svg%3E");
 }
 .ldcopy-toast-show {
   opacity: 1;
@@ -58,7 +80,7 @@ class ToastManager {
     return this.shadow;
   }
 
-  show(message: string, duration = 2500): void {
+  show(message: string, duration = 2500, tone: 'success' | 'error' = 'success'): void {
     const shadow = this.ensureShadow();
     if (!this.el) {
       this.el = document.createElement('div');
@@ -68,6 +90,7 @@ class ToastManager {
 
     if (this.hideTimer) clearTimeout(this.hideTimer);
     this.el.textContent = message;
+    this.el.dataset.tone = tone;
     this.el.className = 'ldcopy-toast ldcopy-toast-show';
     this.hideTimer = setTimeout(() => {
       this.hide();
@@ -88,7 +111,9 @@ class ToastManager {
 const toastManager = new ToastManager();
 
 export function showToast(message: string): void {
-  toastManager.show(message);
+  const isError = /^[❌⚠✕✗]|失败|错误/.test(message);
+  const cleaned = message.replace(/^[✅❌⚠️✓✕✗]+\s*/u, '').trim();
+  toastManager.show(cleaned, 2500, isError ? 'error' : 'success');
 }
 
 export function formatPostMd(

@@ -9,3 +9,11 @@ coverage
 *.log
 .omo
 dist
+
+# 根目录构建产物（esbuild 输出，勿提交）
+content.js
+content.js.map
+popup.js
+popup.js.map
+topic-events-bridge.js
+topic-events-bridge.js.map
