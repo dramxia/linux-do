@@ -22,6 +22,7 @@ import {
   type TopicActionResult,
   type TopicReactionPickerRequest,
 } from '../content/topic-actions';
+import { TOPIC_CODE_HIGHLIGHT_REQUEST_NAME } from '../content/topic-code-blocks';
 
 const MAX_DISCOVERY_ATTEMPTS = 40;
 
@@ -41,6 +42,7 @@ interface MessageBusClient {
 interface PluginApi {
   onPageChange: (callback: () => void) => void;
   onAppEvent?: (name: string, callback: (value: unknown) => void) => void;
+  preventCloak?: (postId: number, prevent?: boolean) => void;
   container?: DiscourseContainer;
 }
 
@@ -66,6 +68,10 @@ interface DiscourseUrlModule {
 
 interface DiscourseTextModule {
   emojiUrlFor?: (code: string) => string | undefined;
+}
+
+interface HighlightSyntaxModule {
+  default?: (element: HTMLElement, siteSettings: object, session: object) => Promise<void> | void;
 }
 
 interface DiscourseContainer {
@@ -119,8 +125,15 @@ const pageWindow = window as PageWindow;
 let activeChannel: string | null = null;
 let activeCallback: MessageCallback | null = null;
 let pluginHookInstalled = false;
+let discoursePluginApi: PluginApi | null = null;
 let discourseContainer: DiscourseContainer | null = null;
+let codeHighlightRetry: number | null = null;
 const pendingReactionPickers = new WeakMap<Element, () => void>();
+
+function retryCodeHighlight(attempt: number): void {
+  if (attempt >= MAX_DISCOVERY_ATTEMPTS || codeHighlightRetry !== null) return;
+  codeHighlightRetry = window.setTimeout(() => highlightSplitCodeBlocks(attempt + 1), 250);
+}
 
 function getTopicId(): number | null {
   const route = parseTopicRoute(window.location.pathname);
@@ -141,8 +154,16 @@ function dispatchActionResult(
 
 function getNativePost(request: TopicTargetRequest): HTMLElement | null {
   return document.querySelector<HTMLElement>(
-    `#main-outlet .topic-post[data-post-id="${request.postId}"], ` +
+    `#main-outlet article[data-post-id="${request.postId}"], ` +
+      `#main-outlet .topic-post[data-post-id="${request.postId}"], ` +
       `#main-outlet .topic-post[data-post-number="${request.floor}"]`,
+  );
+}
+
+function getNativePostPlaceholder(request: TopicTargetRequest): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    `#main-outlet [data-post-number="${request.floor}"], ` +
+      `#main-outlet [data-post-id="${request.postId}"]`,
   );
 }
 
@@ -256,15 +277,24 @@ function isMenuExpanded(control: HTMLElement, action: TopicAction): boolean {
   return control.getAttribute('aria-expanded') === 'true';
 }
 
-function watchMenuClose(control: HTMLElement, target: Element, request: TopicActionRequest): void {
+function watchMenuClose(
+  control: HTMLElement,
+  target: Element,
+  request: TopicActionRequest,
+  onClose?: () => void,
+): void {
   let expanded = isMenuExpanded(control, request.action);
   let timeout = 0;
+  const cleanup = (): void => {
+    observer.disconnect();
+    window.clearTimeout(timeout);
+    onClose?.();
+  };
   const observer = new MutationObserver(() => {
     const isExpanded = isMenuExpanded(control, request.action);
     expanded ||= isExpanded;
     if (!expanded || isExpanded) return;
-    observer.disconnect();
-    window.clearTimeout(timeout);
+    cleanup();
     dispatchActionResult(target, request, { ok: true, phase: 'settled' });
   });
   observer.observe(control, {
@@ -272,7 +302,7 @@ function watchMenuClose(control: HTMLElement, target: Element, request: TopicAct
     subtree: true,
     attributeFilter: ['aria-expanded', 'class'],
   });
-  timeout = window.setTimeout(() => observer.disconnect(), 120_000);
+  timeout = window.setTimeout(cleanup, 120_000);
 }
 
 function queryNativeControl(post: HTMLElement, action: TopicAction): HTMLElement | null {
@@ -311,6 +341,7 @@ function getDiscourseContainer(): DiscourseContainer | null {
   try {
     const module = pageWindow.require?.('discourse/lib/plugin-api') as PluginApiModule | undefined;
     module?.withPluginApi('1.0.0', (api) => {
+      discoursePluginApi = api;
       if (isUsableContainer(api.container)) discourseContainer = api.container;
     });
   } catch {
@@ -325,6 +356,51 @@ function lookupDiscourse(name: string): unknown {
   } catch {
     discourseContainer = null;
     return undefined;
+  }
+}
+
+function highlightSplitCodeBlocks(attempt = 0): void {
+  if (codeHighlightRetry !== null) {
+    window.clearTimeout(codeHighlightRetry);
+    codeHighlightRetry = null;
+  }
+  const cookedContainers = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '.ldtk-topic-reading-root .cooked:not([data-ldtk-highlight-processed])',
+    ),
+  ).filter((cooked) => cooked.querySelector('pre.codeblock-buttons > code'));
+  if (cookedContainers.length === 0) return;
+
+  try {
+    const module = pageWindow.require?.('discourse/lib/highlight-syntax') as
+      HighlightSyntaxModule | undefined;
+    const siteSettings = lookupDiscourse('service:site-settings');
+    const session = lookupDiscourse('service:session');
+    if (
+      !module?.default ||
+      !siteSettings ||
+      typeof siteSettings !== 'object' ||
+      !session ||
+      typeof session !== 'object'
+    ) {
+      retryCodeHighlight(attempt);
+      return;
+    }
+
+    cookedContainers.forEach((cooked) => {
+      cooked.dataset.ldtkHighlightProcessed = 'true';
+      try {
+        void Promise.resolve(module.default?.(cooked, siteSettings, session)).catch(() => {
+          delete cooked.dataset.ldtkHighlightProcessed;
+          retryCodeHighlight(attempt);
+        });
+      } catch {
+        delete cooked.dataset.ldtkHighlightProcessed;
+        retryCodeHighlight(attempt);
+      }
+    });
+  } catch {
+    retryCodeHighlight(attempt);
   }
 }
 
@@ -446,9 +522,11 @@ async function triggerNativeAction(
   post: HTMLElement,
   target: Element,
   request: TopicActionRequest,
+  onMenuClose?: () => void,
 ): Promise<void> {
   const control = await findNativeControl(post, request.action);
   if (!control) {
+    onMenuClose?.();
     dispatchActionResult(target, request, {
       ok: false,
       phase: 'triggered',
@@ -457,6 +535,7 @@ async function triggerNativeAction(
     return;
   }
   if (control instanceof HTMLButtonElement && control.disabled) {
+    onMenuClose?.();
     dispatchActionResult(target, request, {
       ok: false,
       phase: 'triggered',
@@ -471,7 +550,9 @@ async function triggerNativeAction(
     request.action === 'boost' ||
     request.action === 'likeUsers'
   ) {
-    watchMenuClose(control, target, request);
+    watchMenuClose(control, target, request, onMenuClose);
+  } else {
+    onMenuClose?.();
   }
   control.click();
   if (request.action === 'reply') {
@@ -484,6 +565,54 @@ async function triggerNativeAction(
     return;
   }
   dispatchActionResult(target, request, { ok: true, phase: 'triggered' });
+}
+
+function exposeBoostControl(target: Element, request: TopicActionRequest): void {
+  const placeholder = getNativePostPlaceholder(request);
+  const mainOutlet = document.getElementById('main-outlet');
+  if (!placeholder || !mainOutlet) {
+    dispatchActionResult(target, request, {
+      ok: false,
+      phase: 'triggered',
+      message: '原站楼层尚未加载，请稍后重试',
+    });
+    return;
+  }
+
+  let attempting = false;
+  let timeout = 0;
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  const releasePost = (): void => discoursePluginApi?.preventCloak?.(request.postId, false);
+  const cleanup = (): void => {
+    observer.disconnect();
+    window.clearTimeout(timeout);
+    window.scrollTo(scrollX, scrollY);
+  };
+  const attemptAction = (): void => {
+    const post = getNativePost(request);
+    if (!post || attempting || !canTriggerNativeAction(post, request.action)) return;
+    attempting = true;
+    cleanup();
+    void triggerNativeAction(post, target, request, releasePost);
+  };
+  const observer = new MutationObserver(attemptAction);
+  observer.observe(mainOutlet, { attributes: true, childList: true, subtree: true });
+  timeout = window.setTimeout(() => {
+    cleanup();
+    releasePost();
+    if (!attempting) {
+      dispatchActionResult(target, request, {
+        ok: false,
+        phase: 'triggered',
+        message: '原站 Boost 操作栏加载超时，请重试',
+      });
+    }
+  }, 8_000);
+
+  discoursePluginApi?.preventCloak?.(request.postId, true);
+  placeholder.scrollIntoView({ block: 'nearest' });
+  window.setTimeout(attemptAction, 0);
 }
 
 function routeToActionPost(target: Element, request: TopicActionRequest, url: URL): void {
@@ -547,6 +676,8 @@ function handleActionRequest(event: Event): void {
     const post = getNativePost(request);
     if (post && canTriggerNativeAction(post, request.action)) {
       void triggerNativeAction(post, target, request);
+    } else if (request.action === 'boost') {
+      exposeBoostControl(target, request);
     } else {
       routeToActionPost(target, request, url);
     }
@@ -665,6 +796,7 @@ function installPluginHook(): boolean {
     const module = pageWindow.require('discourse/lib/plugin-api') as PluginApiModule | undefined;
     if (!module?.withPluginApi) return false;
     module.withPluginApi('1.0.0', (api) => {
+      discoursePluginApi = api;
       discourseContainer = api.container || null;
       api.onPageChange(dispatchPageNavigation);
       api.onAppEvent?.('discourse-reactions:reaction-toggled', forwardReactionToggle);
@@ -689,4 +821,5 @@ window.addEventListener('popstate', dispatchHistoryNavigation);
 document.addEventListener('DOMContentLoaded', () => subscribeToCurrentTopic(), { once: true });
 document.addEventListener(TOPIC_ACTION_REQUEST_NAME, handleActionRequest);
 document.addEventListener(TOPIC_REACTION_PICKER_REQUEST_NAME, handleReactionPickerRequest);
+document.addEventListener(TOPIC_CODE_HIGHLIGHT_REQUEST_NAME, () => highlightSplitCodeBlocks());
 discover();

@@ -12,6 +12,7 @@ import {
   PAGE_NAVIGATION_EVENT_NAME,
 } from '../src/common/topic-route';
 import { parseTopicEventDetail, TOPIC_EVENT_NAME } from '../src/content/topic-events';
+import { TOPIC_CODE_HIGHLIGHT_REQUEST_NAME } from '../src/content/topic-code-blocks';
 
 interface BridgeTestWindow extends Window {
   MessageBus: {
@@ -27,6 +28,10 @@ let routeTo: (url: string) => void = () => undefined;
 let topicController: unknown = null;
 let reactionToggleCallback: ((value: unknown) => void) | null = null;
 let pageChangeCallback: (() => void) | null = null;
+const preventCloak = vi.fn();
+const highlightSyntax = vi.fn();
+const siteSettings = { autohighlight_all_code: true };
+const session = { highlightJsPath: '/highlight-js/common.js' };
 
 function request(action: TopicActionRequest['action'], postId = 2): TopicActionRequest {
   return {
@@ -86,7 +91,14 @@ beforeAll(async () => {
                 reactionToggleCallback = eventCallback;
               }
             },
-            container: { lookup: () => topicController },
+            preventCloak,
+            container: {
+              lookup: (name: string) => {
+                if (name === 'service:site-settings') return siteSettings;
+                if (name === 'service:session') return session;
+                return topicController;
+              },
+            },
           }),
       };
     }
@@ -98,6 +110,9 @@ beforeAll(async () => {
           `https://cdn.linux.do/images/emoji/twitter/${reactionId}.png`,
       };
     }
+    if (moduleName === 'discourse/lib/highlight-syntax') {
+      return { default: highlightSyntax };
+    }
     return undefined;
   };
   await import('../src/page/topic-events-bridge');
@@ -108,9 +123,29 @@ beforeEach(() => {
   window.history.replaceState({}, '', '/t/topic/123');
   routeTo = () => undefined;
   topicController = null;
+  preventCloak.mockReset();
+  highlightSyntax.mockReset();
 });
 
 describe('page-world topic action bridge', () => {
+  it('runs the native Discourse highlighter for split-layout code blocks', async () => {
+    const root = document.createElement('section');
+    root.className = 'ldtk-topic-reading-root';
+    root.innerHTML =
+      '<div class="cooked"><pre class="codeblock-buttons"><code>const answer = 42;</code></pre></div>';
+    document.body.appendChild(root);
+
+    document.dispatchEvent(new Event(TOPIC_CODE_HIGHLIGHT_REQUEST_NAME));
+
+    await vi.waitFor(() => expect(highlightSyntax).toHaveBeenCalledOnce());
+    expect(highlightSyntax).toHaveBeenCalledWith(
+      root.querySelector('.cooked'),
+      siteSettings,
+      session,
+    );
+    expect(root.querySelector<HTMLElement>('.cooked')?.dataset.ldtkHighlightProcessed).toBe('true');
+  });
+
   it('dispatches definitive navigation signals for history and completed page changes', () => {
     const historyNavigation = vi.fn();
     const pageNavigation = vi.fn();
@@ -346,6 +381,61 @@ describe('page-world topic action bridge', () => {
       { requestId: 'bridge:2', ok: true, phase: 'settled' },
     ]);
     expect(nativeBoost.getBoundingClientRect().x).toBe(144);
+  });
+
+  it('uncloaks the native first post for Boost without navigating', async () => {
+    const nativePostWrapper = document.createElement('div');
+    nativePostWrapper.dataset.postNumber = '1';
+    const click = vi.fn();
+    Object.defineProperty(nativePostWrapper, 'scrollIntoView', {
+      value: vi.fn(() => {
+        window.setTimeout(() => {
+          const renderedPostWrapper = document.createElement('div');
+          renderedPostWrapper.className = 'topic-post';
+          renderedPostWrapper.dataset.postNumber = '1';
+          const nativePost = document.createElement('article');
+          nativePost.dataset.postId = '1';
+          const nativeBoost = document.createElement('button');
+          nativeBoost.className = 'post-action-menu__boost';
+          nativeBoost.setAttribute('aria-expanded', 'false');
+          nativeBoost.addEventListener('click', () => {
+            click();
+            nativeBoost.setAttribute('aria-expanded', 'true');
+            window.setTimeout(() => nativeBoost.setAttribute('aria-expanded', 'false'), 0);
+          });
+          nativePost.appendChild(nativeBoost);
+          renderedPostWrapper.appendChild(nativePost);
+          nativePostWrapper.replaceWith(renderedPostWrapper);
+        }, 0);
+      }),
+    });
+    document.getElementById('main-outlet')?.appendChild(nativePostWrapper);
+    routeTo = vi.fn();
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    const visibleButton = document.createElement('button');
+    document.body.appendChild(visibleButton);
+    const results: unknown[] = [];
+    visibleButton.addEventListener(TOPIC_ACTION_RESULT_NAME, (event) => {
+      results.push(parseTopicActionResult((event as CustomEvent).detail));
+    });
+
+    visibleButton.dispatchEvent(
+      new CustomEvent(TOPIC_ACTION_REQUEST_NAME, {
+        bubbles: true,
+        detail: JSON.stringify(request('boost', 1)),
+      }),
+    );
+
+    await vi.waitFor(() => expect(results).toHaveLength(2));
+    expect(results).toEqual([
+      { requestId: 'bridge:1', ok: true, phase: 'triggered' },
+      { requestId: 'bridge:1', ok: true, phase: 'settled' },
+    ]);
+    expect(click).toHaveBeenCalledOnce();
+    expect(preventCloak).toHaveBeenCalledWith(1, true);
+    expect(preventCloak).toHaveBeenCalledWith(1, false);
+    expect(scrollTo).toHaveBeenCalled();
+    expect(routeTo).not.toHaveBeenCalled();
   });
 
   it('opens replies through the topic controller without navigating the hidden layout', async () => {

@@ -7,6 +7,7 @@ import {
   topicLayoutOwnedSelectors,
 } from '../src/content/topic-layout';
 import type { TopicPost, TopicResponse } from '../src/content/topic-api';
+import { TOPIC_CODE_HIGHLIGHT_REQUEST_NAME } from '../src/content/topic-code-blocks';
 import {
   parseTopicActionRequest,
   parseTopicReactionPickerRequest,
@@ -277,6 +278,64 @@ describe('topic split layout lifecycle', () => {
     expect(commentStatus?.getAttribute('aria-live')).toBe('polite');
     expect(previousIcon?.classList.contains('d-icon-lucide-chevron-left')).toBe(true);
     expect(nextIcon?.classList.contains('d-icon-lucide-chevron-right')).toBe(true);
+  });
+
+  it('highlights article code blocks and provides the native-style copy control', async () => {
+    const article = {
+      ...post(1, 1),
+      cooked: '<pre><code>创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画</code></pre>',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          topic({
+            post_stream: {
+              posts: [article, post(2, 2), post(3, 3)],
+              stream: [1, 2, 3],
+            },
+          }),
+        ),
+      ),
+    );
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const nativeHighlight = vi.fn(() => {
+      const code = document.querySelector<HTMLElement>('.ldtk-article-content pre > code');
+      if (!code) return;
+      const highlighted = document.createElement('span');
+      highlighted.className = 'hljs-selector-tag';
+      highlighted.textContent = code.textContent;
+      code.replaceChildren(highlighted);
+      code.classList.add('hljs');
+      code.dataset.highlighted = 'yes';
+    });
+    document.addEventListener(TOPIC_CODE_HIGHLIGHT_REQUEST_NAME, nativeHighlight, { once: true });
+
+    await refreshTopicLayout(enabledSettings);
+
+    const pre = document.querySelector<HTMLElement>('.ldtk-article-content .cooked pre');
+    const code = pre?.querySelector<HTMLElement>('code');
+    const copy = pre?.querySelector<HTMLButtonElement>('.codeblock-button-wrapper .copy-cmd');
+    expect(pre?.classList.contains('codeblock-buttons')).toBe(true);
+    expect(nativeHighlight).toHaveBeenCalledOnce();
+    expect(getComputedStyle(pre as HTMLElement).padding).toBe('0px');
+    expect(getComputedStyle(code as HTMLElement).backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(code?.classList.contains('hljs')).toBe(true);
+    expect(code?.children.length).toBeGreaterThan(0);
+    expect(copy?.getAttribute('aria-label')).toBe('复制代码');
+    expect(copy?.querySelector('svg.d-icon-lucide-copy')).not.toBeNull();
+
+    copy?.click();
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('创建一个HTML，内容是SVG绘制一个鹈鹕骑自行车的2D动画');
+      expect(copy?.classList.contains('action-complete')).toBe(true);
+      expect(copy?.getAttribute('aria-label')).toBe('代码已复制');
+      expect(copy?.textContent).toBe('已复制');
+    });
   });
 
   it('resizes the article footer by pointer and keyboard, then restores its height', async () => {
@@ -584,6 +643,19 @@ describe('topic split layout lifecycle', () => {
     document.getElementById('main-outlet')?.appendChild(nativeBoostInput);
     expect(getComputedStyle(nativeBoostInput).visibility).toBe('visible');
     expect(getComputedStyle(nativeBoostInput).pointerEvents).toBe('auto');
+
+    const emojiPicker = document.createElement('div');
+    emojiPicker.className = 'fk-d-menu';
+    emojiPicker.dataset.content = '';
+    emojiPicker.dataset.identifier = 'emoji-picker';
+    const emojiButton = document.createElement('button');
+    emojiPicker.appendChild(emojiButton);
+    document.getElementById('main-outlet')?.appendChild(emojiPicker);
+    expect(getComputedStyle(emojiPicker).visibility).toBe('visible');
+    expect(getComputedStyle(emojiPicker).pointerEvents).toBe('auto');
+    expect(getComputedStyle(emojiPicker).zIndex).toBe('420');
+    expect(getComputedStyle(emojiButton).visibility).toBe('visible');
+    expect(getComputedStyle(emojiButton).pointerEvents).toBe('auto');
   });
 
   it('refreshes the article Boost row after a discourse-boosts event', async () => {

@@ -3,6 +3,7 @@ import type { DiscourseSettings } from '../common/settings';
 import { isSameTopicRoute, parseTopicRoute, type TopicRoute } from '../common/topic-route';
 import { injectButtons } from './buttons';
 import { copyToClipboard, showToast } from './output';
+import { TOPIC_CODE_HIGHLIGHT_REQUEST_NAME } from './topic-code-blocks';
 import { fetchPostReplies, TopicDataSource, type TopicPost } from './topic-api';
 import {
   parseTopicActionResult,
@@ -48,10 +49,12 @@ const ARTICLE_FOOTER_MIN_HEIGHT = 64;
 const ARTICLE_FOOTER_MAX_RATIO = 0.5;
 const ARTICLE_CONTENT_MIN_HEIGHT = 160;
 const ARTICLE_FOOTER_KEYBOARD_STEP = 16;
+const CODE_COPY_RESET_DELAY = 3_000;
 let nativeAttemptKey: string | null = null;
 let actionRequestSequence = 0;
 let loadingOverlayVersion = 0;
 let loadingOverlayHideTimer: number | null = null;
+let codeHighlightScheduled = false;
 
 const NATIVE_ACTION_SELECTORS: Record<PendingNativeAction['action'], string> = {
   like: '.post-action-menu__like, button[title*="赞"], button[aria-label*="赞"]',
@@ -87,6 +90,14 @@ html.${ACTIVE_CLASS} #main-outlet .discourse-boosts__input-container * {
 }
 html.${ACTIVE_CLASS} #main-outlet .discourse-boosts__input-container {
   z-index: 410 !important;
+}
+html.${ACTIVE_CLASS} .fk-d-menu[data-content][data-identifier="emoji-picker"],
+html.${ACTIVE_CLASS} .fk-d-menu[data-content][data-identifier="emoji-picker"] * {
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+html.${ACTIVE_CLASS} .fk-d-menu[data-content][data-identifier="emoji-picker"] {
+  z-index: 420 !important;
 }
 html.${ACTIVE_CLASS} #reply-control {
   z-index: 400 !important;
@@ -672,15 +683,86 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   overscroll-behavior-inline: contain;
 }
 .${ROOT_CLASS} .cooked pre {
-  padding: 12px;
+  position: relative;
+  padding: 0;
   border: 1px solid var(--ldtk-border);
   border-radius: calc(var(--ldtk-radius) - 2px);
-  background: var(--ldtk-muted);
+  background: var(--hljs-bg, var(--ldtk-muted));
   white-space: pre;
 }
 .${ROOT_CLASS} .cooked pre code {
+  display: block;
+  padding: 12px;
+  background: transparent;
   font-size: 13px;
   line-height: 1.65;
+}
+.${ROOT_CLASS} .cooked pre.codeblock-buttons {
+  display: block;
+  overflow: auto;
+}
+.${ROOT_CLASS} .codeblock-button-wrapper {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 1;
+  display: flex;
+}
+.${ROOT_CLASS} .copy-cmd {
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ldtk-muted-foreground);
+  background: color-mix(in srgb, var(--ldtk-background) 92%, transparent);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 10%);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease, color 150ms ease, background-color 150ms ease;
+}
+.${ROOT_CLASS} pre:hover > .codeblock-button-wrapper .copy-cmd,
+.${ROOT_CLASS} pre:focus-within > .codeblock-button-wrapper .copy-cmd,
+.${ROOT_CLASS} .copy-cmd.action-complete {
+  opacity: 1;
+  pointer-events: auto;
+}
+.${ROOT_CLASS} .copy-cmd:hover {
+  color: var(--ldtk-foreground);
+  background: var(--ldtk-background);
+}
+.${ROOT_CLASS} .copy-cmd:focus-visible {
+  outline: 2px solid var(--ldtk-ring);
+  outline-offset: 2px;
+  opacity: 1;
+  pointer-events: auto;
+}
+.${ROOT_CLASS} .copy-cmd:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+.${ROOT_CLASS} .copy-cmd.action-complete {
+  width: auto;
+  min-width: 30px;
+  padding: 0 8px;
+  color: var(--ldtk-brand);
+  cursor: default;
+  font-size: 12px;
+  font-weight: 600;
+}
+@media (hover: none) {
+  .${ROOT_CLASS} .copy-cmd {
+    opacity: 0.8;
+    pointer-events: auto;
+  }
+  .${ROOT_CLASS} .cooked pre code {
+    padding-right: 32px;
+  }
 }
 .${ROOT_CLASS} .cooked table {
   display: block;
@@ -1171,6 +1253,7 @@ const LUCIDE_ICONS: Readonly<Record<string, string>> = {
   'chevron-left': '<path d="m15 18-6-6 6-6"/>',
   'chevron-right': '<path d="m9 18 6-6-6-6"/>',
   'chevron-up': '<path d="m18 15-6-6-6 6"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   ellipsis:
     '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
   'far-bookmark': '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z"/>',
@@ -1214,6 +1297,50 @@ function createLucideIcon(name: string, size = 15): SVGSVGElement {
   icon.setAttribute('aria-hidden', 'true');
   icon.innerHTML = LUCIDE_ICONS[resolved] || LUCIDE_ICONS[name] || '';
   return icon;
+}
+
+function scheduleCodeHighlight(): void {
+  if (codeHighlightScheduled) return;
+  codeHighlightScheduled = true;
+  queueMicrotask(() => {
+    codeHighlightScheduled = false;
+    document.dispatchEvent(new Event(TOPIC_CODE_HIGHLIGHT_REQUEST_NAME));
+  });
+}
+
+function decorateCooked(cooked: HTMLElement): void {
+  let hasCodeBlocks = false;
+  cooked.querySelectorAll<HTMLElement>('pre > code').forEach((code) => {
+    const pre = code.parentElement;
+    const container = pre?.parentElement;
+    if (!pre || (container !== cooked && container?.matches('article, blockquote'))) return;
+
+    hasCodeBlocks = true;
+    if (pre.classList.contains('codeblock-buttons')) return;
+
+    pre.classList.add('codeblock-buttons');
+    const wrapper = createElement('div', 'codeblock-button-wrapper');
+    const copyButton = createIconButton('btn nohighlight copy-cmd btn-flat', 'copy', '复制代码');
+    copyButton.dataset.copyCode = '';
+    wrapper.appendChild(copyButton);
+    code.before(wrapper);
+  });
+  if (hasCodeBlocks) scheduleCodeHighlight();
+}
+
+function createCooked(html: string): HTMLElement {
+  const cooked = createElement('div', 'cooked');
+  cooked.innerHTML = html;
+  decorateCooked(cooked);
+  return cooked;
+}
+
+function getCodeText(button: HTMLButtonElement): string | null {
+  const code = button.closest('pre')?.querySelector('code');
+  if (!code) return null;
+  return (code.innerText || code.textContent || '')
+    .replace(/[\f\v\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\ufeff]/g, ' ')
+    .trim();
 }
 
 function setButtonIcon(button: HTMLButtonElement, name: string): void {
@@ -1476,6 +1603,7 @@ class TopicLayout {
   private readonly eventVersions = new Map<number, number>();
   private readonly reactionImages = new Map<number, { id: string; url?: string }>();
   private readonly replyAborts = new Map<number, AbortController>();
+  private readonly codeCopyResetTimers = new Map<HTMLButtonElement, number>();
   private articleReplies: TopicPost[] = [];
   private readTracker: TopicReadTracker | null = null;
   private pageAbort: AbortController | null = null;
@@ -1568,6 +1696,8 @@ class TopicLayout {
     this.pageAbort?.abort();
     this.replyAborts.forEach((controller) => controller.abort());
     this.replyAborts.clear();
+    this.codeCopyResetTimers.forEach((timer) => window.clearTimeout(timer));
+    this.codeCopyResetTimers.clear();
     this.readTracker?.disconnect();
     this.articleScroll.removeEventListener('scroll', this.scheduleSave);
     this.commentsPane.removeEventListener('scroll', this.scheduleSave);
@@ -1758,8 +1888,7 @@ class TopicLayout {
     content.dataset.username = this.source.article.username;
     content.dataset.createdAt = this.source.article.created_at;
     const body = createElement('div', 'topic-body');
-    const cooked = createElement('div', 'cooked');
-    cooked.innerHTML = this.source.article.cooked;
+    const cooked = createCooked(this.source.article.cooked);
     const footer = createElement('footer', 'ldtk-article-footer');
     footer.setAttribute('aria-label', '正文信息和操作');
     const resizer = createElement('div', 'ldtk-article-footer-resizer');
@@ -2033,12 +2162,13 @@ class TopicLayout {
     time.appendChild(timestamp);
     heading.appendChild(time);
 
-    const cooked = createElement('div', 'cooked');
+    let cooked: HTMLElement;
     if (post.deleted_at && !post.cooked.trim()) {
+      cooked = createElement('div', 'cooked');
       cooked.classList.add('ldtk-deleted-placeholder');
       cooked.textContent = '此回复已删除';
     } else {
-      cooked.innerHTML = post.cooked;
+      cooked = createCooked(post.cooked);
     }
     body.append(heading, cooked, this.createPostControls(post));
     const boosts = this.createBoosts(post);
@@ -2465,8 +2595,7 @@ class TopicLayout {
     );
     floor.dataset.targetFloor = String(post.post_number);
     heading.appendChild(floor);
-    const cooked = createElement('div', 'cooked');
-    cooked.innerHTML = post.cooked;
+    const cooked = createCooked(post.cooked);
     body.append(heading, cooked);
     reply.append(avatar, body);
     return reply;
@@ -2862,6 +2991,12 @@ class TopicLayout {
   private readonly handleClick = (event: Event): void => {
     const target = event.target;
     if (!(target instanceof Element)) return;
+    const copyCodeButton = target.closest<HTMLButtonElement>('[data-copy-code]');
+    if (copyCodeButton) {
+      event.preventDefault();
+      this.copyCodeBlock(copyCodeButton);
+      return;
+    }
     const pageButton = target.closest<HTMLButtonElement>('[data-page]');
     if (pageButton && this.pagination.contains(pageButton)) {
       event.preventDefault();
@@ -2939,6 +3074,32 @@ class TopicLayout {
       void this.goToFloor(floor, true);
     }
   };
+
+  private copyCodeBlock(button: HTMLButtonElement): void {
+    const code = getCodeText(button);
+    if (code === null) return;
+
+    button.disabled = true;
+    void copyToClipboard(code)
+      .then(() => {
+        const pendingReset = this.codeCopyResetTimers.get(button);
+        if (pendingReset !== undefined) window.clearTimeout(pendingReset);
+        button.classList.add('action-complete');
+        button.setAttribute('aria-label', '代码已复制');
+        button.replaceChildren(createElement('span', '', '已复制'));
+        const resetTimer = window.setTimeout(() => {
+          button.classList.remove('action-complete');
+          button.setAttribute('aria-label', '复制代码');
+          button.replaceChildren(createDiscourseIcon('copy'));
+          this.codeCopyResetTimers.delete(button);
+        }, CODE_COPY_RESET_DELAY);
+        this.codeCopyResetTimers.set(button, resetTimer);
+      })
+      .catch(() => showToast('复制代码失败，请重试'))
+      .finally(() => {
+        button.disabled = false;
+      });
+  }
 
   private readonly handlePopState = (): void => {
     const route = parseTopicRoute(window.location.pathname);
