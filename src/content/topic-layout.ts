@@ -65,6 +65,7 @@ const ARTICLE_FOOTER_MAX_RATIO = 0.5;
 const ARTICLE_CONTENT_MIN_HEIGHT = 160;
 const ARTICLE_FOOTER_KEYBOARD_STEP = 16;
 const CODE_COPY_RESET_DELAY = 3_000;
+const REACTION_PICKER_CLOSE_DELAY = 150;
 const LIKE_USERS_PAGE_SIZE = 30;
 let actionRequestSequence = 0;
 let loadingOverlayVersion = 0;
@@ -1785,6 +1786,8 @@ class TopicLayout {
   private articleFooterHeight: number | undefined;
   private articleFooterResize: ArticleFooterResize | null = null;
   private articleFooterResizeFrame: number | null = null;
+  private reactionPickerCloseTimer: number | null = null;
+  private suppressReactionFocusOpen = false;
 
   constructor(
     readonly route: TopicRoute,
@@ -1833,6 +1836,10 @@ class TopicLayout {
     this.commentsPane.addEventListener('scroll', this.scheduleSave, { passive: true });
     this.root.addEventListener('click', this.handleClick);
     this.root.addEventListener('keydown', this.handleKeyDown);
+    this.root.addEventListener('pointerover', this.handleReactionPointerOver);
+    this.root.addEventListener('pointerout', this.handleReactionPointerOut);
+    this.root.addEventListener('focusin', this.handleReactionFocusIn);
+    this.root.addEventListener('focusout', this.handleReactionFocusOut);
     window.addEventListener('popstate', this.handlePopState);
     window.addEventListener('pagehide', this.handlePageHide);
     document.addEventListener('click', this.handleNativeShellClick, true);
@@ -1974,6 +1981,10 @@ class TopicLayout {
     this.injectButtonsFrame = null;
     if (this.retryCountdownTimer !== null) window.clearTimeout(this.retryCountdownTimer);
     this.retryCountdownTimer = null;
+    if (this.reactionPickerCloseTimer !== null) {
+      window.clearTimeout(this.reactionPickerCloseTimer);
+      this.reactionPickerCloseTimer = null;
+    }
     this.articleFooterResize = null;
     delete this.articlePane.dataset.resizingFooter;
     this.clearSidebarAlignments();
@@ -1987,6 +1998,10 @@ class TopicLayout {
     this.commentsPane.removeEventListener('scroll', this.scheduleSave);
     this.root.removeEventListener('click', this.handleClick);
     this.root.removeEventListener('keydown', this.handleKeyDown);
+    this.root.removeEventListener('pointerover', this.handleReactionPointerOver);
+    this.root.removeEventListener('pointerout', this.handleReactionPointerOut);
+    this.root.removeEventListener('focusin', this.handleReactionFocusIn);
+    this.root.removeEventListener('focusout', this.handleReactionFocusOut);
     window.removeEventListener('popstate', this.handlePopState);
     window.removeEventListener('pagehide', this.handlePageHide);
     document.removeEventListener('click', this.handleNativeShellClick, true);
@@ -2623,17 +2638,9 @@ class TopicLayout {
         if (reactionImage) likeButton.replaceChildren(reactionImage);
       }
       likeButton.setAttribute('aria-pressed', String(hasReaction));
-      const reactionPicker = createPostMenuButton({
-        className: 'ldtk-reaction-picker-trigger btn-icon',
-        icon: 'smile-plus',
-        label: '选择其他表态',
-      });
-      reactionPicker.dataset.openReactions = 'true';
-      reactionPicker.dataset.postId = String(post.id);
-      reactionPicker.dataset.floor = String(post.post_number);
-      reactionPicker.setAttribute('aria-haspopup', 'menu');
-      reactionPicker.setAttribute('aria-expanded', 'false');
-      actions.appendChild(reactionPicker);
+      likeButton.dataset.openReactions = 'true';
+      likeButton.setAttribute('aria-haspopup', 'dialog');
+      likeButton.setAttribute('aria-expanded', 'false');
     }
 
     const copyLink = createPostMenuButton({
@@ -3278,12 +3285,20 @@ class TopicLayout {
   }
 
   private closeInlinePopover(popover: HTMLElement, restoreFocus = true): void {
+    if (popover.classList.contains('ldtk-reaction-picker')) {
+      this.cancelReactionPickerClose();
+    }
     const triggerId = popover.dataset.triggerId;
     const trigger = triggerId ? document.getElementById(triggerId) : null;
     popover.remove();
     if (trigger instanceof HTMLButtonElement) {
       trigger.setAttribute('aria-expanded', 'false');
-      if (restoreFocus) trigger.focus({ preventScroll: true });
+      if (restoreFocus) {
+        const suppressReactionFocusOpen = popover.classList.contains('ldtk-reaction-picker');
+        if (suppressReactionFocusOpen) this.suppressReactionFocusOpen = true;
+        trigger.focus({ preventScroll: true });
+        if (suppressReactionFocusOpen) this.suppressReactionFocusOpen = false;
+      }
     }
   }
 
@@ -3291,6 +3306,31 @@ class TopicLayout {
     this.root.querySelectorAll<HTMLElement>('.ldtk-inline-popover').forEach((popover) => {
       if (popover !== except) this.closeInlinePopover(popover, false);
     });
+  }
+
+  private positionInlinePopover(button: HTMLButtonElement, popover: HTMLElement): void {
+    const rootRect = this.root.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    const popoverRect = popover.getBoundingClientRect();
+    const inset = 12;
+    const gap = 6;
+    const width = popoverRect.width || Math.min(340, Math.max(0, rootRect.width - inset * 2));
+    const height = popoverRect.height || popover.scrollHeight;
+    const maxLeft = Math.max(inset, rootRect.width - inset - width);
+    const left = Math.min(Math.max(inset, buttonRect.left - rootRect.left), maxLeft);
+    const spaceAbove = Math.max(0, buttonRect.top - rootRect.top - inset - gap);
+    const spaceBelow = Math.max(0, rootRect.bottom - buttonRect.bottom - inset - gap);
+    const openAbove = spaceBelow < height && spaceAbove > spaceBelow;
+    const preferredTop = openAbove
+      ? buttonRect.top - rootRect.top - gap - height
+      : buttonRect.bottom - rootRect.top + gap;
+    const maxTop = Math.max(inset, rootRect.height - inset - height);
+    const top = Math.min(Math.max(inset, preferredTop), maxTop);
+
+    popover.style.left = `${left}px`;
+    popover.style.right = 'auto';
+    popover.style.top = `${top}px`;
+    popover.dataset.placement = openAbove ? 'top' : 'bottom';
   }
 
   private createInlinePopover(
@@ -3302,10 +3342,11 @@ class TopicLayout {
     if (!controls) return null;
     const buttonId = button.id || `ldtk-action-${++actionRequestSequence}`;
     button.id = buttonId;
-    const existing = controls.querySelector<HTMLElement>(`.ldtk-inline-popover.${className}`);
+    const existing = this.root.querySelector<HTMLElement>(`.ldtk-inline-popover.${className}`);
     if (existing) {
-      this.closeInlinePopover(existing);
-      return null;
+      const sameTrigger = existing.dataset.triggerId === buttonId;
+      this.closeInlinePopover(existing, sameTrigger);
+      if (sameTrigger) return null;
     }
     this.closeInlinePopovers();
     const popover = createElement('section', `ldtk-inline-popover ${className}`);
@@ -3326,13 +3367,8 @@ class TopicLayout {
     close.dataset.closePopover = 'true';
     header.append(heading, close);
     popover.appendChild(header);
-    controls.appendChild(popover);
-    const buttonRect = button.getBoundingClientRect();
-    const controlsRect = controls.getBoundingClientRect();
-    popover.style.top = `${Math.max(0, buttonRect.bottom - controlsRect.top + 6)}px`;
-    const availableRight = Math.max(0, controlsRect.right - buttonRect.right);
-    if (availableRight < 170) popover.style.right = '0';
-    else popover.style.left = `${Math.max(0, buttonRect.left - controlsRect.left)}px`;
+    this.root.appendChild(popover);
+    this.positionInlinePopover(button, popover);
     button.setAttribute('aria-expanded', 'true');
     return popover;
   }
@@ -3381,16 +3417,18 @@ class TopicLayout {
     });
   }
 
-  private openReactionPicker(button: HTMLButtonElement): void {
+  private openReactionPicker(button: HTMLButtonElement): HTMLElement | null {
     const postId = Number(button.dataset.postId);
     const floor = Number(button.dataset.floor);
-    if (!postId || !floor) return;
+    if (!postId || !floor) return null;
+    const existing = this.root.querySelector<HTMLElement>('.ldtk-reaction-picker');
+    if (existing?.dataset.triggerId === button.id) return existing;
     const popover = this.createInlinePopover(button, '选择表态', 'ldtk-reaction-picker');
-    if (!popover) return;
+    if (!popover) return null;
     const status = createElement('p', 'ldtk-inline-popover-status', '正在加载表态...');
     status.setAttribute('role', 'status');
     popover.appendChild(status);
-    popover.focus({ preventScroll: true });
+    this.positionInlinePopover(button, popover);
     void this.requestInteraction(popover, {
       interaction: 'reactionOptions',
       postId,
@@ -3420,16 +3458,91 @@ class TopicLayout {
           list.appendChild(item);
         });
         status.replaceWith(list);
-        list.querySelector<HTMLButtonElement>('.ldtk-reaction-option')?.focus({
-          preventScroll: true,
-        });
+        if (popover.dataset.focusFirst === 'true') {
+          delete popover.dataset.focusFirst;
+          list.querySelector<HTMLButtonElement>('.ldtk-reaction-option')?.focus({
+            preventScroll: true,
+          });
+        }
+        this.positionInlinePopover(button, popover);
       })
       .catch((error: Error) => {
         if (!popover.isConnected) return;
         status.textContent = error.message;
         status.setAttribute('role', 'alert');
       });
+    return popover;
   }
+
+  private getReactionTrigger(target: EventTarget | null): HTMLButtonElement | null {
+    if (!(target instanceof Element)) return null;
+    const direct = target.closest<HTMLButtonElement>('[data-open-reactions][data-floor]');
+    if (direct && this.root.contains(direct)) return direct;
+    const popover = target.closest<HTMLElement>('.ldtk-reaction-picker');
+    const triggerId = popover?.dataset.triggerId;
+    const trigger = triggerId ? document.getElementById(triggerId) : null;
+    return trigger instanceof HTMLButtonElement && this.root.contains(trigger) ? trigger : null;
+  }
+
+  private getReactionPopover(button: HTMLButtonElement): HTMLElement | null {
+    if (!button.id) return null;
+    return (
+      Array.from(this.root.querySelectorAll<HTMLElement>('.ldtk-reaction-picker')).find(
+        (popover) => popover.dataset.triggerId === button.id,
+      ) || null
+    );
+  }
+
+  private isWithinReactionPicker(button: HTMLButtonElement, target: EventTarget | null): boolean {
+    if (!(target instanceof Node)) return false;
+    return button.contains(target) || Boolean(this.getReactionPopover(button)?.contains(target));
+  }
+
+  private cancelReactionPickerClose(): void {
+    if (this.reactionPickerCloseTimer === null) return;
+    window.clearTimeout(this.reactionPickerCloseTimer);
+    this.reactionPickerCloseTimer = null;
+  }
+
+  private scheduleReactionPickerClose(button: HTMLButtonElement): void {
+    this.cancelReactionPickerClose();
+    this.reactionPickerCloseTimer = window.setTimeout(() => {
+      this.reactionPickerCloseTimer = null;
+      const popover = this.getReactionPopover(button);
+      if (popover) this.closeInlinePopover(popover, false);
+    }, REACTION_PICKER_CLOSE_DELAY);
+  }
+
+  private readonly handleReactionPointerOver = (event: Event): void => {
+    const pointerEvent = event as PointerEvent;
+    if (pointerEvent.pointerType !== 'mouse') return;
+    const button = this.getReactionTrigger(event.target);
+    if (!button || this.isWithinReactionPicker(button, pointerEvent.relatedTarget)) return;
+    this.cancelReactionPickerClose();
+    this.openReactionPicker(button);
+  };
+
+  private readonly handleReactionPointerOut = (event: Event): void => {
+    const pointerEvent = event as PointerEvent;
+    if (pointerEvent.pointerType !== 'mouse') return;
+    const button = this.getReactionTrigger(event.target);
+    if (!button || this.isWithinReactionPicker(button, pointerEvent.relatedTarget)) return;
+    this.scheduleReactionPickerClose(button);
+  };
+
+  private readonly handleReactionFocusIn = (event: FocusEvent): void => {
+    if (this.suppressReactionFocusOpen) return;
+    const button = this.getReactionTrigger(event.target);
+    if (!button || this.isWithinReactionPicker(button, event.relatedTarget)) return;
+    this.cancelReactionPickerClose();
+    if (event.target === button) this.openReactionPicker(button);
+  };
+
+  private readonly handleReactionFocusOut = (event: FocusEvent): void => {
+    const button = this.getReactionTrigger(event.target);
+    if (!button || this.isWithinReactionPicker(button, event.relatedTarget)) return;
+    this.scheduleReactionPickerClose(button);
+  };
 
   private openLikeUsers(button: HTMLButtonElement): void {
     const postId = Number(button.dataset.postId);
@@ -3446,6 +3559,7 @@ class TopicLayout {
     status.setAttribute('role', 'status');
     const list = createElement('ul', 'ldtk-like-users-list');
     popover.append(status, list);
+    this.positionInlinePopover(button, popover);
     popover.focus({ preventScroll: true });
     let page = 0;
     const loadMore = createButton('ldtk-like-users-more', '加载更多点赞用户');
@@ -3478,6 +3592,7 @@ class TopicLayout {
           } else {
             loadMore.remove();
           }
+          this.positionInlinePopover(button, popover);
         })
         .catch((error: Error) => {
           if (!popover.isConnected) return;
@@ -3781,14 +3896,6 @@ class TopicLayout {
       return;
     }
     const actionButton = target.closest<HTMLButtonElement>('[data-topic-action][data-floor]');
-    const reactionPickerButton = target.closest<HTMLButtonElement>(
-      '[data-open-reactions][data-floor]',
-    );
-    if (reactionPickerButton) {
-      event.preventDefault();
-      this.openReactionPicker(reactionPickerButton);
-      return;
-    }
     if (actionButton) {
       event.preventDefault();
       if (actionButton.dataset.topicAction === 'boost') this.openBoostEditor(actionButton);
@@ -3823,6 +3930,25 @@ class TopicLayout {
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
+    const reactionButton =
+      event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>('[data-open-reactions][data-floor]')
+        : null;
+    if (reactionButton && event.key === 'ArrowDown') {
+      event.preventDefault();
+      const popover = this.openReactionPicker(reactionButton);
+      const firstOption = popover?.querySelector<HTMLButtonElement>('.ldtk-reaction-option');
+      if (firstOption) firstOption.focus({ preventScroll: true });
+      else if (popover) popover.dataset.focusFirst = 'true';
+      return;
+    }
+    if (reactionButton && event.key === 'Escape') {
+      const popover = this.getReactionPopover(reactionButton);
+      if (!popover) return;
+      event.preventDefault();
+      this.closeInlinePopover(popover, false);
+      return;
+    }
     if (event.key !== 'Escape') return;
     const target = event.target;
     if (!(target instanceof Node)) return;

@@ -1198,11 +1198,8 @@ describe('topic split layout lifecycle', () => {
     expect(likeButton?.querySelector('svg')?.classList.contains('d-icon-lucide-far-heart')).toBe(
       true,
     );
-    expect(
-      actions
-        ?.querySelector('.ldtk-reaction-picker-trigger svg')
-        ?.classList.contains('d-icon-lucide-smile-plus'),
-    ).toBe(true);
+    expect(actions?.querySelector('.ldtk-reaction-picker-trigger')).toBeNull();
+    expect(likeButton?.getAttribute('aria-haspopup')).toBe('dialog');
     expect(actions?.querySelector('.post-action-menu__copy-link')).not.toBeNull();
     expect(actions?.querySelector('.post-action-menu__bookmark')).not.toBeNull();
     expect(actions?.querySelector('.post-action-menu__show-more')).not.toBeNull();
@@ -1231,7 +1228,7 @@ describe('topic split layout lifecycle', () => {
     expect(getComputedStyle(composer).visibility).toBe('visible');
   });
 
-  it('opens and uses a split-owned reaction picker without native DOM or navigation', async () => {
+  it('opens the split-owned reaction picker on like hover and keeps click for liking', async () => {
     const actionablePost: TopicPost = {
       ...post(2, 2),
       actions_summary: [{ id: 2, count: 0, can_act: true, acted: false }],
@@ -1273,7 +1270,7 @@ describe('topic split layout lifecycle', () => {
     document.addEventListener(TOPIC_ACTION_REQUEST_NAME, (event) => {
       if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
       const request = parseTopicActionRequest(event.detail);
-      if (!request || request.action !== 'reaction') return;
+      if (!request) return;
       requests.push(request);
       event.target.dispatchEvent(
         new CustomEvent(TOPIC_ACTION_RESULT_NAME, {
@@ -1285,22 +1282,65 @@ describe('topic split layout lifecycle', () => {
     await refreshTopicLayout(enabledSettings);
 
     const button = document.querySelector<HTMLButtonElement>(
-      '.ldtk-topic-reading-root [data-post-id="2"] .ldtk-reaction-picker-trigger',
+      '.ldtk-topic-reading-root [data-post-id="2"] .post-action-menu__like',
     );
-    expect(button?.getAttribute('aria-haspopup')).toBe('menu');
+    expect(button?.getAttribute('aria-haspopup')).toBe('dialog');
+    const readingRoot = document.querySelector<HTMLElement>('.ldtk-topic-reading-root');
+    vi.spyOn(readingRoot as HTMLElement, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 0, 1200, 800),
+    );
+    vi.spyOn(button as HTMLButtonElement, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(900, 760, 30, 30),
+    );
     const url = window.location.href;
     const pointerOver = new MouseEvent('pointerover', { bubbles: true });
     Object.defineProperty(pointerOver, 'pointerType', { value: 'mouse' });
     button?.dispatchEvent(pointerOver);
-    expect(requests).toHaveLength(0);
-    button?.click();
+    const pendingPopover = document.querySelector<HTMLElement>('.ldtk-reaction-picker');
+    vi.spyOn(pendingPopover as HTMLElement, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(0, 0, 340, 180),
+    );
     await vi.waitFor(() => {
       expect(document.querySelectorAll('.ldtk-reaction-option')).toHaveLength(2);
     });
     expect(requests[0]).toMatchObject({ interaction: 'reactionOptions', postId: 2, floor: 2 });
+    const initialPopover = document.querySelector<HTMLElement>('.ldtk-reaction-picker');
+    expect(initialPopover?.parentElement).toBe(readingRoot);
+    expect(initialPopover?.closest('.ldtk-post-controls')).toBeNull();
+    expect(getComputedStyle(initialPopover as HTMLElement).position).toBe('absolute');
+    expect(initialPopover?.dataset.placement).toBe('top');
+    expect(initialPopover?.style.left).not.toBe('');
+    expect(initialPopover?.style.top).toBe('574px');
+    expect(document.activeElement).not.toBe(document.querySelector('.ldtk-reaction-picker'));
+
+    button?.click();
+    expect(requests[1]).toMatchObject({ action: 'like', postId: 2, floor: 2 });
+
+    const popover = document.querySelector<HTMLElement>('.ldtk-reaction-picker');
+    const pointerOut = new MouseEvent('pointerout', { bubbles: true, relatedTarget: popover });
+    Object.defineProperty(pointerOut, 'pointerType', { value: 'mouse' });
+    button?.dispatchEvent(pointerOut);
+    expect(document.querySelector('.ldtk-reaction-picker')).toBe(popover);
+
+    const leavePopover = new MouseEvent('pointerout', {
+      bubbles: true,
+      relatedTarget: document.body,
+    });
+    Object.defineProperty(leavePopover, 'pointerType', { value: 'mouse' });
+    popover?.dispatchEvent(leavePopover);
+    await vi.waitFor(() => expect(document.querySelector('.ldtk-reaction-picker')).toBeNull());
+
+    const reopen = new MouseEvent('pointerover', { bubbles: true });
+    Object.defineProperty(reopen, 'pointerType', { value: 'mouse' });
+    button?.dispatchEvent(reopen);
+    await vi.waitFor(() => {
+      expect(document.querySelectorAll('.ldtk-reaction-option')).toHaveLength(2);
+    });
+    expect(requests[2]).toMatchObject({ interaction: 'reactionOptions', postId: 2, floor: 2 });
+
     document.querySelector<HTMLButtonElement>('[data-reaction-id="cry"]')?.click();
-    await vi.waitFor(() => expect(requests).toHaveLength(2));
-    expect(requests[1]).toMatchObject({ action: 'reaction', reactionId: 'cry', postId: 2 });
+    await vi.waitFor(() => expect(requests).toHaveLength(4));
+    expect(requests[3]).toMatchObject({ action: 'reaction', reactionId: 'cry', postId: 2 });
     expect(window.location.href).toBe(url);
     expect(document.querySelector('.ldtk-reaction-picker')).toBeNull();
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
