@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   commentsPerPage?.addEventListener('change', () => {
-    const value = commentsPerPage.value === '20' ? 20 : 10;
+    const value = commentsPerPage.value === '40' ? 40 : commentsPerPage.value === '20' ? 20 : 10;
     saveSettings({ commentsPerPage: value }).catch((err: Error) => {
       if (infoEl) infoEl.textContent = `设置保存失败：${err.message}`;
     });

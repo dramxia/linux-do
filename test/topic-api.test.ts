@@ -107,6 +107,56 @@ describe('topic API', () => {
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 
+  it('loads 40 comments in two sequential batches of at most 20 posts', async () => {
+    const stream = Array.from({ length: 41 }, (_, index) => index + 1);
+    const article = post(1, 1);
+    let postsRequestCount = 0;
+    let releaseFirstBatch: (() => void) | undefined;
+    const postsRequestUrls: string[] = [];
+    const mockedFetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('.json?track_visit')) {
+        return Promise.resolve(
+          jsonResponse({
+            ...topic([article]),
+            posts_count: stream.length,
+            post_stream: { posts: [article], stream },
+          }),
+        );
+      }
+
+      postsRequestCount += 1;
+      postsRequestUrls.push(url);
+      const ids = new URL(url, 'https://linux.do').searchParams.getAll('post_ids[]').map(Number);
+      const response = jsonResponse({ post_stream: { posts: ids.map((id) => post(id, id)) } });
+      if (postsRequestCount === 1) {
+        return new Promise<Response>((resolve) => {
+          releaseFirstBatch = () => resolve(response);
+        });
+      }
+      return Promise.resolve(response);
+    });
+    vi.stubGlobal('fetch', mockedFetch);
+
+    const source = await TopicDataSource.create('123');
+    const loading = source.loadPage(1, 40);
+    await Promise.resolve();
+
+    expect(postsRequestCount).toBe(1);
+    expect(postsRequestUrls[0]).toBeDefined();
+    expect(
+      new URL(postsRequestUrls[0]!, 'https://linux.do').searchParams.getAll('post_ids[]'),
+    ).toHaveLength(20);
+
+    releaseFirstBatch?.();
+    const result = await loading;
+
+    expect(postsRequestCount).toBe(2);
+    expect(
+      new URL(postsRequestUrls[1]!, 'https://linux.do').searchParams.getAll('post_ids[]'),
+    ).toHaveLength(20);
+    expect(result.map((item) => item.id)).toEqual(stream.slice(1));
+  });
+
   it('prefetches reply targets outside the current page', async () => {
     const stream = Array.from({ length: 12 }, (_, index) => index + 101);
     const article = post(101, 1);

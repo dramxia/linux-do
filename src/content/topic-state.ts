@@ -17,6 +17,7 @@ export interface TopicReadingState {
   page: number;
   leftScrollTop: number;
   rightScrollTop: number;
+  articleFooterHeight?: number;
   nativeMode?: boolean;
   pendingAction?: PendingNativeAction;
 }
@@ -132,10 +133,17 @@ export function readTopicState(
       NATIVE_ACTIONS.has(pending.action)
         ? pending
         : undefined;
+    const articleFooterHeight =
+      typeof value.articleFooterHeight === 'number' &&
+      Number.isFinite(value.articleFooterHeight) &&
+      value.articleFooterHeight > 0
+        ? Math.round(value.articleFooterHeight)
+        : undefined;
     return {
       page: Math.max(1, Math.trunc(value.page)),
       leftScrollTop: Math.max(0, Number(value.leftScrollTop) || 0),
       rightScrollTop: Math.max(0, Number(value.rightScrollTop) || 0),
+      ...(articleFooterHeight === undefined ? {} : { articleFooterHeight }),
       nativeMode: value.nativeMode === true,
       pendingAction,
     };

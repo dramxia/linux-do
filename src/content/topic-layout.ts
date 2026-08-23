@@ -39,8 +39,15 @@ const LOADING_ROOT_ID = 'ldtk-topic-reading-loading';
 const RETURN_BUTTON_ID = 'ldtk-native-return';
 const MIN_VIEWPORT_WIDTH = 1280;
 const SHELL_OFFSET_EPSILON = 0.2;
+const ARTICLE_FOOTER_DEFAULT_HEIGHT = 130;
+const ARTICLE_FOOTER_MIN_HEIGHT = 64;
+const ARTICLE_FOOTER_MAX_RATIO = 0.5;
+const ARTICLE_CONTENT_MIN_HEIGHT = 160;
+const ARTICLE_FOOTER_KEYBOARD_STEP = 16;
 let nativeAttemptKey: string | null = null;
 let actionRequestSequence = 0;
+let loadingOverlayVersion = 0;
+let loadingOverlayHideTimer: number | null = null;
 
 const NATIVE_ACTION_SELECTORS: Record<PendingNativeAction['action'], string> = {
   like: '.post-action-menu__like, button[title*="赞"], button[aria-label*="赞"]',
@@ -209,7 +216,7 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   z-index: 2;
   flex: 0 0 auto;
   width: 100%;
-  max-height: min(42vh, 260px);
+  max-height: min(21vh, 130px);
   padding: 0 clamp(24px, 3.5vw, 56px) 8px;
   overflow-x: hidden;
   overflow-y: auto;
@@ -223,6 +230,45 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   max-width: 760px;
   margin-right: auto;
   margin-left: auto;
+}
+.ldtk-article-footer-resizer {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 24px;
+  border: 0;
+  background: var(--ldtk-background);
+  cursor: row-resize;
+  touch-action: none;
+}
+.ldtk-article-footer-resizer::before {
+  width: 48px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--ldtk-border);
+  content: "";
+  transition: background-color 120ms ease;
+}
+.ldtk-article-footer-resizer:hover::before,
+.ldtk-article-footer-resizer:focus-visible::before,
+.ldtk-article-footer-resizer[data-dragging="true"]::before {
+  background: var(--ldtk-ring);
+}
+.ldtk-article-footer-resizer:focus-visible {
+  outline: 2px solid var(--ldtk-ring);
+  outline-offset: -2px;
+}
+.ldtk-article-footer-resizer + .ldtk-post-controls {
+  margin-top: 2px;
+}
+.ldtk-article-pane[data-resizing-footer="true"],
+.ldtk-article-pane[data-resizing-footer="true"] * {
+  cursor: row-resize !important;
+  user-select: none !important;
 }
 .ldtk-article-reply-summary {
   display: flex;
@@ -411,11 +457,23 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   transform: scale(0.97);
 }
 .ldtk-toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  margin: 0;
   padding: 0;
+  line-height: 0;
+  vertical-align: middle;
 }
 .ldtk-toolbar-button .d-icon {
+  position: static;
+  flex: 0 0 15px;
   width: 15px;
   height: 15px;
+  margin: 0;
   display: block;
 }
 .ldtk-toolbar-button[aria-busy="true"] .d-icon {
@@ -1216,35 +1274,51 @@ function removeReturnButton(): void {
 
 /* 双栏加载遮罩：数据拉取期间覆盖页面，避免原生界面闪动 */
 function showLoadingOverlay(): void {
-  if (document.getElementById(LOADING_ROOT_ID)) return;
+  const version = ++loadingOverlayVersion;
+  if (loadingOverlayHideTimer !== null) {
+    window.clearTimeout(loadingOverlayHideTimer);
+    loadingOverlayHideTimer = null;
+  }
   if (!document.getElementById(LOADING_STYLE_ID)) {
     const style = createElement('style');
     style.id = LOADING_STYLE_ID;
     style.textContent = LOADING_STYLE;
     (document.head || document.documentElement).appendChild(style);
   }
-  const overlay = createElement('div');
-  overlay.id = LOADING_ROOT_ID;
-  overlay.setAttribute('role', 'status');
-  overlay.setAttribute('aria-live', 'polite');
-  overlay.dataset.visible = 'false';
-  const spinner = createElement('div', 'ldtk-loading-spinner');
-  spinner.setAttribute('aria-hidden', 'true');
-  overlay.append(spinner, createElement('div', '', '正在加载双栏阅读…'));
-  (document.body || document.documentElement).appendChild(overlay);
+  let overlay = document.getElementById(LOADING_ROOT_ID);
+  if (!overlay) {
+    overlay = createElement('div');
+    overlay.id = LOADING_ROOT_ID;
+    overlay.setAttribute('role', 'status');
+    overlay.setAttribute('aria-live', 'polite');
+    overlay.dataset.visible = 'false';
+    const spinner = createElement('div', 'ldtk-loading-spinner');
+    spinner.setAttribute('aria-hidden', 'true');
+    overlay.append(spinner, createElement('div', '', '正在加载双栏阅读…'));
+    (document.body || document.documentElement).appendChild(overlay);
+  }
   const header = document.querySelector<HTMLElement>('.d-header-wrap, .d-header');
   const height = Math.max(0, Math.round(header?.getBoundingClientRect().bottom || 0));
   overlay.style.setProperty('--ldtk-header-height', `${height || 60}px`);
   requestAnimationFrame(() => {
-    overlay.dataset.visible = 'true';
+    if (version === loadingOverlayVersion && overlay?.isConnected) {
+      overlay.dataset.visible = 'true';
+    }
   });
 }
 
 function hideLoadingOverlay(): void {
+  const version = ++loadingOverlayVersion;
+  if (loadingOverlayHideTimer !== null) {
+    window.clearTimeout(loadingOverlayHideTimer);
+    loadingOverlayHideTimer = null;
+  }
   const overlay = document.getElementById(LOADING_ROOT_ID);
   if (!overlay) return;
   overlay.dataset.visible = 'false';
-  window.setTimeout(() => {
+  loadingOverlayHideTimer = window.setTimeout(() => {
+    if (version !== loadingOverlayVersion) return;
+    loadingOverlayHideTimer = null;
     overlay.remove();
     if (!document.getElementById(LOADING_ROOT_ID)) {
       document.getElementById(LOADING_STYLE_ID)?.remove();
@@ -1285,8 +1359,8 @@ function addHighlight(element: HTMLElement): void {
 
 interface NativeModeOptions {
   route: TopicRoute;
-  settings: DiscourseSettings;
   state: TopicReadingState;
+  requestReturn: () => void;
 }
 
 function tryPendingNativeAction(route: TopicRoute, state: TopicReadingState): void {
@@ -1337,7 +1411,7 @@ function ensureNativeMode(options: NativeModeOptions): void {
       nativeMode: false,
       pendingAction: undefined,
     });
-    void refreshTopicLayout(options.settings, true);
+    options.requestReturn();
   };
   const pending = options.state.pendingAction;
   if (pending) {
@@ -1357,6 +1431,15 @@ interface LayoutCallbacks {
 interface ShellGeometry {
   start: number;
   end: number;
+}
+
+interface ArticleFooterResize {
+  pointerId: number;
+  startY: number;
+  startHeight: number;
+  latestY: number;
+  minHeight: number;
+  maxHeight: number;
 }
 
 class TopicLayout {
@@ -1389,6 +1472,11 @@ class TopicLayout {
   private shellHeaderHeight = 60;
   private shellGeometry: ShellGeometry | null = null;
   private readonly alignedSidebars = new Set<HTMLElement>();
+  private articleFooter: HTMLElement | null = null;
+  private articleFooterResizer: HTMLElement | null = null;
+  private articleFooterHeight: number | undefined;
+  private articleFooterResize: ArticleFooterResize | null = null;
+  private articleFooterResizeFrame: number | null = null;
 
   constructor(
     readonly route: TopicRoute,
@@ -1411,6 +1499,7 @@ class TopicLayout {
           leftScrollTop: 0,
           rightScrollTop: 0,
         };
+    this.articleFooterHeight = this.state.articleFooterHeight;
   }
 
   mount(initialPosts: TopicPost[], articleReplies: TopicPost[] = []): void {
@@ -1425,6 +1514,7 @@ class TopicLayout {
     this.renderComments(initialPosts);
     this.updateHeaderOffset();
     document.body.appendChild(this.root);
+    this.constrainArticleFooterHeight();
     document.documentElement.classList.add(ACTIVE_CLASS);
     clearPendingTopicLayout();
     removeReturnButton();
@@ -1454,6 +1544,12 @@ class TopicLayout {
     if (save) this.saveState();
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     if (this.shellOffsetFrame !== null) window.cancelAnimationFrame(this.shellOffsetFrame);
+    if (this.articleFooterResizeFrame !== null) {
+      window.cancelAnimationFrame(this.articleFooterResizeFrame);
+      this.articleFooterResizeFrame = null;
+    }
+    this.articleFooterResize = null;
+    delete this.articlePane.dataset.resizingFooter;
     this.clearSidebarAlignments();
     this.pageAbort?.abort();
     this.replyAborts.forEach((controller) => controller.abort());
@@ -1490,6 +1586,7 @@ class TopicLayout {
     this.root.style.setProperty('--ldtk-header-height', `${this.shellHeaderHeight}px`);
     const target = this.getShellGeometry(this.shellHeaderHeight);
     this.applyShellGeometry(target);
+    this.constrainArticleFooterHeight();
   }
 
   matches(route: TopicRoute, settings: DiscourseSettings): boolean {
@@ -1647,6 +1744,19 @@ class TopicLayout {
     cooked.innerHTML = this.source.article.cooked;
     const footer = createElement('footer', 'ldtk-article-footer');
     footer.setAttribute('aria-label', '正文信息和操作');
+    const resizer = createElement('div', 'ldtk-article-footer-resizer');
+    resizer.tabIndex = 0;
+    resizer.setAttribute('role', 'separator');
+    resizer.setAttribute('aria-label', '调整底部操作栏高度');
+    resizer.setAttribute('aria-orientation', 'horizontal');
+    resizer.title = '上下拖动调整底部操作栏高度';
+    resizer.addEventListener('pointerdown', this.handleArticleFooterResizeStart);
+    resizer.addEventListener('pointermove', this.handleArticleFooterResizeMove);
+    resizer.addEventListener('pointerup', this.handleArticleFooterResizeEnd);
+    resizer.addEventListener('pointercancel', this.handleArticleFooterResizeEnd);
+    resizer.addEventListener('lostpointercapture', this.handleArticleFooterResizeEnd);
+    resizer.addEventListener('keydown', this.handleArticleFooterResizeKeyDown);
+    footer.appendChild(resizer);
     footer.appendChild(this.createPostControls(this.source.article));
     const boosts = this.createBoosts(this.source.article);
     if (boosts) footer.appendChild(boosts);
@@ -1662,8 +1772,173 @@ class TopicLayout {
     content.appendChild(body);
     this.articleScroll.replaceChildren(header, content);
     this.articlePane.replaceChildren(this.articleScroll, footer);
+    this.articleFooter = footer;
+    this.articleFooterResizer = resizer;
+    this.constrainArticleFooterHeight();
     this.articleScroll.scrollTop = scrollTop;
   }
+
+  private getArticleFooterHeightBounds(): { min: number; max: number } {
+    const paneHeight =
+      this.articlePane.clientHeight ||
+      this.articlePane.getBoundingClientRect().height ||
+      Math.max(0, window.innerHeight - this.shellHeaderHeight - 20);
+    return {
+      min: ARTICLE_FOOTER_MIN_HEIGHT,
+      max: Math.max(
+        ARTICLE_FOOTER_MIN_HEIGHT,
+        Math.min(
+          Math.floor(paneHeight * ARTICLE_FOOTER_MAX_RATIO),
+          Math.floor(paneHeight - ARTICLE_CONTENT_MIN_HEIGHT),
+        ),
+      ),
+    };
+  }
+
+  private getCurrentArticleFooterHeight(): number {
+    const footer = this.articleFooter;
+    if (!footer) return ARTICLE_FOOTER_DEFAULT_HEIGHT;
+    return (
+      Number.parseFloat(footer.style.height) ||
+      footer.getBoundingClientRect().height ||
+      Math.min(ARTICLE_FOOTER_DEFAULT_HEIGHT, this.getArticleFooterHeightBounds().max)
+    );
+  }
+
+  private applyArticleFooterHeight(
+    height: number,
+    bounds = this.getArticleFooterHeightBounds(),
+    updateAria = true,
+  ): void {
+    const footer = this.articleFooter;
+    if (!footer) return;
+    const { min, max } = bounds;
+    const nextHeight = Math.round(Math.min(max, Math.max(min, height)));
+    this.articleFooterHeight = nextHeight;
+    const nextHeightCss = `${nextHeight}px`;
+    if (footer.style.height !== nextHeightCss) footer.style.height = nextHeightCss;
+    if (footer.style.maxHeight !== `${max}px`) footer.style.maxHeight = `${max}px`;
+    if (updateAria) this.updateArticleFooterResizerAria(nextHeight, min, max);
+  }
+
+  private constrainArticleFooterHeight(): void {
+    const { min, max } = this.getArticleFooterHeightBounds();
+    if (this.articleFooterHeight !== undefined) {
+      this.applyArticleFooterHeight(this.articleFooterHeight);
+      return;
+    }
+    this.updateArticleFooterResizerAria(this.getCurrentArticleFooterHeight(), min, max);
+  }
+
+  private updateArticleFooterResizerAria(height: number, min: number, max: number): void {
+    const resizer = this.articleFooterResizer;
+    if (!resizer) return;
+    const current = Math.round(Math.min(max, Math.max(min, height)));
+    const values: Record<string, string> = {
+      'aria-valuemin': String(min),
+      'aria-valuemax': String(max),
+      'aria-valuenow': String(current),
+      'aria-valuetext': `${current} 像素`,
+    };
+    Object.entries(values).forEach(([name, value]) => {
+      if (resizer.getAttribute(name) !== value) resizer.setAttribute(name, value);
+    });
+  }
+
+  private readonly handleArticleFooterResizeStart = (event: PointerEvent): void => {
+    if (event.isPrimary === false || event.button !== 0 || this.articleFooterResize) return;
+    const resizer = event.currentTarget as HTMLElement;
+    const { min, max } = this.getArticleFooterHeightBounds();
+    event.preventDefault();
+    this.articleFooterResize = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight: this.getCurrentArticleFooterHeight(),
+      latestY: event.clientY,
+      minHeight: min,
+      maxHeight: max,
+    };
+    resizer.dataset.dragging = 'true';
+    this.articlePane.dataset.resizingFooter = 'true';
+    if (typeof resizer.setPointerCapture === 'function') {
+      resizer.setPointerCapture(event.pointerId);
+    }
+  };
+
+  private readonly handleArticleFooterResizeMove = (event: PointerEvent): void => {
+    const resize = this.articleFooterResize;
+    if (!resize || event.pointerId !== resize.pointerId) return;
+    event.preventDefault();
+    const coalescedEvents =
+      typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [];
+    resize.latestY = coalescedEvents.at(-1)?.clientY ?? event.clientY;
+    if (this.articleFooterResizeFrame !== null) return;
+    this.articleFooterResizeFrame = window.requestAnimationFrame(
+      this.flushArticleFooterResizeFrame,
+    );
+  };
+
+  private readonly flushArticleFooterResizeFrame = (): void => {
+    this.articleFooterResizeFrame = null;
+    const resize = this.articleFooterResize;
+    if (!resize || this.destroyed) return;
+    this.applyArticleFooterHeight(
+      resize.startHeight + resize.startY - resize.latestY,
+      {
+        min: resize.minHeight,
+        max: resize.maxHeight,
+      },
+      false,
+    );
+  };
+
+  private flushPendingArticleFooterResize(): void {
+    if (this.articleFooterResizeFrame !== null) {
+      window.cancelAnimationFrame(this.articleFooterResizeFrame);
+      this.articleFooterResizeFrame = null;
+    }
+    this.flushArticleFooterResizeFrame();
+  }
+
+  private readonly handleArticleFooterResizeEnd = (event: PointerEvent): void => {
+    const resize = this.articleFooterResize;
+    if (!resize || event.pointerId !== resize.pointerId) return;
+    const resizer = event.currentTarget as HTMLElement;
+    if (event.type === 'pointerup') resize.latestY = event.clientY;
+    this.flushPendingArticleFooterResize();
+    this.updateArticleFooterResizerAria(
+      this.articleFooterHeight ?? resize.startHeight,
+      resize.minHeight,
+      resize.maxHeight,
+    );
+    this.articleFooterResize = null;
+    delete resizer.dataset.dragging;
+    delete this.articlePane.dataset.resizingFooter;
+    if (
+      event.type !== 'lostpointercapture' &&
+      typeof resizer.hasPointerCapture === 'function' &&
+      resizer.hasPointerCapture(event.pointerId)
+    ) {
+      resizer.releasePointerCapture(event.pointerId);
+    }
+    this.saveState();
+  };
+
+  private readonly handleArticleFooterResizeKeyDown = (event: KeyboardEvent): void => {
+    const { min, max } = this.getArticleFooterHeightBounds();
+    const current = this.getCurrentArticleFooterHeight();
+    let nextHeight: number | null = null;
+    if (event.key === 'ArrowUp') nextHeight = current + ARTICLE_FOOTER_KEYBOARD_STEP;
+    else if (event.key === 'ArrowDown') nextHeight = current - ARTICLE_FOOTER_KEYBOARD_STEP;
+    else if (event.key === 'PageUp') nextHeight = current + ARTICLE_FOOTER_KEYBOARD_STEP * 4;
+    else if (event.key === 'PageDown') nextHeight = current - ARTICLE_FOOTER_KEYBOARD_STEP * 4;
+    else if (event.key === 'Home') nextHeight = min;
+    else if (event.key === 'End') nextHeight = max;
+    if (nextHeight === null) return;
+    event.preventDefault();
+    this.applyArticleFooterHeight(nextHeight);
+    this.saveState();
+  };
 
   private renderCommentsShell(): void {
     const toolbar = createElement('header', 'ldtk-comments-toolbar');
@@ -2735,168 +3010,255 @@ class TopicLayout {
       page: this.currentPage,
       leftScrollTop: this.articleScroll.scrollTop,
       rightScrollTop: this.commentsPane.scrollTop,
+      ...(this.articleFooterHeight === undefined
+        ? {}
+        : { articleFooterHeight: this.articleFooterHeight }),
       nativeMode: false,
     });
   }
 }
 
-let activeLayout: TopicLayout | null = null;
-let loadingKey: string | null = null;
-let loadingAbort: AbortController | null = null;
-let refreshVersion = 0;
-let latestSettings: DiscourseSettings | null = null;
-
-function cleanupLayout(): void {
-  refreshVersion += 1;
-  loadingAbort?.abort();
-  loadingAbort = null;
-  loadingKey = null;
-  activeLayout?.destroy();
-  activeLayout = null;
-  document.documentElement.classList.remove(ACTIVE_CLASS);
-  document.querySelector(`.${ROOT_CLASS}`)?.remove();
-  document.getElementById(STYLE_ID)?.remove();
-  clearPendingTopicLayout();
-  hideLoadingOverlay();
+interface ReusableTopicData {
+  topicId: string;
+  pageRoot: HTMLElement | null;
+  source: TopicDataSource;
+  articleReplies: TopicPost[];
 }
 
-function handoffToNative(
-  route: TopicRoute,
-  settings: DiscourseSettings,
-  floor: number,
-  action?: PendingNativeAction['action'],
-): void {
-  const previous = readTopicState(route.topicId) || {
-    page: getCommentPageForFloor(floor, settings.commentsPerPage),
-    leftScrollTop: 0,
-    rightScrollTop: 0,
-  };
-  activeLayout?.destroy();
-  activeLayout = null;
-  const state: TopicReadingState = {
-    ...previous,
-    nativeMode: true,
-    pendingAction: action ? { floor, action } : undefined,
-  };
-  writeTopicState(route.topicId, state);
-  nativeAttemptKey = null;
-  ensureNativeMode({ route, settings, state });
-  const post = getNativePost(floor);
-  if (post && !action) {
-    post.scrollIntoView({ block: 'center' });
-    addHighlight(post);
-  } else if (!post && route.floor !== floor) {
-    window.location.assign(buildNativeFloorUrl(floor));
+export type TopicLayoutRuntimeState =
+  'disabled' | 'unsupported' | 'loading' | 'active' | 'native' | 'failed';
+
+export class TopicLayoutRuntime {
+  private activeLayout: TopicLayout | null = null;
+  private loadingAbort: AbortController | null = null;
+  private refreshVersion = 0;
+  private latestSettings: DiscourseSettings | null = null;
+  private reusableData: ReusableTopicData | null = null;
+  private state: TopicLayoutRuntimeState = 'disabled';
+
+  getState(): TopicLayoutRuntimeState {
+    return this.state;
   }
-}
 
-export async function refreshTopicLayout(
-  settings: DiscourseSettings,
-  force = false,
-): Promise<void> {
-  latestSettings = settings;
-  const route = parseTopicRoute(window.location.pathname);
-  if (!settings.enableSplitReading || window.innerWidth < MIN_VIEWPORT_WIDTH || !route) {
-    cleanupLayout();
+  disable(): void {
+    this.latestSettings = null;
+    this.cleanupLayout();
+    this.state = 'disabled';
     removeReturnButton();
     nativeAttemptKey = null;
-    return;
   }
 
-  const state = readTopicState(route.topicId);
-  if (state?.nativeMode && !force) {
-    cleanupLayout();
-    ensureNativeMode({ route, settings, state });
-    return;
-  }
-  if (force && state?.nativeMode) {
-    writeTopicState(route.topicId, { ...state, nativeMode: false, pendingAction: undefined });
+  invalidate(): void {
+    this.reusableData = null;
   }
 
-  const key = `${route.topicId}:${settings.commentsPerPage}`;
-  if (!force && activeLayout?.matches(route, settings)) {
-    activeLayout.updateHeaderOffset();
-    return;
+  updateGeometry(): void {
+    this.activeLayout?.updateHeaderOffset();
   }
-  if (!force && loadingKey === key) return;
 
-  const retainedLayout = force && activeLayout?.matches(route, settings) ? activeLayout : null;
-  if (!retainedLayout) {
-    prepareTopicLayout(settings);
-    showLoadingOverlay();
-    activeLayout?.destroy();
-    activeLayout = null;
-  }
-  loadingAbort?.abort();
-  const version = ++refreshVersion;
-  loadingKey = key;
-  const request = new AbortController();
-  loadingAbort = request;
-  let candidate: TopicLayout | null = null;
-  try {
-    const source = await TopicDataSource.create(route.topicId, request.signal, route.floor);
-    if (version !== refreshVersion) return;
-    if (source.isMegaTopic) {
-      if (retainedLayout) {
-        showToast('主题内容过多，已保留当前双栏内容');
-      } else {
-        cleanupLayout();
+  async activate(settings: DiscourseSettings, force = false): Promise<void> {
+    this.latestSettings = settings;
+    const route = parseTopicRoute(window.location.pathname);
+    if (!settings.enableSplitReading) {
+      this.disable();
+      return;
+    }
+    if (window.innerWidth < MIN_VIEWPORT_WIDTH || !route) {
+      this.cleanupLayout();
+      this.state = 'unsupported';
+      removeReturnButton();
+      nativeAttemptKey = null;
+      return;
+    }
+
+    const readingState = readTopicState(route.topicId);
+    if (readingState?.nativeMode && !force) {
+      this.cleanupLayout();
+      this.state = 'native';
+      ensureNativeMode({
+        route,
+        state: readingState,
+        requestReturn: () => void this.activate(settings, true),
+      });
+      return;
+    }
+    if (force && readingState?.nativeMode) {
+      writeTopicState(route.topicId, {
+        ...readingState,
+        nativeMode: false,
+        pendingAction: undefined,
+      });
+    }
+
+    if (!force && this.activeLayout?.matches(route, settings)) {
+      this.activeLayout.updateHeaderOffset();
+      this.state = 'active';
+      return;
+    }
+
+    const retainedLayout =
+      force && this.activeLayout?.matches(route, settings) ? this.activeLayout : null;
+    if (!retainedLayout) {
+      prepareTopicLayout(settings);
+      showLoadingOverlay();
+      this.activeLayout?.destroy();
+      this.activeLayout = null;
+    }
+    this.cancelLoading();
+    const version = ++this.refreshVersion;
+    const request = new AbortController();
+    this.loadingAbort = request;
+    this.state = 'loading';
+    let candidate: TopicLayout | null = null;
+
+    try {
+      const pageRoot = document.getElementById('main-outlet');
+      const cachedData =
+        !force &&
+        this.reusableData?.topicId === route.topicId &&
+        this.reusableData.pageRoot === pageRoot
+          ? this.reusableData
+          : null;
+      const source =
+        cachedData?.source ??
+        (await TopicDataSource.create(route.topicId, request.signal, route.floor));
+      if (!this.canContinueActivation(version, route)) return;
+      if (source.isMegaTopic) {
+        if (retainedLayout) {
+          this.state = 'active';
+          showToast('主题内容过多，已保留当前双栏内容');
+        } else {
+          this.cleanupLayout();
+          this.state = 'unsupported';
+        }
+        return;
       }
-      return;
+
+      const pageCount = getPageCount(source.commentCount, settings.commentsPerPage);
+      const session = readTopicState(route.topicId);
+      const initialPage = deriveInitialPage({
+        url: new URL(window.location.href),
+        routeFloor: route.floor,
+        sessionPage: session?.page,
+        lastReadPostNumber: source.topic.last_read_post_number,
+        perPage: settings.commentsPerPage,
+        pageCount,
+      });
+      const articleRepliesRequest = cachedData
+        ? Promise.resolve(cachedData.articleReplies)
+        : (source.article.reply_count || 0) > 0
+          ? fetchPostReplies(source.article.id, 1, request.signal).catch((error: unknown) => {
+              if ((error as Error).name === 'AbortError') throw error;
+              return [];
+            })
+          : Promise.resolve([]);
+      const [posts, articleReplies] = await Promise.all([
+        source.loadPage(initialPage, settings.commentsPerPage, request.signal),
+        articleRepliesRequest,
+      ]);
+      if (!this.canContinueActivation(version, route)) return;
+      retainedLayout?.persistState();
+      candidate = new TopicLayout(route, source, settings, initialPage, {
+        requestRefresh: () => {
+          const currentSettings = this.latestSettings;
+          return currentSettings ? this.activate(currentSettings, true) : Promise.resolve();
+        },
+        handoffNative: (floor, action) => this.handoffToNative(route, settings, floor, action),
+      });
+      candidate.mount(posts, articleReplies);
+      if (!this.canContinueActivation(version, route)) {
+        candidate.destroy(false, Boolean(retainedLayout));
+        return;
+      }
+      retainedLayout?.destroy(false, true);
+      this.activeLayout = candidate;
+      this.reusableData = { topicId: route.topicId, pageRoot, source, articleReplies };
+      this.state = 'active';
+      candidate = null;
+      hideLoadingOverlay();
+    } catch (error) {
+      candidate?.destroy(false, Boolean(retainedLayout));
+      if (!this.isCurrent(version) || (error as Error).name === 'AbortError') return;
+      if (retainedLayout && this.activeLayout === retainedLayout) {
+        this.state = 'active';
+        console.warn('[Linux.do 工具箱] 双栏阅读刷新失败，已保留当前双栏内容', error);
+        showToast('刷新失败，已保留当前双栏内容');
+      } else {
+        console.warn('[Linux.do 工具箱] 双栏阅读加载失败，已恢复原页面', error);
+        this.cleanupLayout();
+        this.state = 'failed';
+      }
+    } finally {
+      if (this.isCurrent(version)) this.loadingAbort = null;
     }
-    const pageCount = getPageCount(source.commentCount, settings.commentsPerPage);
-    const session = readTopicState(route.topicId);
-    const initialPage = deriveInitialPage({
-      url: new URL(window.location.href),
-      routeFloor: route.floor,
-      sessionPage: session?.page,
-      lastReadPostNumber: source.topic.last_read_post_number,
-      perPage: settings.commentsPerPage,
-      pageCount,
-    });
-    const articleRepliesRequest =
-      (source.article.reply_count || 0) > 0
-        ? fetchPostReplies(source.article.id, 1, request.signal).catch((error: unknown) => {
-            if ((error as Error).name === 'AbortError') throw error;
-            return [];
-          })
-        : Promise.resolve([]);
-    const [posts, articleReplies] = await Promise.all([
-      source.loadPage(initialPage, settings.commentsPerPage, request.signal),
-      articleRepliesRequest,
-    ]);
-    if (version !== refreshVersion) return;
-    retainedLayout?.persistState();
-    candidate = new TopicLayout(route, source, settings, initialPage, {
-      requestRefresh: () => {
-        const currentSettings = latestSettings;
-        return currentSettings ? refreshTopicLayout(currentSettings, true) : Promise.resolve();
-      },
-      handoffNative: (floor, action) => handoffToNative(route, settings, floor, action),
-    });
-    candidate.mount(posts, articleReplies);
-    if (version !== refreshVersion) {
-      candidate.destroy(false, Boolean(retainedLayout));
-      return;
+  }
+
+  private isCurrent(version: number): boolean {
+    return version === this.refreshVersion;
+  }
+
+  private canContinueActivation(version: number, route: TopicRoute): boolean {
+    if (!this.isCurrent(version)) return false;
+    const currentRoute = parseTopicRoute(window.location.pathname);
+    if (currentRoute?.topicId === route.topicId && currentRoute.floor === route.floor) {
+      return true;
     }
-    retainedLayout?.destroy(false, true);
-    activeLayout = candidate;
-    candidate = null;
+    this.cleanupLayout();
+    this.state = 'unsupported';
+    removeReturnButton();
+    nativeAttemptKey = null;
+    return false;
+  }
+
+  private cancelLoading(): void {
+    this.refreshVersion += 1;
+    this.loadingAbort?.abort();
+    this.loadingAbort = null;
+  }
+
+  private cleanupLayout(): void {
+    this.cancelLoading();
+    this.activeLayout?.destroy();
+    this.activeLayout = null;
+    document.documentElement.classList.remove(ACTIVE_CLASS);
+    document.querySelector(`.${ROOT_CLASS}`)?.remove();
+    document.getElementById(STYLE_ID)?.remove();
+    clearPendingTopicLayout();
     hideLoadingOverlay();
-  } catch (error) {
-    candidate?.destroy(false, Boolean(retainedLayout));
-    if ((error as Error).name === 'AbortError') return;
-    if (retainedLayout && activeLayout === retainedLayout) {
-      console.warn('[Linux.do 工具箱] 双栏阅读刷新失败，已保留当前双栏内容', error);
-      showToast('刷新失败，已保留当前双栏内容');
-    } else {
-      console.warn('[Linux.do 工具箱] 双栏阅读加载失败，已恢复原页面', error);
-      cleanupLayout();
-    }
-  } finally {
-    if (version === refreshVersion) {
-      loadingKey = null;
-      loadingAbort = null;
+  }
+
+  private handoffToNative(
+    route: TopicRoute,
+    settings: DiscourseSettings,
+    floor: number,
+    action?: PendingNativeAction['action'],
+  ): void {
+    const previous = readTopicState(route.topicId) || {
+      page: getCommentPageForFloor(floor, settings.commentsPerPage),
+      leftScrollTop: 0,
+      rightScrollTop: 0,
+    };
+    this.activeLayout?.destroy();
+    this.activeLayout = null;
+    const state: TopicReadingState = {
+      ...previous,
+      nativeMode: true,
+      pendingAction: action ? { floor, action } : undefined,
+    };
+    writeTopicState(route.topicId, state);
+    nativeAttemptKey = null;
+    this.state = 'native';
+    ensureNativeMode({
+      route,
+      state,
+      requestReturn: () => void this.activate(settings, true),
+    });
+    const post = getNativePost(floor);
+    if (post && !action) {
+      post.scrollIntoView({ block: 'center' });
+      addHighlight(post);
+    } else if (!post && route.floor !== floor) {
+      window.location.assign(buildNativeFloorUrl(floor));
     }
   }
 }
@@ -2904,5 +3266,7 @@ export async function refreshTopicLayout(
 export const topicLayoutOwnedSelectors = [
   `.${ROOT_CLASS}`,
   `#${STYLE_ID}`,
+  `#${LOADING_ROOT_ID}`,
+  `#${LOADING_STYLE_ID}`,
   `#${RETURN_BUTTON_ID}`,
 ] as const;

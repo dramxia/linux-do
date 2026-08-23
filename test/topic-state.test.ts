@@ -70,6 +70,7 @@ describe('topic route and pagination state', () => {
       page: 2,
       leftScrollTop: 80,
       rightScrollTop: 40,
+      articleFooterHeight: 224,
       nativeMode: true,
       pendingAction: { floor: 12, action: 'reply' },
     });
@@ -77,6 +78,7 @@ describe('topic route and pagination state', () => {
       page: 2,
       leftScrollTop: 80,
       rightScrollTop: 40,
+      articleFooterHeight: 224,
       nativeMode: true,
       pendingAction: { floor: 12, action: 'reply' },
     });

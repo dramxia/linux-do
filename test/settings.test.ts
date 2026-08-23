@@ -46,6 +46,7 @@ describe('getSettings (normalizeSettings via mocked chrome.storage)', () => {
       enableBase64Decode: false,
       includeMetadata: false,
       replaceUploadUrls: false,
+      enableNativeImagePreview: false,
     };
     chromeMock.storage.sync.set(full);
 
@@ -109,6 +110,49 @@ describe('settings cache', () => {
     expect(callback).toHaveBeenCalledWith(expect.objectContaining({ includeMetadata: false }));
     await saveSettings({});
   });
+
+  it('only publishes the latest settings read when change events resolve out of order', async () => {
+    await saveSettings({});
+    const reads: Array<(items: Record<string, unknown>) => void> = [];
+    chromeMock.storage.sync.get = vi.fn((_defaults, resolve) => reads.push(resolve));
+    const callback = vi.fn();
+    onSettingsChanged(callback);
+
+    chromeMock.storage.onChanged.listeners[0]?.(
+      { enableSplitReading: { oldValue: false, newValue: true } },
+      'sync',
+    );
+    chromeMock.storage.onChanged.listeners[0]?.(
+      { enableSplitReading: { oldValue: true, newValue: false } },
+      'sync',
+    );
+
+    expect(reads).toHaveLength(1);
+    reads[0]?.(DEFAULT_SETTINGS);
+    await vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(1));
+
+    expect(callback).toHaveBeenCalledWith(expect.objectContaining({ enableSplitReading: false }));
+    await saveSettings({});
+  });
+
+  it('preserves the last value across repeated split-reading toggles', async () => {
+    const callback = vi.fn();
+    onSettingsChanged(callback);
+    await getCachedSettings();
+
+    for (let index = 0; index < 8; index += 1) {
+      const enabled = index % 2 === 0;
+      chromeMock.storage.onChanged.listeners[0]?.(
+        { enableSplitReading: { oldValue: !enabled, newValue: enabled } },
+        'sync',
+      );
+      await vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(index + 1));
+      expect(callback).toHaveBeenLastCalledWith(
+        expect.objectContaining({ enableSplitReading: enabled }),
+      );
+    }
+    await saveSettings({});
+  });
 });
 
 describe('saveSettings', () => {
@@ -127,6 +171,7 @@ describe('saveSettings', () => {
       enableBase64Decode: false,
       includeMetadata: false,
       replaceUploadUrls: false,
+      enableNativeImagePreview: false,
     };
     await saveSettings(full);
     expect(await getSettings()).toEqual(full);
@@ -154,8 +199,13 @@ describe('saveSettings', () => {
     (globalThis as { chrome?: ChromeMock }).chrome = savedChrome;
   });
 
-  it('normalizes unsupported comments-per-page values to 10', async () => {
+  it('normalizes unsupported comments-per-page values to the default of 20', async () => {
     chromeMock.storage.sync.set({ commentsPerPage: 99 });
-    expect((await getSettings()).commentsPerPage).toBe(10);
+    expect((await getSettings()).commentsPerPage).toBe(20);
+  });
+
+  it('accepts 40 comments per page', async () => {
+    chromeMock.storage.sync.set({ commentsPerPage: 40 });
+    expect((await getSettings()).commentsPerPage).toBe(40);
   });
 });

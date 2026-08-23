@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, type DiscourseSettings } from '../src/common/settings';
 import { injectButtons } from '../src/content/buttons';
-import { prepareTopicLayout, refreshTopicLayout } from '../src/content/topic-layout';
+import {
+  prepareTopicLayout,
+  TopicLayoutRuntime,
+  topicLayoutOwnedSelectors,
+} from '../src/content/topic-layout';
 import type { TopicPost, TopicResponse } from '../src/content/topic-api';
 import {
   parseTopicActionRequest,
@@ -17,6 +21,12 @@ const enabledSettings: DiscourseSettings = {
   enableSplitReading: true,
   enablePostActions: false,
 };
+
+let topicLayoutRuntime: TopicLayoutRuntime;
+
+function refreshTopicLayout(settings: DiscourseSettings, force = false): Promise<void> {
+  return topicLayoutRuntime.activate(settings, force);
+}
 
 function post(id: number, postNumber: number): TopicPost {
   return {
@@ -50,7 +60,26 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
+function dispatchPointer(
+  target: Element,
+  type: string,
+  options: { clientY: number; pointerId?: number; button?: number },
+): void {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientY: options.clientY,
+    button: options.button ?? 0,
+  });
+  Object.defineProperties(event, {
+    pointerId: { value: options.pointerId ?? 1 },
+    isPrimary: { value: true },
+  });
+  target.dispatchEvent(event);
+}
+
 beforeEach(() => {
+  topicLayoutRuntime = new TopicLayoutRuntime();
   document.documentElement.innerHTML =
     '<head></head><body><div class="sidebar-wrapper"><div class="sidebar-container"></div></div><div class="d-header-wrap"><header class="d-header"><button class="header-sidebar-toggle" type="button" aria-label="显示侧边栏">菜单</button><a class="title" href="/">LINUX DO</a></header></div><main id="main-outlet"><article class="topic-post" data-post-number="1"></article></main></body>';
   window.history.replaceState({}, '', '/t/topic/123');
@@ -59,7 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await refreshTopicLayout({ ...enabledSettings, enableSplitReading: false });
+  topicLayoutRuntime.disable();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -208,9 +237,11 @@ describe('topic split layout lifecycle', () => {
     const articlePane = root?.querySelector<HTMLElement>('.ldtk-article-pane');
     const articleScroll = root?.querySelector<HTMLElement>('.ldtk-article-scroll');
     const articleFooter = root?.querySelector<HTMLElement>('.ldtk-article-footer');
+    const articleFooterResizer = root?.querySelector<HTMLElement>('.ldtk-article-footer-resizer');
     const articlePost = root?.querySelector<HTMLElement>('.ldtk-article-content.topic-post');
     const articleByline = root?.querySelector<HTMLElement>('.ldtk-article-byline');
     const publishedAt = articleByline?.querySelector<HTMLTimeElement>('time');
+    const refreshButton = root?.querySelector<HTMLButtonElement>('.ldtk-toolbar-button');
     const refreshIcon = root?.querySelector<SVGSVGElement>('.ldtk-toolbar-button svg');
     const commentStatus = root?.querySelector<HTMLElement>('.ldtk-comment-status');
     const previousIcon = root?.querySelector<SVGSVGElement>(
@@ -227,14 +258,92 @@ describe('topic split layout lifecycle', () => {
     expect(articleScroll?.contains(articlePost as HTMLElement)).toBe(true);
     expect(articleScroll?.contains(articleFooter as HTMLElement)).toBe(false);
     expect(articlePane?.lastElementChild).toBe(articleFooter);
+    expect(getComputedStyle(articleFooter as HTMLElement).maxHeight).toBe('min(21vh, 130px)');
+    expect(articleFooterResizer?.getAttribute('role')).toBe('separator');
+    expect(articleFooterResizer?.getAttribute('aria-orientation')).toBe('horizontal');
+    expect(articleFooterResizer?.tabIndex).toBe(0);
     expect(getComputedStyle(articlePost as HTMLElement).display).toBe('block');
     expect(articleByline?.querySelector('strong')?.textContent).toBe('user-1');
     expect(publishedAt?.dateTime).toBe('2026-08-22T00:00:00.000Z');
+    expect(getComputedStyle(refreshButton as HTMLButtonElement).display).toBe('inline-flex');
+    expect(getComputedStyle(refreshButton as HTMLButtonElement).alignItems).toBe('center');
+    expect(getComputedStyle(refreshButton as HTMLButtonElement).justifyContent).toBe('center');
+    expect(getComputedStyle(refreshButton as HTMLButtonElement).width).toBe('30px');
+    expect(getComputedStyle(refreshButton as HTMLButtonElement).height).toBe('30px');
     expect(refreshIcon?.classList.contains('d-icon-lucide-rotate-left')).toBe(true);
+    expect(getComputedStyle(refreshIcon as SVGSVGElement).position).toBe('static');
+    expect(getComputedStyle(refreshIcon as SVGSVGElement).margin).toBe('0px');
     expect(commentStatus?.getAttribute('role')).toBe('status');
     expect(commentStatus?.getAttribute('aria-live')).toBe('polite');
     expect(previousIcon?.classList.contains('d-icon-lucide-chevron-left')).toBe(true);
     expect(nextIcon?.classList.contains('d-icon-lucide-chevron-right')).toBe(true);
+  });
+
+  it('resizes the article footer by pointer and keyboard, then restores its height', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
+    await refreshTopicLayout(enabledSettings);
+
+    const articlePane = document.querySelector<HTMLElement>('.ldtk-article-pane') as HTMLElement;
+    const footer = articlePane.querySelector<HTMLElement>('.ldtk-article-footer') as HTMLElement;
+    const resizer = footer.querySelector<HTMLElement>(
+      '.ldtk-article-footer-resizer',
+    ) as HTMLElement;
+    Object.defineProperty(articlePane, 'clientHeight', { configurable: true, value: 700 });
+    vi.spyOn(footer, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 570, 700, 130));
+    Object.defineProperty(resizer, 'setPointerCapture', { configurable: true, value: vi.fn() });
+    Object.defineProperty(resizer, 'hasPointerCapture', {
+      configurable: true,
+      value: vi.fn().mockReturnValue(false),
+    });
+    let resizeFrame: FrameRequestCallback | undefined;
+    const requestAnimationFrame = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        resizeFrame = callback;
+        return 42;
+      });
+
+    dispatchPointer(resizer, 'pointerdown', { clientY: 570 });
+    dispatchPointer(resizer, 'pointermove', { clientY: 540 });
+    dispatchPointer(resizer, 'pointermove', { clientY: 510 });
+    dispatchPointer(resizer, 'pointermove', { clientY: 470 });
+
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(footer.style.height).toBe('');
+    resizeFrame?.(performance.now());
+    expect(footer.style.height).toBe('230px');
+
+    dispatchPointer(resizer, 'pointerup', { clientY: 470 });
+
+    expect(footer.style.height).toBe('230px');
+    expect(footer.style.maxHeight).toBe('350px');
+    expect(resizer.getAttribute('aria-valuenow')).toBe('230');
+    expect(articlePane.dataset.resizingFooter).toBeUndefined();
+    expect(JSON.parse(sessionStorage.getItem('ldtk:split-reading:123') || '{}')).toMatchObject({
+      articleFooterHeight: 230,
+    });
+
+    dispatchPointer(resizer, 'pointerdown', { clientY: 470, pointerId: 2 });
+    dispatchPointer(resizer, 'pointermove', { clientY: 430, pointerId: 2 });
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(2);
+    expect(footer.style.height).toBe('230px');
+    dispatchPointer(resizer, 'pointerup', { clientY: 420, pointerId: 2 });
+    expect(footer.style.height).toBe('280px');
+
+    resizer.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowUp' }));
+    expect(footer.style.height).toBe('296px');
+    resizer.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'End' }));
+    expect(footer.style.height).toBe('350px');
+    resizer.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Home' }));
+    expect(footer.style.height).toBe('64px');
+
+    resizer.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowUp' }));
+    await refreshTopicLayout(enabledSettings, true);
+    const restoredFooter = document.querySelector<HTMLElement>('.ldtk-article-footer');
+    expect(restoredFooter?.style.height).toBe('80px');
+    expect(
+      restoredFooter?.querySelector('.ldtk-article-footer-resizer')?.getAttribute('aria-valuenow'),
+    ).toBe('80');
   });
 
   it('keeps native export actions behind the split reading surface', async () => {
@@ -935,17 +1044,27 @@ describe('topic split layout lifecycle', () => {
   });
 
   it('does not activate for mega topics', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic({ posts_count: 10_000 }))));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(topic({ posts_count: 10_000 })));
+    vi.stubGlobal('fetch', fetchMock);
     await refreshTopicLayout(enabledSettings);
     expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('restores native layout on load failure', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: 'failed' }, 500)));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: 'failed' }, 500));
+    vi.stubGlobal('fetch', fetchMock);
     await refreshTopicLayout(enabledSettings);
     expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();
     expect(document.getElementById('main-outlet')).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await refreshTopicLayout({ ...enabledSettings, enableSplitReading: false });
+    fetchMock.mockResolvedValue(jsonResponse(topic()));
+    await refreshTopicLayout(enabledSettings);
+    expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('cleans up when SPA navigation leaves a topic route', async () => {
@@ -964,6 +1083,105 @@ describe('topic split layout lifecycle', () => {
     await refreshTopicLayout(enabledSettings);
     expect(document.querySelectorAll('.ldtk-topic-reading-root')).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses topic data across repeated disable and enable cycles', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(topic()));
+    vi.stubGlobal('fetch', fetchMock);
+
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      await refreshTopicLayout(enabledSettings);
+      expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
+      await refreshTopicLayout({ ...enabledSettings, enableSplitReading: false });
+      expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();
+    }
+    await refreshTopicLayout(enabledSettings);
+
+    expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a stale request failure tear down the latest layout', async () => {
+    let rejectFirstRequest: (reason: Error) => void = () => undefined;
+    const firstResponse = new Promise<Response>((_resolve, reject) => {
+      rejectFirstRequest = reject;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => firstResponse)
+      .mockResolvedValue(jsonResponse(topic()));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const staleRefresh = refreshTopicLayout(enabledSettings);
+    await Promise.resolve();
+    await refreshTopicLayout({ ...enabledSettings, enableSplitReading: false });
+    await refreshTopicLayout(enabledSettings);
+    expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
+
+    rejectFirstRequest(new Error('stale network failure'));
+    await staleRefresh;
+
+    expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
+  });
+
+  it('keeps the current loading overlay through a rapid disable and re-enable', async () => {
+    let resolveSecondRequest: (response: Response) => void = () => undefined;
+    const secondResponse = new Promise<Response>((resolve) => {
+      resolveSecondRequest = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce((_input: RequestInfo | URL, init?: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('Aborted', 'AbortError')),
+            { once: true },
+          );
+        });
+      })
+      .mockImplementationOnce(() => secondResponse);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const firstRefresh = refreshTopicLayout(enabledSettings);
+    await Promise.resolve();
+    await refreshTopicLayout({ ...enabledSettings, enableSplitReading: false });
+    const secondRefresh = refreshTopicLayout(enabledSettings);
+
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    expect(document.getElementById('ldtk-topic-reading-loading')).not.toBeNull();
+
+    resolveSecondRequest(jsonResponse(topic()));
+    await Promise.all([firstRefresh, secondRefresh]);
+    expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
+  });
+
+  it('does not mount a pending topic response after navigation returns home', async () => {
+    let resolveRequest: (response: Response) => void = () => undefined;
+    const pendingResponse = new Promise<Response>((resolve) => {
+      resolveRequest = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => pendingResponse),
+    );
+
+    const pendingRefresh = refreshTopicLayout(enabledSettings);
+    await Promise.resolve();
+    window.history.replaceState({}, '', '/latest');
+    resolveRequest(jsonResponse(topic()));
+    await pendingRefresh;
+
+    expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(false);
+  });
+
+  it('marks the loading overlay as toolkit-owned DOM', () => {
+    const overlay = document.createElement('div');
+    overlay.id = 'ldtk-topic-reading-loading';
+
+    expect(topicLayoutOwnedSelectors.some((selector) => overlay.matches(selector))).toBe(true);
   });
 
   it('does not let an older page response replace a newer navigation', async () => {
@@ -991,7 +1209,7 @@ describe('topic split layout lifecycle', () => {
       );
     });
     vi.stubGlobal('fetch', fetchMock);
-    await refreshTopicLayout(enabledSettings);
+    await refreshTopicLayout({ ...enabledSettings, commentsPerPage: 10 });
 
     document.querySelector<HTMLButtonElement>('.ldtk-pagination [data-page="2"]')?.click();
     await Promise.resolve();

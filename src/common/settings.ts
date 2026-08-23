@@ -2,11 +2,12 @@
 
 export interface DiscourseSettings {
   enableSplitReading: boolean;
-  commentsPerPage: 10 | 20;
+  commentsPerPage: 10 | 20 | 40;
   enablePostActions: boolean;
   enableBase64Decode: boolean;
   includeMetadata: boolean;
   replaceUploadUrls: boolean;
+  enableNativeImagePreview: boolean;
 }
 
 export type SettingKey = keyof DiscourseSettings;
@@ -15,11 +16,12 @@ type SettingsCallback = (settings: DiscourseSettings) => void;
 
 export const DEFAULT_SETTINGS: Readonly<DiscourseSettings> = Object.freeze({
   enableSplitReading: false,
-  commentsPerPage: 10,
+  commentsPerPage: 20,
   enablePostActions: true,
   enableBase64Decode: true,
   includeMetadata: true,
   replaceUploadUrls: true,
+  enableNativeImagePreview: true,
 });
 
 export const SETTING_KEYS: readonly SettingKey[] = Object.freeze([
@@ -29,6 +31,7 @@ export const SETTING_KEYS: readonly SettingKey[] = Object.freeze([
   'enableBase64Decode',
   'includeMetadata',
   'replaceUploadUrls',
+  'enableNativeImagePreview',
 ]);
 
 function hasChromeStorage(): boolean {
@@ -39,8 +42,21 @@ function normalizeSettings(value: Partial<DiscourseSettings> = {}): DiscourseSet
   return {
     ...DEFAULT_SETTINGS,
     ...value,
-    commentsPerPage: value.commentsPerPage === 20 ? 20 : 10,
+    commentsPerPage:
+      value.commentsPerPage === 10 || value.commentsPerPage === 40 ? value.commentsPerPage : 20,
   };
+}
+
+function applyStorageChanges(
+  settings: DiscourseSettings,
+  changes: Record<string, chrome.storage.StorageChange>,
+  changedKeys: readonly SettingKey[],
+): DiscourseSettings {
+  const next = { ...settings } as Record<SettingKey, unknown>;
+  changedKeys.forEach((key) => {
+    next[key] = changes[key]?.newValue ?? DEFAULT_SETTINGS[key];
+  });
+  return normalizeSettings(next as DiscourseSettings);
 }
 
 export function getSettings(): Promise<DiscourseSettings> {
@@ -90,12 +106,21 @@ export function saveSettings(partialSettings: Partial<DiscourseSettings>): Promi
 
 export function onSettingsChanged(callback: SettingsCallback): void {
   if (!hasChromeStorage() || !chrome.storage?.onChanged) return;
+  let changeVersion = 0;
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'sync') return;
-    const changedKeys = Object.keys(changes);
-    if (!changedKeys.some((key) => SETTING_KEYS.includes(key as SettingKey))) return;
-    cachedSettings = null;
-    void getCachedSettings().then(callback);
+    const changedKeys = Object.keys(changes).filter((key): key is SettingKey =>
+      SETTING_KEYS.includes(key as SettingKey),
+    );
+    if (changedKeys.length === 0) return;
+    const version = ++changeVersion;
+    const previousSettings = cachedSettings ?? getSettings();
+    cachedSettings = previousSettings.then((settings) =>
+      applyStorageChanges(settings, changes, changedKeys),
+    );
+    void cachedSettings.then((settings) => {
+      if (version === changeVersion) callback(settings);
+    });
   });
 }

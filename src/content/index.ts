@@ -6,7 +6,9 @@ import { getCachedSettings, onSettingsChanged } from '../common/settings';
 import type { DiscourseSettings } from '../common/settings';
 import { RefreshScheduler } from './refresh-state';
 import { ManagedObserver } from './managed-observer';
-import { prepareTopicLayout, refreshTopicLayout, topicLayoutOwnedSelectors } from './topic-layout';
+import { prepareTopicLayout, topicLayoutOwnedSelectors } from './topic-layout';
+import { TopicLayoutController } from './topic-layout-controller';
+import { imageViewerOwnedSelectors, initImageViewer } from './image-viewer';
 
 interface Enhancement {
   refresh: (settings: DiscourseSettings) => void | Promise<void>;
@@ -20,18 +22,19 @@ const selectionToolsEnhancement: Enhancement = {
 
 const enhancements: readonly Enhancement[] = [
   {
-    refresh: refreshTopicLayout,
-    ownedSelectors: topicLayoutOwnedSelectors,
-  },
-  {
     refresh: injectButtons,
     ownedSelectors: ['.ldtk-shadow-host'],
+  },
+  {
+    refresh: initImageViewer,
+    ownedSelectors: imageViewerOwnedSelectors,
   },
   selectionToolsEnhancement,
 ];
 
 const toolkitSelector = [
   '#ldcopy-toast-host',
+  ...topicLayoutOwnedSelectors,
   ...enhancements.flatMap((enhancement) => enhancement.ownedSelectors),
 ].join(', ');
 
@@ -47,6 +50,7 @@ const selectionToolsScheduler = new RefreshScheduler(
   () => runEnhancements([selectionToolsEnhancement]),
   100,
 );
+const topicLayoutController = new TopicLayoutController();
 
 function isToolkitMutation(mutation: MutationRecord): boolean {
   const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
@@ -76,21 +80,20 @@ function bindDynamicPageEvents(): void {
   );
   managedObserver.start();
 
-  const handleNavigation = (): void => {
-    enhancementScheduler.schedule(0);
-  };
+  const handleNavigation = (): void => enhancementScheduler.schedule(0);
   window.addEventListener('discourse-navigate-completed', handleNavigation);
   window.addEventListener('page:change', handleNavigation);
   window.addEventListener('pageshow', (event) => {
     if (event.persisted) handleNavigation();
   });
-  window.addEventListener('resize', handleNavigation, { passive: true });
 }
 
-function init(): void {
+function init(settings: DiscourseSettings): void {
   registerMessageHandlers();
   bindDynamicPageEvents();
-  onSettingsChanged(() => {
+  topicLayoutController.start(settings);
+  onSettingsChanged((settings) => {
+    topicLayoutController.updateSettings(settings);
     void enhancementScheduler.run();
   });
   void enhancementScheduler.run();
@@ -108,7 +111,7 @@ async function bootstrap(): Promise<void> {
   const settings = await getCachedSettings();
   prepareTopicLayout(settings);
   await waitForDomReady();
-  init();
+  init(settings);
 }
 
 void bootstrap();
