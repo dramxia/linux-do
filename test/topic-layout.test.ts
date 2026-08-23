@@ -507,7 +507,8 @@ describe('topic split layout lifecycle', () => {
       '#main-outlet .ldtk-shadow-host',
     );
     expect(document.querySelectorAll('#main-outlet .ldtk-shadow-host')).toHaveLength(1);
-    expect(document.querySelectorAll('.ldtk-topic-reading-root .ldtk-shadow-host')).toHaveLength(3);
+    expect(document.querySelectorAll('.ldtk-topic-reading-root .ldtk-shadow-host')).toHaveLength(1);
+    expect(document.querySelectorAll('.ldtk-comments-list .ldtk-shadow-host')).toHaveLength(0);
   });
 
   it('keeps the current split layout visible until a forced refresh is ready', async () => {
@@ -560,14 +561,18 @@ describe('topic split layout lifecycle', () => {
     await refreshTopicLayout(enabledSettings);
 
     const commentsPane = document.querySelector<HTMLElement>('.ldtk-comments-pane') as HTMLElement;
-    const focused = document.querySelector<HTMLButtonElement>('[data-copy-post-link="2"]');
+    const focused = document.querySelector<HTMLButtonElement>(
+      '[data-post-id="2"] [data-topic-action="reply"]',
+    );
     commentsPane.scrollTop = 180;
     focused?.focus();
     await refreshTopicLayout(enabledSettings, true);
 
     const nextPane = document.querySelector<HTMLElement>('.ldtk-comments-pane');
     expect(nextPane?.scrollTop).toBe(180);
-    expect(document.activeElement).toMatchObject({ dataset: { copyPostLink: '2' } });
+    expect(document.activeElement).toMatchObject({
+      dataset: { topicAction: 'reply', postId: '2' },
+    });
   });
 
   it('shows an article skeleton until a deep-route article candidate is verified', async () => {
@@ -741,13 +746,7 @@ describe('topic split layout lifecycle', () => {
     expect(footer).toBe(articlePane?.lastElementChild);
     expect(articleScroll?.contains(footer as Node)).toBe(false);
     expect(getComputedStyle(footer as HTMLElement).flexGrow).toBe('0');
-    expect(footer?.querySelector('.post-action-menu__like-count')?.textContent).toContain('199');
-    expect(footer?.querySelector('.post-action-menu__show-replies')?.textContent).toContain(
-      '7 个回复',
-    );
     expect(footer?.querySelector('.post-action-menu__like')).not.toBeNull();
-    expect(footer?.querySelector('.post-action-menu__copy-link')).not.toBeNull();
-    expect(footer?.querySelector('.post-action-menu__show-more')).not.toBeNull();
     expect(footer?.querySelector('.post-action-menu__reply')).not.toBeNull();
     expect(footer?.querySelectorAll('.ldtk-shadow-host')).toHaveLength(1);
     const replySummary = footer?.querySelector<HTMLElement>('.ldtk-article-reply-summary');
@@ -768,13 +767,6 @@ describe('topic split layout lifecycle', () => {
     expect(emoji?.width).toBe(18);
     expect(emoji?.height).toBe(18);
     expect(replyChip?.getAttribute('aria-label')).toContain(':white_check_mark:');
-    const repliesButton = footer?.querySelector<HTMLButtonElement>(
-      '.post-action-menu__show-replies',
-    );
-    expect(repliesButton?.getAttribute('aria-expanded')).toBe('true');
-    repliesButton?.click();
-    expect(replySummary?.hidden).toBe(true);
-    repliesButton?.click();
     expect(replySummary?.hidden).toBe(false);
     expect(footer?.querySelector('.ldtk-topic-summary')?.textContent).toContain(
       '10.7k浏览量484赞2链接2.7k用户249 分钟阅读时间',
@@ -985,7 +977,7 @@ describe('topic split layout lifecycle', () => {
     expect(editor?.querySelector('.ldtk-boost-error')?.textContent).toBe('你已经助推过此楼层');
   });
 
-  it('shows paginated like users inside split mode without changing history', async () => {
+  it('does not add count controls to the operation bar', async () => {
     const likedPost: TopicPost = {
       ...post(2, 2),
       actions_summary: [{ id: 2, count: 31, can_act: true, acted: false }],
@@ -1004,54 +996,10 @@ describe('topic split layout lifecycle', () => {
         ),
       ),
     );
-    const requests: ReturnType<typeof parseTopicInteractionRequest>[] = [];
-    document.addEventListener(TOPIC_INTERACTION_REQUEST_NAME, (event) => {
-      if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
-      const request = parseTopicInteractionRequest(event.detail);
-      if (!request || request.interaction !== 'likeUsers') return;
-      requests.push(request);
-      const page = request.page || 0;
-      event.target.dispatchEvent(
-        new CustomEvent(TOPIC_INTERACTION_RESULT_NAME, {
-          detail: JSON.stringify({
-            requestId: request.requestId,
-            interaction: request.interaction,
-            ok: true,
-            users: [
-              {
-                id: page + 1,
-                username: page === 0 ? 'alice' : 'bob',
-                name: page === 0 ? 'Alice' : 'Bob',
-                avatarTemplate: `/avatar/${page + 1}/{size}.png`,
-              },
-            ],
-            total: 31,
-            hasMore: page === 0,
-          }),
-        }),
-      );
-    });
-
     await refreshTopicLayout(enabledSettings);
-    const url = window.location.href;
-    const button = document.querySelector<HTMLButtonElement>(
-      '[data-post-id="2"] .post-action-menu__like-count',
-    );
-    button?.click();
-    await vi.waitFor(() =>
-      expect(document.querySelector('.ldtk-like-user')?.textContent).toContain('Alice'),
-    );
-    document.querySelector<HTMLButtonElement>('.ldtk-like-users-more')?.click();
-    await vi.waitFor(() =>
-      expect(document.querySelector('.ldtk-like-users-list')?.textContent).toContain('Bob'),
-    );
-
-    expect(requests.map((request) => request?.page)).toEqual([0, 1]);
-    expect(window.location.href).toBe(url);
-    expect(button?.getAttribute('aria-expanded')).toBe('true');
-    document.querySelector<HTMLButtonElement>('.ldtk-inline-popover-close')?.click();
-    expect(button?.getAttribute('aria-expanded')).toBe('false');
-    expect(document.activeElement).toBe(button);
+    const controls = document.querySelector('[data-post-id="2"] .ldtk-post-controls');
+    expect(controls?.querySelector('.post-action-menu__like-count')).toBeNull();
+    expect(controls?.querySelector('.post-action-menu__show-replies')).toBeNull();
   });
 
   it('refreshes the article Boost row after a discourse-boosts event', async () => {
@@ -1138,7 +1086,7 @@ describe('topic split layout lifecycle', () => {
     expect(getComputedStyle(target as HTMLButtonElement).fontWeight).toBe('600');
   });
 
-  it('renders the original-style post action groups and keeps actions in split mode', async () => {
+  it('renders only the requested comment actions with consistent icons', async () => {
     const actionablePost: TopicPost = {
       ...post(2, 2),
       reply_count: 14,
@@ -1150,8 +1098,10 @@ describe('topic split layout lifecycle', () => {
       current_user_reaction: null,
       current_user_used_main_reaction: false,
       bookmarked: false,
+      can_boost: true,
       can_edit: true,
       can_delete: true,
+      can_recover: true,
     };
     vi.stubGlobal(
       'fetch',
@@ -1187,12 +1137,7 @@ describe('topic split layout lifecycle', () => {
     await refreshTopicLayout(enabledSettings);
 
     const comment = document.querySelector<HTMLElement>('[data-post-id="2"]');
-    const likeCount = comment?.querySelector<HTMLButtonElement>('.post-action-menu__like-count');
-    const replies = comment?.querySelector<HTMLButtonElement>('.post-action-menu__show-replies');
     const actions = comment?.querySelector('.ldtk-post-actions');
-    expect(likeCount?.textContent).toContain('19');
-    expect(likeCount?.querySelector('svg')?.classList.contains('d-icon-lucide-heart')).toBe(true);
-    expect(replies?.textContent).toContain('14 个回复');
     const likeButton = actions?.querySelector<HTMLButtonElement>('.post-action-menu__like');
     expect(likeButton?.getAttribute('aria-pressed')).toBe('false');
     expect(likeButton?.querySelector('svg')?.classList.contains('d-icon-lucide-far-heart')).toBe(
@@ -1200,20 +1145,25 @@ describe('topic split layout lifecycle', () => {
     );
     expect(actions?.querySelector('.ldtk-reaction-picker-trigger')).toBeNull();
     expect(likeButton?.getAttribute('aria-haspopup')).toBe('dialog');
-    expect(actions?.querySelector('.post-action-menu__copy-link')).not.toBeNull();
     expect(actions?.querySelector('.post-action-menu__bookmark')).not.toBeNull();
-    expect(actions?.querySelector('.post-action-menu__show-more')).not.toBeNull();
-    expect(actions?.querySelector('.post-action-menu__reply')?.textContent).toContain('回复');
-
-    actions?.querySelector<HTMLButtonElement>('.post-action-menu__show-more')?.click();
-    expect(actions?.querySelector<HTMLElement>('.ldtk-more-actions')?.hidden).toBe(false);
+    expect(actions?.querySelector('.post-action-menu__boost')).not.toBeNull();
     expect(actions?.querySelector('.post-action-menu__flag')).not.toBeNull();
-    expect(actions?.querySelector('.post-action-menu__edit')).not.toBeNull();
+    expect(actions?.querySelector('.post-action-menu__recover')).not.toBeNull();
+    const reply = actions?.querySelector<HTMLButtonElement>('.post-action-menu__reply');
+    expect(reply?.textContent).toBe('');
+    expect(reply?.querySelector('svg')?.classList.contains('d-icon-lucide-reply')).toBe(true);
+    expect(reply?.querySelector('svg')?.getAttribute('width')).toBe('15');
+    expect(actions?.querySelector('.post-action-menu__copy-link')).toBeNull();
+    expect(actions?.querySelector('.post-action-menu__show-more')).toBeNull();
+    expect(actions?.querySelector('.post-action-menu__share')).toBeNull();
+    expect(actions?.querySelector('.post-action-menu__edit')).toBeNull();
+    expect(actions?.querySelector('.post-action-menu__delete')).toBeNull();
+    expect(comment?.querySelector('.ldtk-shadow-host')).toBeNull();
     expect(
-      actions
-        ?.querySelector('.post-action-menu__share svg')
-        ?.classList.contains('d-icon-lucide-arrow-up-from-bracket'),
-    ).toBe(true);
+      Array.from(actions?.querySelectorAll<HTMLButtonElement>('[data-topic-action]') || []).map(
+        (button) => button.dataset.topicAction,
+      ),
+    ).toEqual(['like', 'bookmark', 'boost', 'flag', 'recover', 'reply']);
 
     actions?.querySelector<HTMLButtonElement>('.post-action-menu__bookmark')?.click();
     expect(requests).toHaveLength(1);
@@ -1469,7 +1419,7 @@ describe('topic split layout lifecycle', () => {
     });
   });
 
-  it('expands direct replies inside the split layout', async () => {
+  it('does not add reply-count expansion controls to the operation bar', async () => {
     const parent = { ...post(2, 2), reply_count: 2 };
     const directReplies = [
       { ...post(3, 3), reply_to_post_number: 2 },
@@ -1496,18 +1446,8 @@ describe('topic split layout lifecycle', () => {
 
     await refreshTopicLayout(enabledSettings);
     const parentElement = document.querySelector<HTMLElement>('[data-post-id="2"]');
-    const repliesButton = parentElement?.querySelector<HTMLButtonElement>(
-      '[data-toggle-replies="2"]',
-    );
-    repliesButton?.click();
-
-    await vi.waitFor(() => {
-      expect(parentElement?.querySelectorAll('.ldtk-inline-reply')).toHaveLength(2);
-    });
-    expect(repliesButton?.getAttribute('aria-expanded')).toBe('true');
-    expect(
-      repliesButton?.querySelector('svg')?.classList.contains('d-icon-lucide-chevron-up'),
-    ).toBe(true);
+    expect(parentElement?.querySelector('[data-toggle-replies="2"]')).toBeNull();
+    expect(parentElement?.querySelectorAll('.ldtk-inline-reply')).toHaveLength(0);
     expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
   });
 

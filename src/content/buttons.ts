@@ -7,10 +7,10 @@ import { handleError } from './error-handler';
 
 /* lucide: copy */
 const COPY_ICON =
-  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 /* lucide: download */
 const DOWNLOAD_ICON =
-  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>';
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>';
 
 const SHADOW_HOST_CLASS = 'ldtk-shadow-host';
 
@@ -154,6 +154,10 @@ export function injectButtons(settings: DiscourseSettings): void {
   }
 
   getPostElements().forEach((postEl) => {
+    if (postEl.dataset.postNumber !== '1') {
+      postEl.querySelectorAll(`.${SHADOW_HOST_CLASS}`).forEach((element) => element.remove());
+      return;
+    }
     const actionsEl = getActionsElement(postEl);
     if (!actionsEl) return;
     if (actionsEl.querySelector(`.${SHADOW_HOST_CLASS}`)) return;

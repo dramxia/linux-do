@@ -1,10 +1,6 @@
 /* Linux.do 工具箱 - 双栏阅读的单一生命周期控制器 */
 import type { DiscourseSettings } from '../common/settings';
-import {
-  getTopicIdentityKey,
-  HISTORY_NAVIGATION_EVENT_NAME,
-  PAGE_NAVIGATION_EVENT_NAME,
-} from '../common/topic-route';
+import { HISTORY_NAVIGATION_EVENT_NAME, PAGE_NAVIGATION_EVENT_NAME } from '../common/topic-route';
 import { parseTopicEventDetail, TOPIC_EVENT_NAME } from './topic-events';
 import { TopicLayoutRuntime, type TopicLayoutRuntimeState } from './topic-layout';
 import {
@@ -144,10 +140,10 @@ export class TopicLayoutController {
 
   private readonly handleTopicEvent = (event: CustomEvent<unknown>): void => {
     const detail = parseTopicEventDetail(event.detail);
-    const route = captureTopicPageSnapshot().route;
-    if (!detail || !route || String(detail.topicId) !== route.topicId) return;
+    const topicId = detail ? String(detail.topicId) : null;
+    if (!detail || !topicId || topicId !== this.pageSnapshot.route?.topicId) return;
     if (this.runtime.getState() === 'loading') {
-      this.dirtyLoadingTopicId = getTopicIdentityKey(route);
+      this.dirtyLoadingTopicId = topicId;
       return;
     }
     this.runtime.invalidate();
@@ -184,11 +180,10 @@ export class TopicLayoutController {
       return;
     }
     await this.runtime.activate(settings);
-    const activeTopicId = getTopicIdentityKey(captureTopicPageSnapshot().route);
     if (
       this.runtime.getState() === 'active' &&
       this.dirtyLoadingTopicId !== null &&
-      this.dirtyLoadingTopicId === activeTopicId
+      this.dirtyLoadingTopicId === this.pageSnapshot.route?.topicId
     ) {
       this.dirtyLoadingTopicId = null;
       this.runtime.invalidate();

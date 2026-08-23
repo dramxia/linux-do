@@ -918,7 +918,6 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   margin-top: 10px;
   color: var(--ldtk-muted-foreground);
 }
-.ldtk-post-extra-controls,
 .ldtk-post-actions,
 .ldtk-more-actions {
   display: inline-flex;
@@ -1121,11 +1120,6 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   outline-offset: 2px;
 }
 .ldtk-like-users-more:disabled { cursor: wait; opacity: 0.5; }
-.ldtk-post-menu-button.post-action-menu__reply {
-  padding-inline: 9px;
-  color: var(--ldtk-foreground);
-  border: 1px solid var(--ldtk-border);
-}
 .${ROOT_CLASS} .discourse-boosts__post-menu {
   width: 100%;
   padding: 4px 0;
@@ -1848,12 +1842,6 @@ class TopicLayout {
     this.scheduleInjectButtons();
   }
 
-  mount(initialPosts: TopicPost[], articleReplies: TopicPost[] = []): void {
-    this.mountShell(articleReplies);
-    this.applyCommentBatch(0, initialPosts);
-    this.finalizeInitialComments([]);
-  }
-
   revealArticle(articleReplies: TopicPost[] = this.articleReplies): void {
     if (this.destroyed || !this.source.articleReady) return;
     const repliesChanged =
@@ -1971,8 +1959,14 @@ class TopicLayout {
     if (this.destroyed) return;
     this.destroyed = true;
     if (save) this.saveState();
-    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
-    if (this.shellOffsetFrame !== null) window.cancelAnimationFrame(this.shellOffsetFrame);
+    if (this.saveTimer !== null) {
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (this.shellOffsetFrame !== null) {
+      window.cancelAnimationFrame(this.shellOffsetFrame);
+      this.shellOffsetFrame = null;
+    }
     if (this.articleFooterResizeFrame !== null) {
       window.cancelAnimationFrame(this.articleFooterResizeFrame);
       this.articleFooterResizeFrame = null;
@@ -1989,6 +1983,7 @@ class TopicLayout {
     delete this.articlePane.dataset.resizingFooter;
     this.clearSidebarAlignments();
     this.pageAbort?.abort();
+    this.pageAbort = null;
     this.replyAborts.forEach((controller) => controller.abort());
     this.replyAborts.clear();
     this.codeCopyResetTimers.forEach((timer) => window.clearTimeout(timer));
@@ -2034,10 +2029,6 @@ class TopicLayout {
       isSameTopicIdentity(this.route, route) &&
       this.settings.commentsPerPage === settings.commentsPerPage
     );
-  }
-
-  matchesRoute(route: TopicRoute | null): boolean {
-    return isSameTopicIdentity(this.route, route);
   }
 
   private ensureStyle(): void {
@@ -2565,15 +2556,12 @@ class TopicLayout {
     const controls = createElement('nav', 'post-controls ldtk-post-controls');
     controls.style.position = 'relative';
     controls.setAttribute('aria-label', `${post.post_number} 楼操作`);
-    const extraControls = createElement('div', 'ldtk-post-extra-controls');
     const actions = createElement('div', 'actions ldtk-post-actions');
     const like = post.actions_summary?.find((action) => action.id === 2);
-    const likeCount = Math.max(0, post.reaction_users_count ?? like?.count ?? 0);
     const hasLiked = post.current_user_used_main_reaction ?? like?.acted === true;
     const currentReactionId = post.current_user_reaction?.id;
     const hasCustomReaction = Boolean(currentReactionId && !hasLiked);
     const hasReaction = hasLiked || Boolean(currentReactionId);
-    const replyCount = Math.max(0, post.reply_count || 0);
 
     const addNativeAction = (
       container: HTMLElement,
@@ -2590,34 +2578,6 @@ class TopicLayout {
       container.appendChild(button);
       return button;
     };
-
-    if (likeCount > 0) {
-      const likeUsers = createPostMenuButton({
-        className: 'post-action-menu__like-count like-count button-count highlight-action',
-        icon: 'd-liked',
-        label: `${likeCount} 个赞，查看点赞用户`,
-        visibleLabel: String(likeCount),
-      });
-      likeUsers.dataset.topicAction = 'likeUsers';
-      likeUsers.dataset.postId = String(post.id);
-      likeUsers.dataset.floor = String(post.post_number);
-      likeUsers.setAttribute('aria-haspopup', 'dialog');
-      likeUsers.setAttribute('aria-expanded', 'false');
-      extraControls.appendChild(likeUsers);
-    }
-
-    if (replyCount > 0) {
-      const replies = createPostMenuButton({
-        className: 'post-action-menu__show-replies show-replies btn-icon-text button-count',
-        icon: 'chevron-down',
-        label: `展开 ${replyCount} 个回复`,
-        visibleLabel: `${replyCount} 个回复`,
-      });
-      replies.dataset.toggleReplies = String(post.id);
-      replies.dataset.floor = String(post.post_number);
-      replies.setAttribute('aria-expanded', 'false');
-      extraControls.appendChild(replies);
-    }
 
     if (like && post.yours !== true) {
       const likeLabel = hasCustomReaction
@@ -2642,14 +2602,6 @@ class TopicLayout {
       likeButton.setAttribute('aria-haspopup', 'dialog');
       likeButton.setAttribute('aria-expanded', 'false');
     }
-
-    const copyLink = createPostMenuButton({
-      className: 'post-action-menu__copy-link btn-icon',
-      icon: 'link',
-      label: '复制此楼链接',
-    });
-    copyLink.dataset.copyPostLink = String(post.post_number);
-    actions.appendChild(copyLink);
 
     if (!post.deleted_at) {
       const bookmarkIcon = post.bookmark_reminder_at
@@ -2681,48 +2633,19 @@ class TopicLayout {
       boost.setAttribute('aria-expanded', 'false');
     }
 
-    const moreActions = createElement('span', 'ldtk-more-actions');
-    moreActions.hidden = true;
-    addNativeAction(
-      moreActions,
-      'share',
-      'd-post-share',
-      '分享',
-      'post-action-menu__share btn-icon',
-    );
     const canFlag = post.actions_summary?.some(
       (action) => action.id !== 2 && action.can_act === true,
     );
     if (canFlag)
-      addNativeAction(moreActions, 'flag', 'flag', '举报', 'post-action-menu__flag btn-icon');
-    if (post.can_edit)
-      addNativeAction(moreActions, 'edit', 'pencil', '编辑', 'post-action-menu__edit btn-icon');
-    if (post.can_delete)
-      addNativeAction(
-        moreActions,
-        'delete',
-        'trash-can',
-        '删除',
-        'post-action-menu__delete btn-icon',
-      );
+      addNativeAction(actions, 'flag', 'flag', '举报', 'post-action-menu__flag btn-icon');
     if (post.can_recover)
       addNativeAction(
-        moreActions,
+        actions,
         'recover',
         'rotate-left',
         '恢复',
         'post-action-menu__recover btn-icon',
       );
-    actions.appendChild(moreActions);
-
-    const showMore = createPostMenuButton({
-      className: 'post-action-menu__show-more show-more-actions btn-icon',
-      icon: 'ellipsis',
-      label: '更多',
-    });
-    showMore.dataset.showMore = 'true';
-    showMore.setAttribute('aria-expanded', 'false');
-    actions.appendChild(showMore);
 
     if (this.source.topic.details?.can_create_post !== false) {
       addNativeAction(
@@ -2730,12 +2653,11 @@ class TopicLayout {
         'reply',
         'reply',
         `回复 ${post.username}`,
-        'post-action-menu__reply reply btn-icon-text',
-        '回复',
+        'post-action-menu__reply reply btn-icon',
       );
     }
 
-    controls.append(extraControls, actions);
+    controls.appendChild(actions);
     return controls;
   }
 
@@ -4125,7 +4047,7 @@ export class TopicLayoutRuntime {
       this.activeLayout &&
       (!this.activeContext || !isTopicPageContextCurrent(this.activeContext))
     ) {
-      this.rejectPageContext();
+      this.suspend();
       return;
     }
     this.activeLayout?.updateHeaderOffset();
@@ -4139,7 +4061,7 @@ export class TopicLayoutRuntime {
     }
     const context = captureTopicPageContext();
     if (window.innerWidth < MIN_VIEWPORT_WIDTH || !context) {
-      this.rejectPageContext();
+      this.suspend();
       return;
     }
     const { route, pageRoot } = context;
@@ -4358,7 +4280,7 @@ export class TopicLayoutRuntime {
       }
       if (!isTopicPageContextCurrent(context)) {
         finishActivation('aborted');
-        this.rejectPageContext();
+        this.suspend();
         return;
       }
       if (retainedLayout && this.activeLayout === retainedLayout) {
@@ -4429,12 +4351,8 @@ export class TopicLayoutRuntime {
     if (isTopicPageContextCurrent(context) && String(responseTopicId) === context.route.topicId) {
       return true;
     }
-    this.rejectPageContext();
-    return false;
-  }
-
-  private rejectPageContext(): void {
     this.suspend();
+    return false;
   }
 
   private cancelLoading(): void {
