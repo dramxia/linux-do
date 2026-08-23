@@ -13,14 +13,17 @@ import {
 } from '../content/topic-events';
 import {
   parseTopicActionRequest,
-  parseTopicReactionPickerRequest,
+  parseTopicInteractionRequest,
   TOPIC_ACTION_REQUEST_NAME,
   TOPIC_ACTION_RESULT_NAME,
-  TOPIC_REACTION_PICKER_REQUEST_NAME,
-  type TopicAction,
+  TOPIC_INTERACTION_REQUEST_NAME,
+  TOPIC_INTERACTION_RESULT_NAME,
   type TopicActionRequest,
   type TopicActionResult,
-  type TopicReactionPickerRequest,
+  type TopicInteractionRequest,
+  type TopicInteractionResult,
+  type TopicInteractionUser,
+  type TopicReactionOption,
 } from '../content/topic-actions';
 import { TOPIC_CODE_HIGHLIGHT_REQUEST_NAME } from '../content/topic-code-blocks';
 
@@ -42,7 +45,6 @@ interface MessageBusClient {
 interface PluginApi {
   onPageChange: (callback: () => void) => void;
   onAppEvent?: (name: string, callback: (value: unknown) => void) => void;
-  preventCloak?: (postId: number, prevent?: boolean) => void;
   container?: DiscourseContainer;
 }
 
@@ -59,15 +61,12 @@ interface PageWindow extends Window {
   };
 }
 
-interface DiscourseUrlModule {
-  default?: {
-    routeTo?: (url: string) => void;
-  };
-  routeTo?: (url: string) => void;
-}
-
 interface DiscourseTextModule {
   emojiUrlFor?: (code: string) => string | undefined;
+}
+
+interface DiscourseAjaxModule {
+  ajax?: (url: string, options?: Record<string, unknown>) => Promise<unknown>;
 }
 
 interface HighlightSyntaxModule {
@@ -90,34 +89,21 @@ interface TopicController {
   model?: unknown;
   composer?: unknown;
   replyToPost?: (post: unknown) => unknown;
+  toggleBookmark?: (post: unknown) => unknown;
+  editPost?: (post: unknown) => unknown;
+  deletePost?: (post: unknown, options?: Record<string, unknown>) => unknown;
+  deletePostWithConfirmation?: (post: unknown, options?: Record<string, unknown>) => unknown;
+  recoverPost?: (post: unknown) => unknown;
+  showPostFlags?: (post: unknown) => unknown;
+  send?: (action: string, ...args: unknown[]) => unknown;
 }
 
 interface ComposerService {
   open?: (options: Record<string, unknown>) => unknown;
 }
 
-const ACTION_SELECTORS: Record<TopicAction, readonly string[]> = {
-  like: [
-    '.discourse-reactions-actions-button-shim .discourse-reactions-reaction-button',
-    '.post-action-menu__like',
-  ],
-  likeUsers: ['.discourse-reactions-counter', '.post-action-menu__like-count'],
-  bookmark: ['.post-action-menu__bookmark'],
-  boost: ['.post-action-menu__boost', '.discourse-boosts__add-btn'],
-  reply: ['.post-action-menu__reply'],
-  edit: ['.post-action-menu__edit'],
-  delete: ['.post-action-menu__delete'],
-  recover: ['.post-action-menu__recover'],
-  flag: ['.post-action-menu__flag'],
-  share: ['.post-action-menu__share'],
-};
-
-const COLLAPSED_ACTIONS = new Set<TopicAction>(['edit', 'delete', 'recover', 'flag', 'share']);
-const REACTION_CONTROL_SELECTOR =
-  '.discourse-reactions-actions-button-shim .discourse-reactions-reaction-button';
-
 type TopicTargetRequest = Pick<
-  TopicActionRequest | TopicReactionPickerRequest,
+  TopicActionRequest | TopicInteractionRequest,
   'topicId' | 'postId' | 'floor' | 'routeUrl'
 >;
 
@@ -125,10 +111,8 @@ const pageWindow = window as PageWindow;
 let activeChannel: string | null = null;
 let activeCallback: MessageCallback | null = null;
 let pluginHookInstalled = false;
-let discoursePluginApi: PluginApi | null = null;
 let discourseContainer: DiscourseContainer | null = null;
 let codeHighlightRetry: number | null = null;
-const pendingReactionPickers = new WeakMap<Element, () => void>();
 
 function retryCodeHighlight(attempt: number): void {
   if (attempt >= MAX_DISCOVERY_ATTEMPTS || codeHighlightRetry !== null) return;
@@ -152,165 +136,31 @@ function dispatchActionResult(
   );
 }
 
-function getNativePost(request: TopicTargetRequest): HTMLElement | null {
-  return document.querySelector<HTMLElement>(
-    `#main-outlet article[data-post-id="${request.postId}"], ` +
-      `#main-outlet .topic-post[data-post-id="${request.postId}"], ` +
-      `#main-outlet .topic-post[data-post-number="${request.floor}"]`,
+function dispatchInteractionResult(
+  target: Element,
+  request: TopicInteractionRequest,
+  result: Omit<TopicInteractionResult, 'requestId' | 'interaction'>,
+): void {
+  target.dispatchEvent(
+    new CustomEvent(TOPIC_INTERACTION_RESULT_NAME, {
+      detail: JSON.stringify({
+        requestId: request.requestId,
+        interaction: request.interaction,
+        ...result,
+      }),
+    }),
   );
 }
 
-function getNativePostPlaceholder(request: TopicTargetRequest): HTMLElement | null {
-  return document.querySelector<HTMLElement>(
-    `#main-outlet [data-post-number="${request.floor}"], ` +
-      `#main-outlet [data-post-id="${request.postId}"]`,
-  );
-}
-
-function validateActionRoute(request: TopicTargetRequest): URL | null {
+function validateActionRoute(request: TopicTargetRequest): boolean {
   try {
     const url = new URL(request.routeUrl, window.location.origin);
-    if (url.origin !== window.location.origin) return null;
+    if (url.origin !== window.location.origin) return false;
     const route = parseTopicRoute(url.pathname);
-    return Number(route?.topicId) === request.topicId ? url : null;
+    return Number(route?.topicId) === request.topicId;
   } catch {
-    return null;
+    return false;
   }
-}
-
-function anchorControlToTarget(control: HTMLElement, target: Element): void {
-  const original = control.getBoundingClientRect.bind(control);
-  control.getBoundingClientRect = () =>
-    target.isConnected ? target.getBoundingClientRect() : original();
-}
-
-function dispatchReactionPointer(
-  control: HTMLElement,
-  target: Element,
-  type: 'pointerover' | 'pointerout',
-): void {
-  anchorControlToTarget(control, target);
-  const pointerEvent =
-    typeof window.PointerEvent === 'function'
-      ? new PointerEvent(type, {
-          bubbles: true,
-          pointerType: 'mouse',
-        })
-      : new MouseEvent(type, {
-          bubbles: true,
-        });
-  if (!('pointerType' in pointerEvent)) {
-    Object.defineProperty(pointerEvent, 'pointerType', { value: 'mouse' });
-  }
-  control.dispatchEvent(pointerEvent);
-}
-
-function queryNativeReactionControl(request: TopicReactionPickerRequest): HTMLElement | null {
-  return getNativePost(request)?.querySelector<HTMLElement>(REACTION_CONTROL_SELECTOR) || null;
-}
-
-function cancelPendingReactionPicker(target: Element): void {
-  pendingReactionPickers.get(target)?.();
-  pendingReactionPickers.delete(target);
-}
-
-function routeToReactionPicker(
-  target: Element,
-  request: TopicReactionPickerRequest,
-  url: URL,
-): void {
-  if (!pageWindow.require) return;
-
-  let timeout = 0;
-  const cleanup = (): void => {
-    observer.disconnect();
-    window.clearTimeout(timeout);
-    if (pendingReactionPickers.get(target) === cleanup) pendingReactionPickers.delete(target);
-  };
-  const attemptOpen = (): void => {
-    const control = queryNativeReactionControl(request);
-    if (!control) return;
-    cleanup();
-    dispatchReactionPointer(control, target, 'pointerover');
-  };
-  const observer = new MutationObserver(attemptOpen);
-  observer.observe(document.body, { childList: true, subtree: true });
-  timeout = window.setTimeout(cleanup, 8_000);
-  pendingReactionPickers.set(target, cleanup);
-
-  try {
-    const module = pageWindow.require('discourse/lib/url') as DiscourseUrlModule | undefined;
-    const routeTo = module?.default?.routeTo || module?.routeTo;
-    if (!routeTo) throw new Error('routeTo unavailable');
-    routeTo.call(module?.default || module, `${url.pathname}${url.search}${url.hash}`);
-    window.setTimeout(attemptOpen, 0);
-  } catch {
-    cleanup();
-  }
-}
-
-function handleReactionPickerRequest(event: Event): void {
-  if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
-  const request = parseTopicReactionPickerRequest(event.detail);
-  if (!request || request.topicId !== getTopicId()) return;
-  const url = validateActionRoute(request);
-  if (!url) return;
-  const target = event.target;
-  cancelPendingReactionPicker(target);
-
-  const control = queryNativeReactionControl(request);
-  if (!request.open) {
-    if (control) dispatchReactionPointer(control, target, 'pointerout');
-    return;
-  }
-  if (control) {
-    dispatchReactionPointer(control, target, 'pointerover');
-  } else {
-    routeToReactionPicker(target, request, url);
-  }
-}
-
-function isMenuExpanded(control: HTMLElement, action: TopicAction): boolean {
-  if (action === 'likeUsers' && control.matches('.discourse-reactions-counter')) {
-    return Boolean(control.querySelector('.discourse-reactions-state-panel.is-expanded'));
-  }
-  return control.getAttribute('aria-expanded') === 'true';
-}
-
-function watchMenuClose(
-  control: HTMLElement,
-  target: Element,
-  request: TopicActionRequest,
-  onClose?: () => void,
-): void {
-  let expanded = isMenuExpanded(control, request.action);
-  let timeout = 0;
-  const cleanup = (): void => {
-    observer.disconnect();
-    window.clearTimeout(timeout);
-    onClose?.();
-  };
-  const observer = new MutationObserver(() => {
-    const isExpanded = isMenuExpanded(control, request.action);
-    expanded ||= isExpanded;
-    if (!expanded || isExpanded) return;
-    cleanup();
-    dispatchActionResult(target, request, { ok: true, phase: 'settled' });
-  });
-  observer.observe(control, {
-    attributes: true,
-    subtree: true,
-    attributeFilter: ['aria-expanded', 'class'],
-  });
-  timeout = window.setTimeout(cleanup, 120_000);
-}
-
-function queryNativeControl(post: HTMLElement, action: TopicAction): HTMLElement | null {
-  for (const selector of ACTION_SELECTORS[action]) {
-    const control = post.querySelector<HTMLElement>(selector);
-    if (control) return control;
-  }
-  return null;
 }
 
 function readProperty(value: unknown, property: string): unknown {
@@ -341,7 +191,6 @@ function getDiscourseContainer(): DiscourseContainer | null {
   try {
     const module = pageWindow.require?.('discourse/lib/plugin-api') as PluginApiModule | undefined;
     module?.withPluginApi('1.0.0', (api) => {
-      discoursePluginApi = api;
       if (isUsableContainer(api.container)) discourseContainer = api.container;
     });
   } catch {
@@ -498,201 +347,260 @@ async function openReplyWithController(request: TopicActionRequest): Promise<boo
   }
 }
 
-function canTriggerNativeAction(post: HTMLElement, action: TopicAction): boolean {
-  if (queryNativeControl(post, action)) return true;
-  return (
-    COLLAPSED_ACTIONS.has(action) &&
-    Boolean(post.querySelector<HTMLElement>('.post-action-menu__show-more'))
+interface LoadedActionPost {
+  controller: TopicController;
+  post: unknown;
+}
+
+function getTopicController(): TopicController | null {
+  const candidate = lookupDiscourse('controller:topic');
+  return candidate && typeof candidate === 'object' ? (candidate as TopicController) : null;
+}
+
+async function loadActionPost(request: TopicActionRequest): Promise<LoadedActionPost> {
+  const controller = getTopicController();
+  if (!controller) throw new Error('Discourse 主题控制器尚未就绪');
+  const model = readProperty(controller, 'model');
+  const modelTopicId = Number(readProperty(model, 'id'));
+  if (Number.isInteger(modelTopicId) && modelTopicId !== request.topicId) {
+    throw new Error('当前主题状态已经变化，请重试');
+  }
+  const postStream = readProperty(model, 'postStream') as TopicPostStream | undefined;
+  if (!postStream) throw new Error('Discourse 帖子流尚未就绪');
+  let post = postStream.findLoadedPost?.(request.postId);
+  if (!post && postStream.loadPost) post = await postStream.loadPost(request.postId);
+  if (!post) throw new Error('无法静默加载当前楼层');
+  return { controller, post };
+}
+
+function getErrorMessage(error: unknown): string {
+  const responseJSON = readProperty(error, 'responseJSON');
+  const errors = readProperty(responseJSON, 'errors');
+  if (Array.isArray(errors) && typeof errors[0] === 'string') return errors[0];
+  const message = readProperty(error, 'message');
+  return typeof message === 'string' && message.trim() ? message : '操作失败，请重试';
+}
+
+async function submitBoost(request: TopicActionRequest): Promise<void> {
+  const raw = request.boostRaw?.trim();
+  if (!raw) throw new Error('请输入助推内容');
+  const module = pageWindow.require?.('discourse/lib/ajax') as DiscourseAjaxModule | undefined;
+  if (typeof module?.ajax !== 'function') throw new Error('Discourse 请求服务尚未就绪');
+  await module.ajax(`/discourse-boosts/posts/${request.postId}/boosts`, {
+    type: 'POST',
+    data: { raw },
+  });
+}
+
+function getAjax(): NonNullable<DiscourseAjaxModule['ajax']> {
+  const module = pageWindow.require?.('discourse/lib/ajax') as DiscourseAjaxModule | undefined;
+  if (typeof module?.ajax !== 'function') throw new Error('Discourse 请求服务尚未就绪');
+  return module.ajax;
+}
+
+function getReactionUrl(reactionId: string): string | undefined {
+  try {
+    const textModule = pageWindow.require?.('discourse/lib/text') as
+      DiscourseTextModule | undefined;
+    return textModule?.emojiUrlFor?.(reactionId);
+  } catch {
+    return undefined;
+  }
+}
+
+function dispatchReactionState(postId: number, value: unknown): void {
+  const topicId = getTopicId();
+  if (!topicId) return;
+  const reaction = readProperty(value, 'current_user_reaction');
+  const reactionIdValue = readProperty(reaction, 'id');
+  const currentReactionId =
+    typeof reactionIdValue === 'string' && reactionIdValue.length > 0 ? reactionIdValue : null;
+  const currentReactionUrl = currentReactionId ? getReactionUrl(currentReactionId) : undefined;
+  const detail = parseTopicEventDetail({
+    topicId,
+    postId,
+    type: 'acted',
+    currentReactionId,
+    ...(currentReactionUrl ? { currentReactionUrl } : {}),
+  });
+  if (detail) dispatchTopicEvent(detail);
+}
+
+async function toggleReaction(request: TopicActionRequest): Promise<void> {
+  const reactionId = request.reactionId;
+  if (!reactionId) throw new Error('请选择表态');
+  await getAjax()(
+    `/discourse-reactions/posts/${request.postId}/custom-reactions/${encodeURIComponent(reactionId)}/toggle.json`,
+    { type: 'PUT' },
   );
 }
 
-async function findNativeControl(
-  post: HTMLElement,
-  action: TopicAction,
-): Promise<HTMLElement | null> {
-  let control = queryNativeControl(post, action);
-  if (control || !COLLAPSED_ACTIONS.has(action)) return control;
-  post.querySelector<HTMLElement>('.post-action-menu__show-more')?.click();
-  await new Promise((resolve) => window.setTimeout(resolve, 50));
-  control = queryNativeControl(post, action);
-  return control;
-}
-
-async function triggerNativeAction(
-  post: HTMLElement,
-  target: Element,
-  request: TopicActionRequest,
-  onMenuClose?: () => void,
-): Promise<void> {
-  const control = await findNativeControl(post, request.action);
-  if (!control) {
-    onMenuClose?.();
-    dispatchActionResult(target, request, {
-      ok: false,
-      phase: 'triggered',
-      message: '当前楼层没有此操作',
-    });
+async function executeModelAction(request: TopicActionRequest): Promise<void> {
+  if (request.action === 'boost') {
+    await submitBoost(request);
     return;
   }
-  if (control instanceof HTMLButtonElement && control.disabled) {
-    onMenuClose?.();
-    dispatchActionResult(target, request, {
-      ok: false,
-      phase: 'triggered',
-      message: '当前操作不可用',
-    });
-    return;
-  }
-
-  anchorControlToTarget(control, target);
-  if (
-    request.action === 'bookmark' ||
-    request.action === 'boost' ||
-    request.action === 'likeUsers'
-  ) {
-    watchMenuClose(control, target, request, onMenuClose);
-  } else {
-    onMenuClose?.();
-  }
-  control.click();
   if (request.action === 'reply') {
-    const opened = await waitForReplyComposer(3_000);
-    dispatchActionResult(target, request, {
-      ok: opened,
-      phase: 'triggered',
-      ...(opened ? {} : { message: '原站回复按钮已触发，但回复面板没有打开' }),
-    });
+    if (!(await openReplyWithController(request))) throw new Error('无法静默打开回复编辑器');
     return;
   }
-  dispatchActionResult(target, request, { ok: true, phase: 'triggered' });
+  if (request.action === 'reaction') {
+    await toggleReaction(request);
+    return;
+  }
+  const { controller, post } = await loadActionPost(request);
+  if (request.action === 'like') {
+    const likeAction = readProperty(post, 'likeAction');
+    const togglePromise = readProperty(likeAction, 'togglePromise');
+    if (typeof togglePromise !== 'function') throw new Error('当前楼层不能点赞');
+    await togglePromise.call(likeAction, post);
+    return;
+  }
+  if (request.action === 'bookmark' && typeof controller.toggleBookmark === 'function') {
+    await controller.toggleBookmark.call(controller, post);
+    return;
+  }
+  if (request.action === 'edit' && typeof controller.editPost === 'function') {
+    await controller.editPost.call(controller, post);
+    return;
+  }
+  if (request.action === 'delete') {
+    if (typeof controller.deletePostWithConfirmation === 'function') {
+      await controller.deletePostWithConfirmation.call(controller, post);
+      return;
+    }
+    if (typeof controller.deletePost === 'function') {
+      await controller.deletePost.call(controller, post);
+      return;
+    }
+  }
+  if (request.action === 'recover' && typeof controller.recoverPost === 'function') {
+    await controller.recoverPost.call(controller, post);
+    return;
+  }
+  if (request.action === 'flag') {
+    if (typeof controller.showPostFlags === 'function') {
+      await controller.showPostFlags.call(controller, post);
+      return;
+    }
+    if (typeof controller.send === 'function') {
+      await controller.send.call(controller, 'showFlags', post);
+      return;
+    }
+  }
+  throw new Error('当前操作没有可用的静默接口');
 }
 
-function exposeBoostControl(target: Element, request: TopicActionRequest): void {
-  const placeholder = getNativePostPlaceholder(request);
-  const mainOutlet = document.getElementById('main-outlet');
-  if (!placeholder || !mainOutlet) {
-    dispatchActionResult(target, request, {
-      ok: false,
-      phase: 'triggered',
-      message: '原站楼层尚未加载，请稍后重试',
-    });
-    return;
-  }
-
-  let attempting = false;
-  let timeout = 0;
-  const scrollX = window.scrollX;
-  const scrollY = window.scrollY;
-  const releasePost = (): void => discoursePluginApi?.preventCloak?.(request.postId, false);
-  const cleanup = (): void => {
-    observer.disconnect();
-    window.clearTimeout(timeout);
-    window.scrollTo(scrollX, scrollY);
+function readInteractionUser(value: unknown): TopicInteractionUser | null {
+  const username = readProperty(value, 'username');
+  if (typeof username !== 'string' || !username) return null;
+  const idValue = Number(readProperty(value, 'id'));
+  const name = readProperty(value, 'name');
+  const avatarTemplate = readProperty(value, 'avatar_template');
+  return {
+    ...(Number.isInteger(idValue) && idValue > 0 ? { id: idValue } : {}),
+    username,
+    ...(typeof name === 'string' ? { name } : {}),
+    ...(typeof avatarTemplate === 'string' ? { avatarTemplate } : {}),
   };
-  const attemptAction = (): void => {
-    const post = getNativePost(request);
-    if (!post || attempting || !canTriggerNativeAction(post, request.action)) return;
-    attempting = true;
-    cleanup();
-    void triggerNativeAction(post, target, request, releasePost);
-  };
-  const observer = new MutationObserver(attemptAction);
-  observer.observe(mainOutlet, { attributes: true, childList: true, subtree: true });
-  timeout = window.setTimeout(() => {
-    cleanup();
-    releasePost();
-    if (!attempting) {
-      dispatchActionResult(target, request, {
-        ok: false,
-        phase: 'triggered',
-        message: '原站 Boost 操作栏加载超时，请重试',
-      });
-    }
-  }, 8_000);
-
-  discoursePluginApi?.preventCloak?.(request.postId, true);
-  placeholder.scrollIntoView({ block: 'nearest' });
-  window.setTimeout(attemptAction, 0);
 }
 
-function routeToActionPost(target: Element, request: TopicActionRequest, url: URL): void {
-  if (!pageWindow.require) {
-    dispatchActionResult(target, request, {
-      ok: false,
-      phase: 'triggered',
-      message: 'Discourse 页面尚未就绪',
-    });
-    return;
-  }
+async function getLikeUsers(request: TopicInteractionRequest): Promise<{
+  users: TopicInteractionUser[];
+  total: number;
+  hasMore: boolean;
+}> {
+  const page = request.page ?? 0;
+  const pageSize = request.pageSize ?? 30;
+  const result = await getAjax()('/post_action_users', {
+    data: {
+      id: request.postId,
+      post_action_type_id: 2,
+      page,
+      limit: pageSize,
+    },
+  });
+  const values = readProperty(result, 'post_action_users');
+  const users = Array.isArray(values)
+    ? values.flatMap((value) => {
+        const user = readInteractionUser(value);
+        return user ? [user] : [];
+      })
+    : [];
+  const totalValue = Number(readProperty(result, 'total_rows_post_action_users'));
+  const total = Number.isInteger(totalValue) && totalValue >= 0 ? totalValue : users.length;
+  const hasMore = users.length >= pageSize && total > (page + 1) * pageSize;
+  return { users, total, hasMore };
+}
 
-  let attempting = false;
-  let timeout = 0;
-  const attemptAction = (): void => {
-    const post = getNativePost(request);
-    if (!post || attempting || !canTriggerNativeAction(post, request.action)) return;
-    attempting = true;
-    observer.disconnect();
-    window.clearTimeout(timeout);
-    void triggerNativeAction(post, target, request);
+function getReactionOptions(): TopicReactionOption[] {
+  const settings = lookupDiscourse('service:site-settings');
+  const enabledValue = readProperty(settings, 'discourse_reactions_enabled_reactions');
+  const mainValue = readProperty(settings, 'discourse_reactions_reaction_for_like');
+  if (typeof enabledValue !== 'string' || typeof mainValue !== 'string' || !mainValue) {
+    throw new Error('表态设置尚未就绪');
+  }
+  const ids = enabledValue.split('|').filter(Boolean);
+  if (!ids.includes(mainValue)) ids.unshift(mainValue);
+  const options = [...new Set(ids)].flatMap((id) => {
+    const url = getReactionUrl(id);
+    return url ? [{ id, url, isMain: id === mainValue }] : [];
+  });
+  if (options.length === 0) throw new Error('没有可用的表态');
+  return options;
+}
+
+async function executeInteraction(
+  request: TopicInteractionRequest,
+): Promise<TopicInteractionResult> {
+  if (request.interaction === 'reactionOptions') {
+    return {
+      requestId: request.requestId,
+      interaction: request.interaction,
+      ok: true,
+      reactionOptions: getReactionOptions(),
+    };
+  }
+  const result = await getLikeUsers(request);
+  return {
+    requestId: request.requestId,
+    interaction: request.interaction,
+    ok: true,
+    ...result,
   };
-  const observer = new MutationObserver(attemptAction);
-  observer.observe(document.body, { childList: true, subtree: true });
-  timeout = window.setTimeout(() => {
-    observer.disconnect();
-    if (!attempting) {
-      dispatchActionResult(target, request, {
-        ok: false,
-        phase: 'triggered',
-        message: getNativePost(request) ? '原站操作栏加载超时，请重试' : '原站楼层加载超时，请重试',
-      });
-    }
-  }, 8_000);
-
-  try {
-    const module = pageWindow.require('discourse/lib/url') as DiscourseUrlModule | undefined;
-    const routeTo = module?.default?.routeTo || module?.routeTo;
-    if (!routeTo) throw new Error('routeTo unavailable');
-    routeTo.call(module?.default || module, `${url.pathname}${url.search}${url.hash}`);
-    window.setTimeout(attemptAction, 0);
-  } catch {
-    observer.disconnect();
-    window.clearTimeout(timeout);
-    dispatchActionResult(target, request, {
-      ok: false,
-      phase: 'triggered',
-      message: '无法在后台打开对应楼层',
-    });
-  }
 }
 
 function handleActionRequest(event: Event): void {
   if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
   const request = parseTopicActionRequest(event.detail);
   if (!request || request.topicId !== getTopicId()) return;
-  const url = validateActionRoute(request);
-  if (!url) return;
+  if (!validateActionRoute(request)) return;
   const target = event.target;
-  const fallbackToNativeAction = (): void => {
-    const post = getNativePost(request);
-    if (post && canTriggerNativeAction(post, request.action)) {
-      void triggerNativeAction(post, target, request);
-    } else if (request.action === 'boost') {
-      exposeBoostControl(target, request);
-    } else {
-      routeToActionPost(target, request, url);
-    }
-  };
-  if (request.action === 'reply') {
-    void openReplyWithController(request).then((opened) => {
-      if (opened) {
-        dispatchActionResult(target, request, { ok: true, phase: 'triggered' });
-      } else {
-        fallbackToNativeAction();
-      }
+  void executeModelAction(request)
+    .then(() => dispatchActionResult(target, request, { ok: true, phase: 'settled' }))
+    .catch((error: unknown) => {
+      dispatchActionResult(target, request, {
+        ok: false,
+        phase: 'settled',
+        message: getErrorMessage(error),
+      });
     });
-  } else {
-    fallbackToNativeAction();
-  }
+}
+
+function handleInteractionRequest(event: Event): void {
+  if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
+  const request = parseTopicInteractionRequest(event.detail);
+  if (!request || request.topicId !== getTopicId()) return;
+  if (!validateActionRoute(request)) return;
+  const target = event.target;
+  void executeInteraction(request)
+    .then((result) => dispatchInteractionResult(target, request, result))
+    .catch((error: unknown) => {
+      dispatchInteractionResult(target, request, {
+        ok: false,
+        message: getErrorMessage(error),
+      });
+    });
 }
 
 function forwardEvent(topicId: number, value: unknown): void {
@@ -715,29 +623,7 @@ function forwardReactionToggle(value: unknown): void {
   const postId = Number(readProperty(post, 'id'));
   if (!topicId || !Number.isInteger(postId) || postId <= 0) return;
 
-  const reaction = readProperty(value, 'reaction') ?? readProperty(post, 'current_user_reaction');
-  const reactionIdValue = readProperty(reaction, 'id');
-  const currentReactionId =
-    typeof reactionIdValue === 'string' && reactionIdValue.length > 0 ? reactionIdValue : null;
-  let currentReactionUrl: string | undefined;
-  if (currentReactionId) {
-    try {
-      const textModule = pageWindow.require?.('discourse/lib/text') as
-        DiscourseTextModule | undefined;
-      currentReactionUrl = textModule?.emojiUrlFor?.(currentReactionId);
-    } catch {
-      currentReactionUrl = undefined;
-    }
-  }
-
-  const detail = parseTopicEventDetail({
-    topicId,
-    postId,
-    type: 'acted',
-    currentReactionId,
-    ...(currentReactionUrl ? { currentReactionUrl } : {}),
-  });
-  if (detail) dispatchTopicEvent(detail);
+  dispatchReactionState(postId, post);
 }
 
 function unsubscribe(): void {
@@ -796,7 +682,6 @@ function installPluginHook(): boolean {
     const module = pageWindow.require('discourse/lib/plugin-api') as PluginApiModule | undefined;
     if (!module?.withPluginApi) return false;
     module.withPluginApi('1.0.0', (api) => {
-      discoursePluginApi = api;
       discourseContainer = api.container || null;
       api.onPageChange(dispatchPageNavigation);
       api.onAppEvent?.('discourse-reactions:reaction-toggled', forwardReactionToggle);
@@ -820,6 +705,6 @@ installHistoryNavigationHook();
 window.addEventListener('popstate', dispatchHistoryNavigation);
 document.addEventListener('DOMContentLoaded', () => subscribeToCurrentTopic(), { once: true });
 document.addEventListener(TOPIC_ACTION_REQUEST_NAME, handleActionRequest);
-document.addEventListener(TOPIC_REACTION_PICKER_REQUEST_NAME, handleReactionPickerRequest);
+document.addEventListener(TOPIC_INTERACTION_REQUEST_NAME, handleInteractionRequest);
 document.addEventListener(TOPIC_CODE_HIGHLIGHT_REQUEST_NAME, () => highlightSplitCodeBlocks());
 discover();

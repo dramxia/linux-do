@@ -121,6 +121,22 @@ describe('TopicLayoutController', () => {
     expect(driver.reconcilePageContext).toHaveBeenCalledTimes(3);
   });
 
+  it('treats floor URL changes as locations within the same topic lifecycle', async () => {
+    controller.start(enabledSettings);
+    await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(1));
+
+    for (const floor of [20, 50, 80]) {
+      window.history.replaceState({}, '', `/t/topic/123/${floor}`);
+      document.dispatchEvent(new Event(HISTORY_NAVIGATION_EVENT_NAME));
+      window.dispatchEvent(new Event('page:change'));
+    }
+
+    expect(driver.activate).toHaveBeenCalledTimes(1);
+    expect(driver.invalidate).not.toHaveBeenCalled();
+    expect(driver.suspend).not.toHaveBeenCalled();
+    expect(driver.reconcilePageContext).toHaveBeenCalledTimes(6);
+  });
+
   it('invalidates data and activates once when the topic context changes', async () => {
     controller.start(enabledSettings);
     await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(1));
@@ -210,7 +226,37 @@ describe('TopicLayoutController', () => {
     expect(driver.activate).not.toHaveBeenCalled();
   });
 
-  it('restarts an in-flight load when a topic event would make its snapshot stale', async () => {
+  it('never turns in-flight topic events into a forced layout rebuild', async () => {
+    let finishInitial: (() => void) | undefined;
+    driver.activate.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          driver.state = 'loading';
+          finishInitial = () => {
+            driver.state = 'active';
+            resolve();
+          };
+        }),
+    );
+    controller.start(enabledSettings);
+    await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(1));
+
+    for (const postId of [4, 5, 6]) {
+      document.dispatchEvent(
+        new CustomEvent(TOPIC_EVENT_NAME, {
+          detail: { topicId: 123, type: 'created', postId },
+        }),
+      );
+    }
+    expect(driver.activate).toHaveBeenCalledTimes(1);
+    expect(driver.invalidate).not.toHaveBeenCalled();
+
+    finishInitial?.();
+    await vi.waitFor(() => expect(driver.invalidate).toHaveBeenCalledTimes(1));
+    expect(driver.activate).toHaveBeenCalledTimes(1);
+  });
+
+  it('only invalidates cached data for events received while loading', async () => {
     controller.start(enabledSettings);
     await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(1));
     driver.state = 'loading';
@@ -220,9 +266,11 @@ describe('TopicLayoutController', () => {
         detail: { topicId: 123, type: 'created', postId: 4 },
       }),
     );
-    await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(2));
+    driver.state = 'active';
+    window.dispatchEvent(new Event('page:change'));
 
-    expect(driver.invalidate).toHaveBeenCalledTimes(1);
+    expect(driver.activate).toHaveBeenCalledTimes(1);
+    expect(driver.invalidate).not.toHaveBeenCalled();
   });
 
   it('only reapplies layout when resize crosses the desktop breakpoint', async () => {

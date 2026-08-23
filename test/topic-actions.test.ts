@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   parseTopicActionRequest,
   parseTopicActionResult,
-  parseTopicReactionPickerRequest,
+  parseTopicInteractionRequest,
+  parseTopicInteractionResult,
 } from '../src/content/topic-actions';
 
 describe('topic action bridge validation', () => {
@@ -45,7 +46,7 @@ describe('topic action bridge validation', () => {
     ).toEqual({ requestId: 'action:2', ok: true, phase: 'settled' });
   });
 
-  it('accepts the native Boost action', () => {
+  it('accepts a Boost submission with inline content', () => {
     expect(
       parseTopicActionRequest({
         requestId: 'boost:1',
@@ -54,8 +55,38 @@ describe('topic action bridge validation', () => {
         floor: 7,
         action: 'boost',
         routeUrl: 'https://linux.do/t/topic/123/7',
+        boostRaw: '支持一下',
       })?.action,
     ).toBe('boost');
+  });
+
+  it('rejects a Boost action without content', () => {
+    expect(
+      parseTopicActionRequest({
+        requestId: 'boost:2',
+        topicId: 123,
+        postId: 456,
+        floor: 7,
+        action: 'boost',
+        routeUrl: 'https://linux.do/t/topic/123/7',
+      }),
+    ).toBeNull();
+  });
+
+  it('accepts a custom reaction action and rejects one without a reaction id', () => {
+    const request = {
+      requestId: 'reaction:1',
+      topicId: 123,
+      postId: 456,
+      floor: 7,
+      action: 'reaction',
+      routeUrl: 'https://linux.do/t/topic/123/7',
+    };
+    expect(parseTopicActionRequest({ ...request, reactionId: 'heart' })).toMatchObject({
+      action: 'reaction',
+      reactionId: 'heart',
+    });
+    expect(parseTopicActionRequest(request)).toBeNull();
   });
 
   it('rejects results with an unknown phase', () => {
@@ -64,36 +95,66 @@ describe('topic action bridge validation', () => {
     ).toBeNull();
   });
 
-  it('parses reaction picker hover requests and drops extra fields', () => {
+  it('parses silent interaction requests and drops extra fields', () => {
     expect(
-      parseTopicReactionPickerRequest(
+      parseTopicInteractionRequest(
         JSON.stringify({
+          requestId: 'interaction:1',
           topicId: 123,
           postId: 456,
           floor: 7,
-          open: true,
+          interaction: 'likeUsers',
+          page: 2,
+          pageSize: 30,
           routeUrl: 'https://linux.do/t/topic/123/7?ldo_comments_page=1',
           token: 'ignored',
         }),
       ),
     ).toEqual({
+      requestId: 'interaction:1',
       topicId: 123,
       postId: 456,
       floor: 7,
-      open: true,
+      interaction: 'likeUsers',
+      page: 2,
+      pageSize: 30,
       routeUrl: 'https://linux.do/t/topic/123/7?ldo_comments_page=1',
     });
   });
 
-  it('rejects invalid reaction picker requests', () => {
+  it('rejects malformed silent interaction requests', () => {
     expect(
-      parseTopicReactionPickerRequest({
+      parseTopicInteractionRequest({
+        requestId: 'interaction:2',
         topicId: 123,
         postId: 456,
         floor: 7,
-        open: 'yes',
+        interaction: 'likeUsers',
+        page: -1,
+        pageSize: 30,
         routeUrl: '/t/topic/123/7',
       }),
     ).toBeNull();
+  });
+
+  it('accepts sanitized reaction options and like users results', () => {
+    expect(
+      parseTopicInteractionResult({
+        requestId: 'interaction:3',
+        interaction: 'reactionOptions',
+        ok: true,
+        reactionOptions: [{ id: 'heart', url: 'https://linux.do/images/heart.png', isMain: true }],
+      }),
+    ).toMatchObject({ interaction: 'reactionOptions', ok: true });
+    expect(
+      parseTopicInteractionResult({
+        requestId: 'interaction:4',
+        interaction: 'likeUsers',
+        ok: true,
+        users: [{ id: 1, username: 'alice', avatarTemplate: '/avatar/{size}.png' }],
+        total: 1,
+        hasMore: false,
+      }),
+    ).toMatchObject({ interaction: 'likeUsers', ok: true, total: 1 });
   });
 });

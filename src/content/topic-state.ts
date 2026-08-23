@@ -1,35 +1,20 @@
 /* Linux.do 工具箱 - 双栏阅读的分页、路由与会话状态 */
 
+import { parseTopicRoute } from '../common/topic-route';
+
 export { parseTopicRoute, type TopicRoute } from '../common/topic-route';
 
 export const COMMENTS_PAGE_PARAM = 'ldo_comments_page';
 const SESSION_PREFIX = 'ldtk:split-reading:';
-
-export interface PendingNativeAction {
-  floor: number;
-  action: 'like' | 'reply' | 'bookmark' | 'more' | 'edit' | 'delete' | 'recover';
-}
 
 export interface TopicReadingState {
   page: number;
   leftScrollTop: number;
   rightScrollTop: number;
   articleFooterHeight?: number;
-  nativeMode?: boolean;
-  pendingAction?: PendingNativeAction;
 }
 
 export type PaginationItem = number | 'ellipsis';
-
-const NATIVE_ACTIONS = new Set<PendingNativeAction['action']>([
-  'like',
-  'reply',
-  'bookmark',
-  'more',
-  'edit',
-  'delete',
-  'recover',
-]);
 
 export function getPageCount(commentCount: number, perPage: number): number {
   return Math.max(1, Math.ceil(Math.max(0, commentCount) / perPage));
@@ -92,8 +77,29 @@ export function buildPaginationItems(currentPage: number, pageCount: number): Pa
 }
 
 export function updatePageUrl(url: URL, page: number): URL {
-  const next = new URL(url.href);
+  const next = getTopicBaseUrl(url);
   next.searchParams.set(COMMENTS_PAGE_PARAM, String(Math.max(1, Math.trunc(page))));
+  next.hash = '';
+  return next;
+}
+
+export function getTopicBaseUrl(url: URL): URL {
+  const next = new URL(url.href);
+  const route = parseTopicRoute(next.pathname);
+  if (!route?.floor) return next;
+  const parts = next.pathname.split('/').filter(Boolean);
+  parts.pop();
+  next.pathname = `/${parts.join('/')}`;
+  return next;
+}
+
+export function buildNativeFloorUrl(url: URL, floor: number): URL {
+  const next = getTopicBaseUrl(url);
+  if (Number.isFinite(floor) && floor > 1) {
+    next.pathname = `${next.pathname.replace(/\/$/, '')}/${Math.trunc(floor)}`;
+  }
+  next.searchParams.delete(COMMENTS_PAGE_PARAM);
+  next.hash = '';
   return next;
 }
 
@@ -112,14 +118,6 @@ export function readTopicState(
     if (typeof value.page !== 'number' || !Number.isFinite(value.page) || value.page < 1) {
       return null;
     }
-    const pending = value.pendingAction;
-    const pendingAction =
-      pending &&
-      Number.isInteger(pending.floor) &&
-      pending.floor > 0 &&
-      NATIVE_ACTIONS.has(pending.action)
-        ? pending
-        : undefined;
     const articleFooterHeight =
       typeof value.articleFooterHeight === 'number' &&
       Number.isFinite(value.articleFooterHeight) &&
@@ -131,8 +129,6 @@ export function readTopicState(
       leftScrollTop: Math.max(0, Number(value.leftScrollTop) || 0),
       rightScrollTop: Math.max(0, Number(value.rightScrollTop) || 0),
       ...(articleFooterHeight === undefined ? {} : { articleFooterHeight }),
-      nativeMode: value.nativeMode === true,
-      pendingAction,
     };
   } catch {
     return null;

@@ -1,18 +1,35 @@
 /* Linux.do 工具箱 - 主题正文/评论双栏阅读模式 */
 import type { DiscourseSettings } from '../common/settings';
-import { isSameTopicRoute, parseTopicRoute, type TopicRoute } from '../common/topic-route';
+import { isSameTopicIdentity, parseTopicRoute, type TopicRoute } from '../common/topic-route';
 import { injectButtons } from './buttons';
 import { copyToClipboard, showToast } from './output';
 import { TOPIC_CODE_HIGHLIGHT_REQUEST_NAME } from './topic-code-blocks';
-import { fetchPostReplies, TopicDataSource, type TopicPost } from './topic-api';
+import {
+  fetchPostReplies,
+  getTopicResponsePrefetchStatus,
+  TopicDataSource,
+  type InitialCommentBatchError,
+  type TopicPost,
+} from './topic-api';
+import {
+  beginTopicActivation,
+  finishTopicActivation,
+  markTopicPerfStage,
+  setTopicPerfInitialPage,
+} from './topic-perf';
 import {
   parseTopicActionResult,
+  parseTopicInteractionResult,
   TOPIC_ACTION_REQUEST_NAME,
   TOPIC_ACTION_RESULT_NAME,
-  TOPIC_REACTION_PICKER_REQUEST_NAME,
+  TOPIC_INTERACTION_REQUEST_NAME,
+  TOPIC_INTERACTION_RESULT_NAME,
   type TopicAction,
   type TopicActionRequest,
-  type TopicReactionPickerRequest,
+  type TopicInteractionRequest,
+  type TopicInteractionResult,
+  type TopicInteractionUser,
+  type TopicReactionOption,
 } from './topic-actions';
 import { parseTopicEventDetail, TOPIC_EVENT_NAME, type TopicEventDetail } from './topic-events';
 import { TopicReadTracker } from './topic-read-tracking';
@@ -23,15 +40,14 @@ import {
 } from './topic-page-context';
 import {
   buildPaginationItems,
+  buildNativeFloorUrl,
   clampPage,
   COMMENTS_PAGE_PARAM,
   deriveInitialPage,
   getCommentPageForFloor,
   getPageCount,
   readTopicState,
-  updatePageUrl,
   writeTopicState,
-  type PendingNativeAction,
   type TopicReadingState,
 } from './topic-state';
 
@@ -41,7 +57,6 @@ const PENDING_CLASS = 'ldtk-split-reading-pending';
 const STYLE_ID = 'ldtk-topic-reading-style';
 const LOADING_STYLE_ID = 'ldtk-topic-reading-loading-style';
 const LOADING_ROOT_ID = 'ldtk-topic-reading-loading';
-const RETURN_BUTTON_ID = 'ldtk-native-return';
 const MIN_VIEWPORT_WIDTH = 1280;
 const SHELL_OFFSET_EPSILON = 0.2;
 const ARTICLE_FOOTER_DEFAULT_HEIGHT = 130;
@@ -50,21 +65,11 @@ const ARTICLE_FOOTER_MAX_RATIO = 0.5;
 const ARTICLE_CONTENT_MIN_HEIGHT = 160;
 const ARTICLE_FOOTER_KEYBOARD_STEP = 16;
 const CODE_COPY_RESET_DELAY = 3_000;
-let nativeAttemptKey: string | null = null;
+const LIKE_USERS_PAGE_SIZE = 30;
 let actionRequestSequence = 0;
 let loadingOverlayVersion = 0;
 let loadingOverlayHideTimer: number | null = null;
 let codeHighlightScheduled = false;
-
-const NATIVE_ACTION_SELECTORS: Record<PendingNativeAction['action'], string> = {
-  like: '.post-action-menu__like, button[title*="赞"], button[aria-label*="赞"]',
-  reply: '.post-action-menu__reply, button[title*="回复"], button[aria-label*="回复"]',
-  bookmark: '.post-action-menu__bookmark, button[title*="书签"], button[aria-label*="书签"]',
-  more: '.post-action-menu__more, button[title*="更多"], button[aria-label*="更多"]',
-  edit: '.post-action-menu__edit, button[title*="编辑"], button[aria-label*="编辑"]',
-  delete: '.post-action-menu__delete, button[title*="删除"], button[aria-label*="删除"]',
-  recover: '.post-action-menu__recover, button[title*="恢复"], button[aria-label*="恢复"]',
-};
 
 const LAYOUT_STYLE = `
 html.${ACTIVE_CLASS} {
@@ -77,19 +82,6 @@ html.${ACTIVE_CLASS} #main-outlet .ldtk-shadow-host {
 html.${ACTIVE_CLASS} .topic-navigation,
 html.${ACTIVE_CLASS} .timeline-container {
   display: none !important;
-}
-html.${ACTIVE_CLASS} #main-outlet .discourse-reactions-picker.is-expanded {
-  z-index: 410 !important;
-  visibility: visible !important;
-  pointer-events: auto !important;
-}
-html.${ACTIVE_CLASS} #main-outlet .discourse-boosts__input-container,
-html.${ACTIVE_CLASS} #main-outlet .discourse-boosts__input-container * {
-  visibility: visible !important;
-  pointer-events: auto !important;
-}
-html.${ACTIVE_CLASS} #main-outlet .discourse-boosts__input-container {
-  z-index: 410 !important;
 }
 html.${ACTIVE_CLASS} .fk-d-menu[data-content][data-identifier="emoji-picker"],
 html.${ACTIVE_CLASS} .fk-d-menu[data-content][data-identifier="emoji-picker"] * {
@@ -522,6 +514,89 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   max-width: 100%;
   padding: 0 14px;
 }
+.ldtk-comment-slot {
+  min-height: 118px;
+  border-bottom: 1px solid var(--ldtk-border);
+}
+.ldtk-comment-slot:last-child { border-bottom: 0; }
+.ldtk-comment-slot > .topic-post { border-bottom: 0; }
+.ldtk-comment-skeleton {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 10px;
+  min-height: 118px;
+  padding: 14px 0;
+}
+.ldtk-comment-skeleton-avatar,
+.ldtk-comment-skeleton-line,
+.ldtk-article-skeleton-line {
+  background: linear-gradient(
+    90deg,
+    var(--ldtk-muted) 0%,
+    var(--ldtk-accent) 45%,
+    var(--ldtk-muted) 100%
+  );
+  background-size: 220% 100%;
+  animation: ldtk-skeleton-shimmer 1.4s linear infinite;
+}
+.ldtk-comment-skeleton-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+}
+.ldtk-comment-skeleton-copy {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding-top: 4px;
+}
+.ldtk-comment-skeleton-line,
+.ldtk-article-skeleton-line {
+  height: 12px;
+  border-radius: calc(var(--ldtk-radius) - 4px);
+}
+.ldtk-comment-skeleton-line:first-child { width: 38%; }
+.ldtk-comment-skeleton-line:nth-child(2) { width: 92%; }
+.ldtk-comment-skeleton-line:nth-child(3) { width: 70%; }
+.ldtk-article-skeleton {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 12px 0;
+}
+.ldtk-article-skeleton-line {
+  height: 14px;
+  margin-bottom: 14px;
+}
+.ldtk-article-skeleton-line:first-child { width: 44%; height: 28px; margin-bottom: 26px; }
+.ldtk-article-skeleton-line:nth-child(2) { width: 94%; }
+.ldtk-article-skeleton-line:nth-child(3) { width: 86%; }
+.ldtk-article-skeleton-line:nth-child(4) { width: 72%; }
+.ldtk-comment-batch-error {
+  display: grid;
+  place-items: center;
+  min-height: 118px;
+  padding: 16px;
+  color: var(--ldtk-muted-foreground);
+  text-align: center;
+}
+.ldtk-comment-batch-error p { margin: 0 0 10px; }
+.ldtk-comment-batch-error button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: calc(var(--ldtk-radius) - 2px);
+  color: var(--ldtk-foreground);
+  background: var(--ldtk-background);
+  cursor: pointer;
+}
+.ldtk-comment-batch-error button:focus-visible {
+  outline: 2px solid var(--ldtk-ring);
+  outline-offset: 2px;
+}
+@keyframes ldtk-skeleton-shimmer {
+  to { background-position: -220% 0; }
+}
 .${ROOT_CLASS} .topic-post {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
@@ -918,6 +993,133 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
 .ldtk-post-menu-button.bookmarked {
   color: var(--ldtk-brand);
 }
+.ldtk-inline-popover {
+  position: absolute;
+  z-index: 12;
+  width: min(340px, calc(100vw - 32px));
+  max-height: min(420px, calc(100vh - 96px));
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: 6px;
+  color: var(--ldtk-foreground);
+  background: var(--ldtk-background);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 16%);
+}
+.ldtk-inline-popover:focus-visible {
+  outline: 2px solid var(--ldtk-ring);
+  outline-offset: 2px;
+}
+.ldtk-inline-popover-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.ldtk-inline-popover-title {
+  margin: 0 auto 0 0;
+  color: var(--ldtk-foreground);
+  font-size: 14px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+.ldtk-inline-popover-close {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+}
+.ldtk-inline-popover-status {
+  min-height: 24px;
+  margin: 0;
+  color: var(--ldtk-muted-foreground);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ldtk-reaction-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));
+  gap: 8px;
+}
+.ldtk-reaction-option {
+  position: relative;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: 6px;
+  color: var(--ldtk-foreground);
+  background: var(--ldtk-background);
+  cursor: pointer;
+}
+.ldtk-reaction-option:hover { background: var(--ldtk-accent); }
+.ldtk-reaction-option:focus-visible {
+  outline: 2px solid var(--ldtk-ring);
+  outline-offset: 2px;
+}
+.ldtk-reaction-option[aria-pressed="true"] { border-color: var(--ldtk-brand); }
+.ldtk-reaction-option:disabled { cursor: wait; opacity: 0.5; }
+.ldtk-reaction-option img {
+  display: block;
+  width: 24px;
+  height: 24px;
+  margin: auto;
+  object-fit: contain;
+}
+.ldtk-like-users-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ldtk-like-user {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px;
+  border-radius: 5px;
+}
+.ldtk-like-user:hover { background: var(--ldtk-muted); }
+.ldtk-like-user-avatar,
+.ldtk-like-user-avatar-placeholder {
+  display: block;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--ldtk-muted);
+  object-fit: cover;
+}
+.ldtk-like-user-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: var(--ldtk-foreground);
+  text-decoration: none;
+}
+.ldtk-like-user-copy strong,
+.ldtk-like-user-copy span {
+  overflow-wrap: anywhere;
+}
+.ldtk-like-user-copy strong { font-size: 13px; font-weight: 600; }
+.ldtk-like-user-copy span { color: var(--ldtk-muted-foreground); font-size: 12px; }
+.ldtk-like-users-more {
+  width: 100%;
+  min-height: 36px;
+  margin-top: 8px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: 5px;
+  color: var(--ldtk-foreground);
+  background: var(--ldtk-background);
+  cursor: pointer;
+}
+.ldtk-like-users-more:hover { background: var(--ldtk-accent); }
+.ldtk-like-users-more:focus-visible {
+  outline: 2px solid var(--ldtk-ring);
+  outline-offset: 2px;
+}
+.ldtk-like-users-more:disabled { cursor: wait; opacity: 0.5; }
 .ldtk-post-menu-button.post-action-menu__reply {
   padding-inline: 9px;
   color: var(--ldtk-foreground);
@@ -981,6 +1183,66 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
 }
 .${ROOT_CLASS} .discourse-boosts__add-btn:hover {
   color: var(--ldtk-foreground);
+}
+.${ROOT_CLASS} .ldtk-boost-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: 6px;
+  background: var(--ldtk-background);
+}
+.${ROOT_CLASS} .ldtk-boost-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.${ROOT_CLASS} .ldtk-boost-label {
+  color: var(--ldtk-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+.${ROOT_CLASS} .ldtk-boost-input {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid var(--ldtk-border);
+  border-radius: 5px;
+  color: var(--ldtk-foreground);
+  background: var(--ldtk-background);
+  font: inherit;
+  letter-spacing: 0;
+}
+.${ROOT_CLASS} .ldtk-boost-input:focus-visible {
+  outline: 2px solid var(--ldtk-ring);
+  outline-offset: 1px;
+}
+.${ROOT_CLASS} .ldtk-boost-meta,
+.${ROOT_CLASS} .ldtk-boost-error {
+  min-height: 18px;
+  margin: 0;
+  color: var(--ldtk-muted-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.${ROOT_CLASS} .ldtk-boost-error {
+  color: var(--danger, #b42318);
+}
+.${ROOT_CLASS} .ldtk-boost-submit,
+.${ROOT_CLASS} .ldtk-boost-cancel {
+  min-width: 36px;
+  min-height: 36px;
+  justify-content: center;
+}
+.${ROOT_CLASS} .ldtk-boost-submit {
+  color: var(--secondary, #fff);
+  background: var(--tertiary, #0f766e);
+}
+.${ROOT_CLASS} .ldtk-boost-editor[aria-busy="true"] .ldtk-boost-input {
+  opacity: 0.7;
 }
 .ldtk-inline-replies {
   margin-top: 8px;
@@ -1091,35 +1353,6 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   outline-offset: -2px;
   background: var(--ldtk-muted) !important;
 }
-#${RETURN_BUTTON_ID} {
-  position: fixed;
-  right: 20px;
-  bottom: 20px;
-  z-index: 2147483646;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 7px 12px;
-  border: 1px solid var(--primary, #18181b);
-  border-radius: 8px;
-  color: var(--secondary, #fff);
-  background: var(--primary, #18181b);
-  box-shadow:
-    0 4px 6px -1px rgb(0 0 0 / 0.1),
-    0 2px 4px -2px rgb(0 0 0 / 0.1);
-  font: 500 12px/1.2 var(--font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif);
-  cursor: pointer;
-  transition:
-    opacity 120ms ease,
-    transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
-}
-#${RETURN_BUTTON_ID}:hover { opacity: 0.9; }
-#${RETURN_BUTTON_ID}:active { transform: scale(0.98); }
-#${RETURN_BUTTON_ID}:focus-visible {
-  outline: 2px solid var(--tertiary, #0f766e);
-  outline-offset: 3px;
-}
 @keyframes ldtk-refresh-spin {
   to { transform: rotate(-360deg); }
 }
@@ -1138,13 +1371,17 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .${ROOT_CLASS} *, #${RETURN_BUTTON_ID} { scroll-behavior: auto !important; }
+  .${ROOT_CLASS} * { scroll-behavior: auto !important; }
   .${ROOT_CLASS} .heart-animation { animation: none !important; }
   .${ROOT_CLASS} button { transition: none !important; }
   .${ROOT_CLASS} button:active { transform: none !important; }
   .ldtk-toolbar-button[aria-busy="true"] .d-icon { animation: none !important; }
-  #${RETURN_BUTTON_ID} { transition: none !important; }
-  #${RETURN_BUTTON_ID}:active { transform: none !important; }
+  .ldtk-comment-skeleton-avatar,
+  .ldtk-comment-skeleton-line,
+  .ldtk-article-skeleton-line {
+    animation: none !important;
+    background: var(--ldtk-muted) !important;
+  }
 }
 `;
 
@@ -1253,6 +1490,7 @@ const LUCIDE_ICONS: Readonly<Record<string, string>> = {
   'chevron-left': '<path d="m15 18-6-6 6-6"/>',
   'chevron-right': '<path d="m9 18 6-6-6-6"/>',
   'chevron-up': '<path d="m18 15-6-6-6 6"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   ellipsis:
     '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
@@ -1268,10 +1506,13 @@ const LUCIDE_ICONS: Readonly<Record<string, string>> = {
   reply: '<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>',
   rocket:
     '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
+  'smile-plus':
+    '<path d="M22 11v1a10 10 0 1 1-9-10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/><path d="M19 3v6"/><path d="M16 6h6"/>',
   'rotate-left':
     '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
   'trash-can':
     '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
+  xmark: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
 };
 /* Discourse 图标名 → lucide 图标名 */
 const LUCIDE_NAME_MAP: Readonly<Record<string, string>> = {
@@ -1380,27 +1621,8 @@ function createIconButton(className: string, icon: string, label: string): HTMLB
   return button;
 }
 
-function getNativePost(floor: number): HTMLElement | null {
-  const candidates = document.querySelectorAll<HTMLElement>(
-    `#main-outlet .topic-post[data-post-number="${floor}"], #main-outlet article[data-post-number="${floor}"]`,
-  );
-  return candidates[0] || null;
-}
-
-function buildNativeFloorUrl(floor: number): string {
-  const url = new URL(window.location.href);
-  const parts = window.location.pathname.split('/').filter(Boolean);
-  const numericIndexes = parts.flatMap((part, index) => (/^\d+$/.test(part) ? [index] : []));
-  if (numericIndexes.length >= 2) parts.splice(numericIndexes[1], 1);
-  if (floor > 1) parts.push(String(floor));
-  url.pathname = `/${parts.join('/')}`;
-  url.searchParams.delete(COMMENTS_PAGE_PARAM);
-  url.hash = '';
-  return url.href;
-}
-
-function removeReturnButton(): void {
-  document.getElementById(RETURN_BUTTON_ID)?.remove();
+function getNativeFloorUrl(floor: number): string {
+  return buildNativeFloorUrl(new URL(window.location.href), floor).href;
 }
 
 /* 双栏加载遮罩：数据拉取期间覆盖页面，避免原生界面闪动 */
@@ -1428,6 +1650,9 @@ function showLoadingOverlay(): void {
     overlay.append(spinner, createElement('div', '', '正在加载双栏阅读…'));
     (document.body || document.documentElement).appendChild(overlay);
   }
+  overlay.setAttribute('role', 'status');
+  overlay.setAttribute('aria-live', 'polite');
+  overlay.removeAttribute('aria-hidden');
   const header = document.querySelector<HTMLElement>('.d-header-wrap, .d-header');
   const height = Math.max(0, Math.round(header?.getBoundingClientRect().bottom || 0));
   overlay.style.setProperty('--ldtk-header-height', `${height || 60}px`);
@@ -1447,6 +1672,9 @@ function hideLoadingOverlay(): void {
   const overlay = document.getElementById(LOADING_ROOT_ID);
   if (!overlay) return;
   overlay.dataset.visible = 'false';
+  overlay.setAttribute('aria-hidden', 'true');
+  overlay.removeAttribute('role');
+  overlay.removeAttribute('aria-live');
   loadingOverlayHideTimer = window.setTimeout(() => {
     if (version !== loadingOverlayVersion) return;
     loadingOverlayHideTimer = null;
@@ -1498,75 +1726,8 @@ function addHighlight(element: HTMLElement): void {
   window.setTimeout(() => element.classList.remove('ldtk-post-highlight'), 1800);
 }
 
-interface NativeModeOptions {
-  route: TopicRoute;
-  state: TopicReadingState;
-  requestReturn: () => void;
-}
-
-function tryPendingNativeAction(route: TopicRoute, state: TopicReadingState): void {
-  const pending = state.pendingAction;
-  if (!pending) return;
-
-  const attempt = (): boolean => {
-    const post = getNativePost(pending.floor);
-    if (!post) return false;
-    post.scrollIntoView({ block: 'center' });
-    addHighlight(post);
-    const control = post.querySelector<HTMLElement>(NATIVE_ACTION_SELECTORS[pending.action]);
-    control?.click();
-    writeTopicState(route.topicId, { ...state, pendingAction: undefined });
-    return true;
-  };
-
-  if (attempt()) return;
-  if (route.floor !== pending.floor) {
-    window.location.assign(buildNativeFloorUrl(pending.floor));
-    return;
-  }
-
-  const observer = new MutationObserver(() => {
-    if (attempt()) observer.disconnect();
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-  window.setTimeout(() => observer.disconnect(), 8000);
-}
-
-function ensureNativeMode(options: NativeModeOptions): void {
-  ensureLayoutStyle();
-  clearPendingTopicLayout();
-  document.documentElement.classList.remove(ACTIVE_CLASS);
-  document.querySelector(`.${ROOT_CLASS}`)?.remove();
-  let button = document.getElementById(RETURN_BUTTON_ID) as HTMLButtonElement | null;
-  if (!button) {
-    button = createButton('', '返回双栏阅读');
-    button.id = RETURN_BUTTON_ID;
-    button.prepend(createLucideIcon('arrow-left', 13));
-    document.body.appendChild(button);
-  }
-  button.onclick = () => {
-    nativeAttemptKey = null;
-    removeReturnButton();
-    writeTopicState(options.route.topicId, {
-      ...options.state,
-      nativeMode: false,
-      pendingAction: undefined,
-    });
-    options.requestReturn();
-  };
-  const pending = options.state.pendingAction;
-  if (pending) {
-    const attemptKey = `${options.route.topicId}:${pending.floor}:${pending.action}`;
-    if (attemptKey !== nativeAttemptKey) {
-      nativeAttemptKey = attemptKey;
-      tryPendingNativeAction(options.route, options.state);
-    }
-  }
-}
-
 interface LayoutCallbacks {
   requestRefresh: () => Promise<void>;
-  handoffNative: (floor: number, action?: PendingNativeAction['action']) => void;
 }
 
 interface ShellGeometry {
@@ -1602,11 +1763,16 @@ class TopicLayout {
   private readonly state: TopicReadingState;
   private readonly eventVersions = new Map<number, number>();
   private readonly reactionImages = new Map<number, { id: string; url?: string }>();
+  private readonly reactionOptions = new Map<string, TopicReactionOption>();
   private readonly replyAborts = new Map<number, AbortController>();
   private readonly codeCopyResetTimers = new Map<HTMLButtonElement, number>();
+  private readonly failedCommentOffsets = new Set<number>();
   private articleReplies: TopicPost[] = [];
+  private articleRendered = false;
   private readTracker: TopicReadTracker | null = null;
   private pageAbort: AbortController | null = null;
+  private injectButtonsFrame: number | null = null;
+  private retryCountdownTimer: number | null = null;
   private newReplyCount = 0;
   private destroyed = false;
   private saveTimer: number | null = null;
@@ -1644,40 +1810,154 @@ class TopicLayout {
     this.articleFooterHeight = this.state.articleFooterHeight;
   }
 
-  mount(initialPosts: TopicPost[], articleReplies: TopicPost[] = []): void {
+  mountShell(articleReplies: TopicPost[] = []): void {
     this.articleReplies = articleReplies;
     this.ensureStyle();
     this.root.setAttribute('aria-label', '主题双栏阅读');
     const grid = createElement('div', 'ldtk-reading-grid');
     grid.append(this.articlePane, this.commentsPane);
     this.root.appendChild(grid);
-    this.renderArticle();
+    if (this.source.articleReady) this.renderArticle();
+    else this.renderArticleSkeleton();
     this.renderCommentsShell();
-    this.renderComments(initialPosts);
+    this.renderCommentSlots();
     this.updateHeaderOffset();
     document.body.appendChild(this.root);
     this.constrainArticleFooterHeight();
     document.documentElement.classList.add(ACTIVE_CLASS);
     clearPendingTopicLayout();
-    removeReturnButton();
 
     this.articleScroll.scrollTop = this.state.leftScrollTop;
     this.commentsPane.scrollTop = this.state.rightScrollTop;
     this.articleScroll.addEventListener('scroll', this.scheduleSave, { passive: true });
     this.commentsPane.addEventListener('scroll', this.scheduleSave, { passive: true });
     this.root.addEventListener('click', this.handleClick);
-    this.root.addEventListener('pointerover', this.handleReactionPointerOver);
-    this.root.addEventListener('pointerout', this.handleReactionPointerOut);
-    this.root.addEventListener('focusin', this.handleReactionFocusIn);
-    this.root.addEventListener('focusout', this.handleReactionFocusOut);
+    this.root.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('popstate', this.handlePopState);
     window.addEventListener('pagehide', this.handlePageHide);
     document.addEventListener('click', this.handleNativeShellClick, true);
     document.addEventListener('transitionend', this.handleNativeShellTransitionEnd, true);
     document.addEventListener(TOPIC_EVENT_NAME, this.handleTopicEvent as EventListener);
-    injectButtons(this.settings);
+    this.scheduleInjectButtons();
+  }
 
-    if (this.route.floor) void this.goToFloor(this.route.floor, false);
+  mount(initialPosts: TopicPost[], articleReplies: TopicPost[] = []): void {
+    this.mountShell(articleReplies);
+    this.applyCommentBatch(0, initialPosts);
+    this.finalizeInitialComments([]);
+  }
+
+  revealArticle(articleReplies: TopicPost[] = this.articleReplies): void {
+    if (this.destroyed || !this.source.articleReady) return;
+    const repliesChanged =
+      articleReplies.length !== this.articleReplies.length ||
+      articleReplies.some((reply, index) => reply.id !== this.articleReplies[index]?.id);
+    this.articleReplies = articleReplies;
+    if (this.articleRendered && !repliesChanged) return;
+    this.renderArticle();
+    this.flushInjectButtons();
+  }
+
+  applyCommentBatch(pageOffset: number, posts: readonly TopicPost[]): void {
+    if (this.destroyed) return;
+    posts.forEach((post, index) => {
+      const offset = pageOffset + index;
+      const slot = this.getCommentSlot(offset);
+      if (!slot) return;
+      slot.hidden = false;
+      slot.style.removeProperty('display');
+      slot.style.removeProperty('min-height');
+      slot.replaceChildren(this.createPost(post));
+      slot.dataset.state = 'ready';
+      this.failedCommentOffsets.delete(offset);
+      if (this.route.floor === post.post_number) this.highlightFloor(post.post_number);
+    });
+    this.observeRenderedComments();
+    this.scheduleInjectButtons();
+  }
+
+  applyCommentBatchError(failure: InitialCommentBatchError): void {
+    if (this.destroyed) return;
+    const offsets = [...new Set(failure.pageOffsets)].sort((left, right) => left - right);
+    offsets.forEach((offset) => {
+      const slot = this.getCommentSlot(offset);
+      if (!slot) return;
+      slot.hidden = false;
+      slot.style.removeProperty('display');
+      slot.style.removeProperty('min-height');
+      this.failedCommentOffsets.add(offset);
+      slot.dataset.state = 'failed';
+    });
+    const groups: number[][] = [];
+    offsets.forEach((offset) => {
+      const group = groups[groups.length - 1];
+      if (!group || offset !== (group[group.length - 1] as number) + 1) groups.push([offset]);
+      else group.push(offset);
+    });
+    groups.forEach((group) => {
+      const slot = this.getCommentSlot(group[0] as number);
+      if (!slot) return;
+      const error = createElement('div', 'ldtk-comment-batch-error');
+      error.setAttribute('role', 'group');
+      const message = createElement('p', '', `${group.length} 条评论加载失败`);
+      const retry = createButton('', '重试评论');
+      retry.dataset.retryComments = 'true';
+      if (failure.retryAt && failure.retryAt > Date.now()) {
+        retry.disabled = true;
+        retry.dataset.retryAt = String(failure.retryAt);
+        retry.title = '请求受到限流，请稍后重试';
+      }
+      error.append(message, retry);
+      slot.replaceChildren(error);
+      slot.style.minHeight = `${group.length * 118}px`;
+      group.slice(1).forEach((offset) => {
+        const groupedSlot = this.getCommentSlot(offset);
+        if (!groupedSlot) return;
+        groupedSlot.hidden = true;
+        groupedSlot.style.display = 'none';
+      });
+    });
+    this.status.hidden = false;
+    this.status.textContent = '部分评论加载失败，可重试';
+    this.scheduleRetryCountdown();
+  }
+
+  enrichReplyTargets(): void {
+    if (this.destroyed) return;
+    this.commentsList.querySelectorAll<HTMLElement>('.topic-post').forEach((current) => {
+      const postId = Number(current.dataset.postId);
+      const post = this.source.getCachedPost(postId);
+      if (!post?.reply_to_post_number) return;
+      const target = current.querySelector<HTMLButtonElement>('.ldtk-reply-target');
+      if (!target) return;
+      const replyTargetPost = this.source.getCachedPostByNumber(post.reply_to_post_number);
+      const replyTargetUsername = replyTargetPost?.username.trim();
+      target.textContent = replyTargetUsername
+        ? `回复 @${replyTargetUsername} · #${post.reply_to_post_number}`
+        : `回复 #${post.reply_to_post_number}`;
+      target.title = replyTargetUsername
+        ? `跳转到 @${replyTargetUsername} 的 ${post.reply_to_post_number} 楼评论`
+        : `跳转到 ${post.reply_to_post_number} 楼`;
+    });
+  }
+
+  finalizeInitialComments(failedPageOffsets: readonly number[]): void {
+    if (this.destroyed) return;
+    failedPageOffsets.forEach((offset) => this.failedCommentOffsets.add(offset));
+    this.commentsPane.setAttribute('aria-busy', 'false');
+    this.renderPagination();
+    if (this.source.commentCount === 0) {
+      this.status.hidden = false;
+      this.status.textContent = '暂无评论';
+    } else if (this.failedCommentOffsets.size === 0) {
+      this.status.hidden = true;
+    } else {
+      this.status.hidden = false;
+      this.status.textContent = '部分评论加载失败，可重试';
+    }
+    this.observeRenderedComments();
+    this.flushInjectButtons();
+    if (this.route.floor) void this.goToFloor(this.route.floor);
   }
 
   destroy(save = true, preserveShell = false): void {
@@ -1690,6 +1970,10 @@ class TopicLayout {
       window.cancelAnimationFrame(this.articleFooterResizeFrame);
       this.articleFooterResizeFrame = null;
     }
+    if (this.injectButtonsFrame !== null) window.cancelAnimationFrame(this.injectButtonsFrame);
+    this.injectButtonsFrame = null;
+    if (this.retryCountdownTimer !== null) window.clearTimeout(this.retryCountdownTimer);
+    this.retryCountdownTimer = null;
     this.articleFooterResize = null;
     delete this.articlePane.dataset.resizingFooter;
     this.clearSidebarAlignments();
@@ -1702,10 +1986,7 @@ class TopicLayout {
     this.articleScroll.removeEventListener('scroll', this.scheduleSave);
     this.commentsPane.removeEventListener('scroll', this.scheduleSave);
     this.root.removeEventListener('click', this.handleClick);
-    this.root.removeEventListener('pointerover', this.handleReactionPointerOver);
-    this.root.removeEventListener('pointerout', this.handleReactionPointerOut);
-    this.root.removeEventListener('focusin', this.handleReactionFocusIn);
-    this.root.removeEventListener('focusout', this.handleReactionFocusOut);
+    this.root.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('popstate', this.handlePopState);
     window.removeEventListener('pagehide', this.handlePageHide);
     document.removeEventListener('click', this.handleNativeShellClick, true);
@@ -1735,13 +2016,13 @@ class TopicLayout {
 
   matches(route: TopicRoute, settings: DiscourseSettings): boolean {
     return (
-      isSameTopicRoute(this.route, route) &&
+      isSameTopicIdentity(this.route, route) &&
       this.settings.commentsPerPage === settings.commentsPerPage
     );
   }
 
   matchesRoute(route: TopicRoute | null): boolean {
-    return isSameTopicRoute(this.route, route);
+    return isSameTopicIdentity(this.route, route);
   }
 
   private ensureStyle(): void {
@@ -1853,6 +2134,17 @@ class TopicLayout {
     this.updateHeaderOffset();
   };
 
+  private renderArticleSkeleton(): void {
+    const skeleton = createElement('div', 'ldtk-article-skeleton');
+    skeleton.setAttribute('aria-hidden', 'true');
+    for (let index = 0; index < 4; index += 1) {
+      skeleton.appendChild(createElement('div', 'ldtk-article-skeleton-line'));
+    }
+    this.articlePane.setAttribute('aria-busy', 'true');
+    this.articleScroll.replaceChildren(skeleton);
+    this.articlePane.replaceChildren(this.articleScroll);
+  }
+
   private renderArticle(): void {
     const scrollTop = this.articleScroll.scrollTop;
     const header = createElement('header', 'ldtk-article-header');
@@ -1919,10 +2211,12 @@ class TopicLayout {
     content.appendChild(body);
     this.articleScroll.replaceChildren(header, content);
     this.articlePane.replaceChildren(this.articleScroll, footer);
+    this.articlePane.setAttribute('aria-busy', 'false');
     this.articleFooter = footer;
     this.articleFooterResizer = resizer;
     this.constrainArticleFooterHeight();
     this.articleScroll.scrollTop = scrollTop;
+    this.articleRendered = true;
   }
 
   private getArticleFooterHeightBounds(): { min: number; max: number } {
@@ -2108,6 +2402,81 @@ class TopicLayout {
     );
   }
 
+  private renderCommentSlots(): void {
+    this.commentsPane.setAttribute('aria-busy', 'true');
+    this.status.hidden = false;
+    this.status.textContent = '正在加载评论...';
+    const start = (this.currentPage - 1) * this.settings.commentsPerPage;
+    const count = this.source.commentPostIds.slice(
+      start,
+      start + this.settings.commentsPerPage,
+    ).length;
+    const fragment = document.createDocumentFragment();
+    for (let offset = 0; offset < count; offset += 1) {
+      const slot = createElement('div', 'ldtk-comment-slot');
+      slot.dataset.pageOffset = String(offset);
+      slot.dataset.state = 'loading';
+      const skeleton = createElement('div', 'ldtk-comment-skeleton');
+      skeleton.setAttribute('aria-hidden', 'true');
+      const avatar = createElement('div', 'ldtk-comment-skeleton-avatar');
+      const copy = createElement('div', 'ldtk-comment-skeleton-copy');
+      for (let line = 0; line < 3; line += 1) {
+        copy.appendChild(createElement('div', 'ldtk-comment-skeleton-line'));
+      }
+      skeleton.append(avatar, copy);
+      slot.appendChild(skeleton);
+      fragment.appendChild(slot);
+    }
+    this.commentsList.replaceChildren(fragment);
+  }
+
+  private getCommentSlot(pageOffset: number): HTMLElement | null {
+    return this.commentsList.querySelector<HTMLElement>(
+      `.ldtk-comment-slot[data-page-offset="${pageOffset}"]`,
+    );
+  }
+
+  private observeRenderedComments(): void {
+    this.readTracker ??= new TopicReadTracker(this.source.topic.id, this.commentsPane);
+    this.readTracker.observe(
+      Array.from(this.commentsList.querySelectorAll<HTMLElement>('.topic-post')),
+    );
+  }
+
+  private scheduleInjectButtons(): void {
+    if (this.injectButtonsFrame !== null) return;
+    this.injectButtonsFrame = window.requestAnimationFrame(() => {
+      this.injectButtonsFrame = null;
+      if (this.destroyed) return;
+      injectButtons(this.settings);
+    });
+  }
+
+  private flushInjectButtons(): void {
+    if (this.injectButtonsFrame !== null) window.cancelAnimationFrame(this.injectButtonsFrame);
+    this.injectButtonsFrame = null;
+    if (!this.destroyed) injectButtons(this.settings);
+  }
+
+  private scheduleRetryCountdown(): void {
+    if (this.retryCountdownTimer !== null) window.clearTimeout(this.retryCountdownTimer);
+    this.retryCountdownTimer = null;
+    let pending = false;
+    this.commentsList
+      .querySelectorAll<HTMLButtonElement>('[data-retry-comments]')
+      .forEach((button) => {
+        const retryAt = Number(button.dataset.retryAt);
+        const remainingSeconds = Math.max(0, Math.ceil((retryAt - Date.now()) / 1_000));
+        button.disabled = remainingSeconds > 0;
+        button.textContent = remainingSeconds > 0 ? `${remainingSeconds} 秒后重试` : '重试评论';
+        if (remainingSeconds === 0) button.removeAttribute('title');
+        pending ||= remainingSeconds > 0;
+      });
+    if (pending) {
+      this.retryCountdownTimer = window.setTimeout(() => this.scheduleRetryCountdown(), 1_000);
+    }
+  }
+
   private createPost(post: TopicPost): HTMLElement {
     const article = createElement('article', 'topic-post ldtk-reading-post');
     article.dataset.postId = String(post.id);
@@ -2152,7 +2521,7 @@ class TopicLayout {
       heading.appendChild(replyTarget);
     }
     const time = createElement('a', 'ldtk-post-meta');
-    time.href = buildNativeFloorUrl(post.post_number);
+    time.href = getNativeFloorUrl(post.post_number);
     const timestamp = createElement(
       'time',
       '',
@@ -2179,6 +2548,7 @@ class TopicLayout {
 
   private createPostControls(post: TopicPost): HTMLElement {
     const controls = createElement('nav', 'post-controls ldtk-post-controls');
+    controls.style.position = 'relative';
     controls.setAttribute('aria-label', `${post.post_number} 楼操作`);
     const extraControls = createElement('div', 'ldtk-post-extra-controls');
     const actions = createElement('div', 'actions ldtk-post-actions');
@@ -2207,16 +2577,18 @@ class TopicLayout {
     };
 
     if (likeCount > 0) {
-      const likeUsers = addNativeAction(
-        extraControls,
-        'likeUsers',
-        'd-liked',
-        `${likeCount} 个赞，查看点赞用户`,
-        'post-action-menu__like-count like-count button-count highlight-action',
-        String(likeCount),
-      );
+      const likeUsers = createPostMenuButton({
+        className: 'post-action-menu__like-count like-count button-count highlight-action',
+        icon: 'd-liked',
+        label: `${likeCount} 个赞，查看点赞用户`,
+        visibleLabel: String(likeCount),
+      });
+      likeUsers.dataset.topicAction = 'likeUsers';
+      likeUsers.dataset.postId = String(post.id);
+      likeUsers.dataset.floor = String(post.post_number);
       likeUsers.setAttribute('aria-haspopup', 'dialog');
       likeUsers.setAttribute('aria-expanded', 'false');
+      extraControls.appendChild(likeUsers);
     }
 
     if (replyCount > 0) {
@@ -2251,7 +2623,17 @@ class TopicLayout {
         if (reactionImage) likeButton.replaceChildren(reactionImage);
       }
       likeButton.setAttribute('aria-pressed', String(hasReaction));
-      likeButton.setAttribute('aria-haspopup', 'menu');
+      const reactionPicker = createPostMenuButton({
+        className: 'ldtk-reaction-picker-trigger btn-icon',
+        icon: 'smile-plus',
+        label: '选择其他表态',
+      });
+      reactionPicker.dataset.openReactions = 'true';
+      reactionPicker.dataset.postId = String(post.id);
+      reactionPicker.dataset.floor = String(post.post_number);
+      reactionPicker.setAttribute('aria-haspopup', 'menu');
+      reactionPicker.setAttribute('aria-expanded', 'false');
+      actions.appendChild(reactionPicker);
     }
 
     const copyLink = createPostMenuButton({
@@ -2401,6 +2783,79 @@ class TopicLayout {
     return postMenu;
   }
 
+  private openBoostEditor(button: HTMLButtonElement): void {
+    const postId = Number(button.dataset.postId);
+    const floor = Number(button.dataset.floor);
+    if (!postId || !floor) return;
+    const owner = button.closest<HTMLElement>('.ldtk-post-actions, .discourse-boosts__list');
+    if (!owner) return;
+    const existing = owner.parentElement?.querySelector<HTMLElement>('.ldtk-boost-editor');
+    if (existing) {
+      existing.querySelector<HTMLInputElement>('.ldtk-boost-input')?.focus();
+      return;
+    }
+
+    const form = createElement('form', 'ldtk-boost-editor');
+    form.dataset.postId = String(postId);
+    form.dataset.floor = String(floor);
+    form.noValidate = true;
+    const field = createElement('div', 'ldtk-boost-field');
+    const inputId = `ldtk-boost-${postId}-${++actionRequestSequence}`;
+    const label = createElement('label', 'ldtk-boost-label', '助推内容');
+    label.htmlFor = inputId;
+    const input = createElement('input', 'ldtk-boost-input');
+    input.id = inputId;
+    input.type = 'text';
+    input.maxLength = 16;
+    input.autocomplete = 'off';
+    input.placeholder = '输入 1-16 个字符';
+    const description = createElement('p', 'ldtk-boost-meta', '最多 16 个字符，按 Enter 提交');
+    description.id = `${inputId}-description`;
+    input.setAttribute('aria-describedby', description.id);
+    field.append(label, input, description);
+
+    const submit = createIconButton('ldtk-boost-submit', 'check', '提交助推');
+    submit.type = 'submit';
+    submit.disabled = true;
+    const cancel = createIconButton('ldtk-boost-cancel', 'xmark', '取消助推');
+    const close = (): void => {
+      form.remove();
+      button.setAttribute('aria-expanded', 'false');
+      button.focus({ preventScroll: true });
+    };
+    cancel.addEventListener('click', close);
+    input.addEventListener('input', () => {
+      submit.disabled = input.value.trim().length === 0;
+      input.removeAttribute('aria-invalid');
+      form.querySelector('.ldtk-boost-error')?.remove();
+      if (!input.hasAttribute('aria-describedby'))
+        input.setAttribute('aria-describedby', description.id);
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      }
+    });
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const raw = input.value.trim();
+      if (!raw) return;
+      this.requestPageAction(submit, {
+        action: 'boost',
+        postId,
+        floor,
+        boostRaw: raw,
+        form,
+        input,
+      });
+    });
+    form.append(field, submit, cancel);
+    owner.insertAdjacentElement('afterend', form);
+    button.setAttribute('aria-expanded', 'true');
+    input.focus({ preventScroll: true });
+  }
+
   private createReplySummaryContent(post: TopicPost): { element: HTMLElement; text: string } {
     const cooked = createElement('div');
     cooked.innerHTML = post.cooked;
@@ -2539,25 +2994,12 @@ class TopicLayout {
   }
 
   private createCurrentReactionImage(post: TopicPost, reactionId: string): HTMLImageElement | null {
-    const nativePost = document.querySelector<HTMLElement>(
-      `#main-outlet .topic-post[data-post-id="${post.id}"], ` +
-        `#main-outlet .topic-post[data-post-number="${post.post_number}"]`,
-    );
-    const nativeImage = nativePost?.querySelector<HTMLImageElement>(
-      '.discourse-reactions-reaction-button .btn-toggle-reaction-emoji',
-    );
-    const expectedAlts = new Set([`:${reactionId}`, `:${reactionId}:`]);
-    let image: HTMLImageElement | null = null;
-    if (nativeImage && (!nativeImage.alt || expectedAlts.has(nativeImage.alt))) {
-      image = nativeImage.cloneNode(false) as HTMLImageElement;
-    } else {
-      const cached = this.reactionImages.get(post.id);
-      if (cached?.id === reactionId && cached.url) {
-        image = document.createElement('img');
-        image.src = cached.url;
-      }
-    }
-    if (!image) return null;
+    const serializedUrl = post.reactions?.find((reaction) => reaction.id === reactionId)?.emoji_url;
+    const cached = this.reactionImages.get(post.id);
+    const url = serializedUrl || (cached?.id === reactionId ? cached.url : undefined);
+    if (!url) return null;
+    const image = document.createElement('img');
+    image.src = url;
     image.className = 'btn-toggle-reaction-emoji reaction-button';
     image.alt = `:${reactionId}:`;
     image.setAttribute('aria-hidden', 'true');
@@ -2649,7 +3091,13 @@ class TopicLayout {
     this.replyAborts.set(postId, request);
     try {
       const after = append ? Number(panel.dataset.after) || 1 : 1;
-      const replies = await fetchPostReplies(postId, after, request.signal);
+      const replies = await fetchPostReplies(
+        postId,
+        after,
+        request.signal,
+        String(this.source.topic.id),
+        this.route.floor,
+      );
       if (this.destroyed || request.signal.aborted) return;
       this.appendInlineReplies(panel, post, replies);
       if (!append && replies.length === 0) {
@@ -2674,7 +3122,13 @@ class TopicLayout {
     this.replyAborts.set(postId, request);
     button.disabled = true;
     try {
-      const replies = await fetchPostReplies(postId, 1, request.signal);
+      const replies = await fetchPostReplies(
+        postId,
+        1,
+        request.signal,
+        String(this.source.topic.id),
+        this.route.floor,
+      );
       if (this.destroyed || request.signal.aborted) return;
       this.articleReplies = replies;
       const summary = this.createArticleReplySummary(this.source.article, replies);
@@ -2726,11 +3180,34 @@ class TopicLayout {
     setButtonIcon(button, expanded ? 'chevron-up' : 'chevron-down');
   }
 
-  private requestPageAction(button: HTMLButtonElement): void {
-    const action = button.dataset.topicAction as TopicAction | undefined;
-    const postId = Number(button.dataset.postId);
-    const floor = Number(button.dataset.floor);
+  private requestPageAction(
+    button: HTMLButtonElement,
+    override?: {
+      action: TopicAction;
+      postId: number;
+      floor: number;
+      boostRaw?: string;
+      reactionId?: string;
+      form?: HTMLFormElement;
+      input?: HTMLInputElement;
+      onSuccess?: () => void;
+      onError?: (message: string) => void;
+    },
+  ): void {
+    const action = override?.action ?? (button.dataset.topicAction as TopicAction | undefined);
+    const postId = override?.postId ?? Number(button.dataset.postId);
+    const floor = override?.floor ?? Number(button.dataset.floor);
     if (!action || !postId || !floor) return;
+    if (action === 'share') {
+      button.disabled = true;
+      void copyToClipboard(getNativeFloorUrl(floor))
+        .then(() => showToast('已复制此楼链接'))
+        .catch(() => showToast('复制链接失败，请重试'))
+        .finally(() => {
+          button.disabled = false;
+        });
+      return;
+    }
     const request: TopicActionRequest = {
       requestId: `${Date.now()}:${++actionRequestSequence}`,
       topicId: this.source.topic.id,
@@ -2738,13 +3215,14 @@ class TopicLayout {
       floor,
       action,
       routeUrl: this.buildActionRoute(floor),
+      ...(override?.boostRaw === undefined ? {} : { boostRaw: override.boostRaw }),
+      ...(override?.reactionId === undefined ? {} : { reactionId: override.reactionId }),
     };
-    const waitsForMenuClose = action === 'bookmark' || action === 'boost' || action === 'likeUsers';
-    let triggered = false;
     const finish = (): void => {
       window.clearTimeout(timeout);
       button.disabled = false;
       button.removeAttribute('aria-busy');
+      override?.form?.removeAttribute('aria-busy');
       button.removeEventListener(TOPIC_ACTION_RESULT_NAME, handleResult);
     };
     const handleResult = (event: Event): void => {
@@ -2753,42 +3231,39 @@ class TopicLayout {
       if (!result || result.requestId !== request.requestId) return;
       if (!result.ok) {
         finish();
-        showToast(result.message || '操作失败，请重试');
+        const message = result.message || '操作失败，请重试';
+        if (override?.form && override.input) {
+          override.form.querySelector('.ldtk-boost-error')?.remove();
+          const error = createElement('p', 'ldtk-boost-error', message);
+          error.id = `${override.input.id}-error`;
+          error.setAttribute('role', 'alert');
+          override.input.setAttribute('aria-invalid', 'true');
+          override.input.setAttribute('aria-describedby', error.id);
+          override.form.querySelector('.ldtk-boost-field')?.appendChild(error);
+          override.input.focus({ preventScroll: true });
+        } else if (override?.onError) {
+          override.onError(message);
+        } else {
+          showToast(message);
+        }
         return;
       }
-      triggered = true;
-      button.disabled = false;
-      button.removeAttribute('aria-busy');
-      if (waitsForMenuClose) {
-        button.setAttribute('aria-expanded', String(result.phase === 'triggered'));
-      }
-      if (action === 'like' && result.phase === 'triggered') {
-        finish();
-        window.setTimeout(
-          () => void this.updateVisiblePost({ topicId: request.topicId, postId, type: 'revised' }),
-          700,
-        );
-      } else if (action === 'bookmark' && result.phase === 'settled') {
-        finish();
+      finish();
+      override?.form?.remove();
+      override?.onSuccess?.();
+      if (['like', 'bookmark', 'boost', 'delete', 'recover'].includes(action)) {
         void this.updateVisiblePost({ topicId: request.topicId, postId, type: 'revised' });
-      } else if (action === 'boost' && result.phase === 'settled') {
-        finish();
-        void this.updateVisiblePost({ topicId: request.topicId, postId, type: 'revised' });
-      } else if (action === 'likeUsers' && result.phase === 'settled') {
-        finish();
-      } else if (!waitsForMenuClose) {
-        finish();
       }
     };
-    const timeout = window.setTimeout(
-      () => {
-        finish();
-        if (!triggered) showToast('原站操作响应超时，请重试');
-      },
-      waitsForMenuClose ? 120_000 : 10_000,
-    );
+    const timeout = window.setTimeout(() => {
+      finish();
+      const message = '静默操作响应超时，请重试';
+      if (override?.onError) override.onError(message);
+      else showToast(message);
+    }, 15_000);
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
+    override?.form?.setAttribute('aria-busy', 'true');
     if (action === 'like') {
       button.classList.add('heart-animation');
       window.setTimeout(() => button.classList.remove('heart-animation'), 450);
@@ -2802,69 +3277,247 @@ class TopicLayout {
     );
   }
 
-  private requestReactionPicker(button: HTMLButtonElement, open: boolean): void {
+  private closeInlinePopover(popover: HTMLElement, restoreFocus = true): void {
+    const triggerId = popover.dataset.triggerId;
+    const trigger = triggerId ? document.getElementById(triggerId) : null;
+    popover.remove();
+    if (trigger instanceof HTMLButtonElement) {
+      trigger.setAttribute('aria-expanded', 'false');
+      if (restoreFocus) trigger.focus({ preventScroll: true });
+    }
+  }
+
+  private closeInlinePopovers(except?: HTMLElement): void {
+    this.root.querySelectorAll<HTMLElement>('.ldtk-inline-popover').forEach((popover) => {
+      if (popover !== except) this.closeInlinePopover(popover, false);
+    });
+  }
+
+  private createInlinePopover(
+    button: HTMLButtonElement,
+    title: string,
+    className: string,
+  ): HTMLElement | null {
+    const controls = button.closest<HTMLElement>('.ldtk-post-controls');
+    if (!controls) return null;
+    const buttonId = button.id || `ldtk-action-${++actionRequestSequence}`;
+    button.id = buttonId;
+    const existing = controls.querySelector<HTMLElement>(`.ldtk-inline-popover.${className}`);
+    if (existing) {
+      this.closeInlinePopover(existing);
+      return null;
+    }
+    this.closeInlinePopovers();
+    const popover = createElement('section', `ldtk-inline-popover ${className}`);
+    popover.dataset.triggerId = buttonId;
+    popover.tabIndex = -1;
+    popover.setAttribute('role', 'dialog');
+    popover.setAttribute('aria-modal', 'false');
+    const headingId = `${buttonId}-popover-title`;
+    popover.setAttribute('aria-labelledby', headingId);
+    const header = createElement('header', 'ldtk-inline-popover-header');
+    const heading = createElement('h3', 'ldtk-inline-popover-title', title);
+    heading.id = headingId;
+    const close = createIconButton(
+      'ldtk-post-menu-button ldtk-inline-popover-close',
+      'xmark',
+      '关闭',
+    );
+    close.dataset.closePopover = 'true';
+    header.append(heading, close);
+    popover.appendChild(header);
+    controls.appendChild(popover);
+    const buttonRect = button.getBoundingClientRect();
+    const controlsRect = controls.getBoundingClientRect();
+    popover.style.top = `${Math.max(0, buttonRect.bottom - controlsRect.top + 6)}px`;
+    const availableRight = Math.max(0, controlsRect.right - buttonRect.right);
+    if (availableRight < 170) popover.style.right = '0';
+    else popover.style.left = `${Math.max(0, buttonRect.left - controlsRect.left)}px`;
+    button.setAttribute('aria-expanded', 'true');
+    return popover;
+  }
+
+  private requestInteraction(
+    target: HTMLElement,
+    request: Omit<TopicInteractionRequest, 'requestId' | 'topicId' | 'routeUrl'>,
+  ): Promise<TopicInteractionResult> {
+    const requestId = `${Date.now()}:${++actionRequestSequence}`;
+    const detail: TopicInteractionRequest = {
+      requestId,
+      topicId: this.source.topic.id,
+      routeUrl: this.buildActionRoute(request.floor),
+      ...request,
+    };
+    return new Promise((resolve, reject) => {
+      const finish = (): void => {
+        window.clearTimeout(timeout);
+        target.removeEventListener(TOPIC_INTERACTION_RESULT_NAME, handleResult);
+      };
+      const handleResult = (event: Event): void => {
+        if (!(event instanceof CustomEvent)) return;
+        const result = parseTopicInteractionResult(event.detail);
+        if (
+          !result ||
+          result.requestId !== requestId ||
+          result.interaction !== request.interaction
+        ) {
+          return;
+        }
+        finish();
+        if (result.ok) resolve(result);
+        else reject(new Error(result.message || '操作失败，请重试'));
+      };
+      const timeout = window.setTimeout(() => {
+        finish();
+        reject(new Error('静默操作响应超时，请重试'));
+      }, 15_000);
+      target.addEventListener(TOPIC_INTERACTION_RESULT_NAME, handleResult);
+      target.dispatchEvent(
+        new CustomEvent(TOPIC_INTERACTION_REQUEST_NAME, {
+          bubbles: true,
+          detail: JSON.stringify(detail),
+        }),
+      );
+    });
+  }
+
+  private openReactionPicker(button: HTMLButtonElement): void {
     const postId = Number(button.dataset.postId);
     const floor = Number(button.dataset.floor);
     if (!postId || !floor) return;
-    const request: TopicReactionPickerRequest = {
-      topicId: this.source.topic.id,
+    const popover = this.createInlinePopover(button, '选择表态', 'ldtk-reaction-picker');
+    if (!popover) return;
+    const status = createElement('p', 'ldtk-inline-popover-status', '正在加载表态...');
+    status.setAttribute('role', 'status');
+    popover.appendChild(status);
+    popover.focus({ preventScroll: true });
+    void this.requestInteraction(popover, {
+      interaction: 'reactionOptions',
       postId,
       floor,
-      open,
-      routeUrl: this.buildActionRoute(floor),
+    })
+      .then((result) => {
+        if (!popover.isConnected) return;
+        const options = result.reactionOptions || [];
+        const currentReactionId = this.source.getCachedPost(postId)?.current_user_reaction?.id;
+        const list = createElement('div', 'ldtk-reaction-options');
+        list.setAttribute('role', 'group');
+        options.forEach((option) => {
+          this.reactionOptions.set(option.id, option);
+          const item = createButton('ldtk-reaction-option', '', `使用 ${option.id} 表态`);
+          item.dataset.reactionId = option.id;
+          item.dataset.postId = String(postId);
+          item.dataset.floor = String(floor);
+          item.title = option.id;
+          item.setAttribute('aria-pressed', String(currentReactionId === option.id));
+          const image = createElement('img');
+          image.src = option.url;
+          image.alt = `:${option.id}:`;
+          image.width = 24;
+          image.height = 24;
+          image.draggable = false;
+          item.appendChild(image);
+          list.appendChild(item);
+        });
+        status.replaceWith(list);
+        list.querySelector<HTMLButtonElement>('.ldtk-reaction-option')?.focus({
+          preventScroll: true,
+        });
+      })
+      .catch((error: Error) => {
+        if (!popover.isConnected) return;
+        status.textContent = error.message;
+        status.setAttribute('role', 'alert');
+      });
+  }
+
+  private openLikeUsers(button: HTMLButtonElement): void {
+    const postId = Number(button.dataset.postId);
+    const floor = Number(button.dataset.floor);
+    if (!postId || !floor) return;
+    const total = Math.max(0, this.source.getCachedPost(postId)?.reaction_users_count || 0);
+    const popover = this.createInlinePopover(
+      button,
+      `${formatCompactNumber(total)} 个赞`,
+      'ldtk-like-users-popover',
+    );
+    if (!popover) return;
+    const status = createElement('p', 'ldtk-inline-popover-status', '正在加载点赞用户...');
+    status.setAttribute('role', 'status');
+    const list = createElement('ul', 'ldtk-like-users-list');
+    popover.append(status, list);
+    popover.focus({ preventScroll: true });
+    let page = 0;
+    const loadMore = createButton('ldtk-like-users-more', '加载更多点赞用户');
+    loadMore.dataset.loadLikeUsers = 'true';
+    const load = (): void => {
+      loadMore.disabled = true;
+      loadMore.setAttribute('aria-busy', 'true');
+      void this.requestInteraction(popover, {
+        interaction: 'likeUsers',
+        postId,
+        floor,
+        page,
+        pageSize: LIKE_USERS_PAGE_SIZE,
+      })
+        .then((result) => {
+          if (!popover.isConnected) return;
+          this.appendLikeUsers(list, result.users || []);
+          page += 1;
+          status.remove();
+          if (list.childElementCount === 0) {
+            const empty = createElement('p', 'ldtk-inline-popover-status', '暂无可显示的点赞用户');
+            list.replaceWith(empty);
+            loadMore.remove();
+            return;
+          }
+          if (result.hasMore) {
+            popover.appendChild(loadMore);
+            loadMore.disabled = false;
+            loadMore.removeAttribute('aria-busy');
+          } else {
+            loadMore.remove();
+          }
+        })
+        .catch((error: Error) => {
+          if (!popover.isConnected) return;
+          status.textContent = error.message;
+          status.setAttribute('role', 'alert');
+          loadMore.disabled = false;
+          loadMore.removeAttribute('aria-busy');
+        });
     };
-    button.dispatchEvent(
-      new CustomEvent(TOPIC_REACTION_PICKER_REQUEST_NAME, {
-        bubbles: true,
-        detail: JSON.stringify(request),
-      }),
-    );
+    loadMore.addEventListener('click', load);
+    load();
   }
 
-  private getReactionButton(target: EventTarget | null): HTMLButtonElement | null {
-    if (!(target instanceof Element)) return null;
-    const button = target.closest<HTMLButtonElement>(
-      '.post-action-menu__like[data-topic-action="like"]',
-    );
-    return button && this.root.contains(button) ? button : null;
+  private appendLikeUsers(list: HTMLElement, users: TopicInteractionUser[]): void {
+    users.forEach((user) => {
+      const item = createElement('li', 'ldtk-like-user');
+      const avatarUrl = getAvatarUrl(user.avatarTemplate);
+      if (avatarUrl) {
+        const avatar = createElement('img', 'ldtk-like-user-avatar');
+        avatar.src = avatarUrl;
+        avatar.alt = '';
+        avatar.width = 36;
+        avatar.height = 36;
+        avatar.loading = 'lazy';
+        item.appendChild(avatar);
+      } else {
+        item.appendChild(createElement('span', 'ldtk-like-user-avatar-placeholder'));
+      }
+      const profile = createElement('span', 'ldtk-like-user-copy');
+      profile.append(
+        createElement('strong', '', user.name || user.username),
+        createElement('span', '', `@${user.username}`),
+      );
+      item.appendChild(profile);
+      list.appendChild(item);
+    });
   }
-
-  private isWithinButton(button: HTMLButtonElement, target: EventTarget | null): boolean {
-    return target instanceof Node && button.contains(target);
-  }
-
-  private readonly handleReactionPointerOver = (event: Event): void => {
-    const pointerEvent = event as PointerEvent;
-    if (pointerEvent.pointerType !== 'mouse') return;
-    const button = this.getReactionButton(event.target);
-    if (!button || this.isWithinButton(button, pointerEvent.relatedTarget)) return;
-    this.requestReactionPicker(button, true);
-  };
-
-  private readonly handleReactionPointerOut = (event: Event): void => {
-    const pointerEvent = event as PointerEvent;
-    if (pointerEvent.pointerType !== 'mouse') return;
-    const button = this.getReactionButton(event.target);
-    if (!button || this.isWithinButton(button, pointerEvent.relatedTarget)) return;
-    this.requestReactionPicker(button, false);
-  };
-
-  private readonly handleReactionFocusIn = (event: Event): void => {
-    const button = this.getReactionButton(event.target);
-    if (button) this.requestReactionPicker(button, true);
-  };
-
-  private readonly handleReactionFocusOut = (event: Event): void => {
-    const focusEvent = event as FocusEvent;
-    const button = this.getReactionButton(event.target);
-    if (!button || this.isWithinButton(button, focusEvent.relatedTarget)) return;
-    this.requestReactionPicker(button, false);
-  };
 
   private buildActionRoute(floor: number): string {
-    const url = new URL(buildNativeFloorUrl(floor));
-    url.searchParams.set(COMMENTS_PAGE_PARAM, String(this.currentPage));
-    return url.href;
+    return getNativeFloorUrl(floor);
   }
 
   private renderComments(posts: TopicPost[]): void {
@@ -2883,10 +3536,8 @@ class TopicLayout {
     this.renderPagination();
     this.readTracker?.disconnect();
     this.readTracker = new TopicReadTracker(this.source.topic.id, this.commentsPane);
-    this.readTracker.observe(
-      Array.from(this.commentsList.querySelectorAll<HTMLElement>('.topic-post')),
-    );
-    injectButtons(this.settings);
+    this.observeRenderedComments();
+    this.scheduleInjectButtons();
   }
 
   private renderPagination(): void {
@@ -2927,11 +3578,44 @@ class TopicLayout {
     });
   };
 
-  private async loadPage(
-    page: number,
-    updateHistory: boolean,
-    targetFloor?: number,
-  ): Promise<void> {
+  private retryFailedComments(): void {
+    if (this.pageAbort || this.failedCommentOffsets.size === 0) return;
+    const retryOffsets = new Set(this.failedCommentOffsets);
+    const request = new AbortController();
+    this.pageAbort = request;
+    this.setCommentsLoading(true);
+    this.status.hidden = false;
+    this.status.textContent = '正在重试失败评论...';
+    this.commentsList
+      .querySelectorAll<HTMLButtonElement>('[data-retry-comments]')
+      .forEach((button) => {
+        button.disabled = true;
+      });
+    void this.source
+      .loadInitial(this.currentPage, this.settings.commentsPerPage, request.signal, {
+        onCommentBatch: (batch) => {
+          batch.posts.forEach((post, index) => {
+            const offset = batch.pageOffset + index;
+            if (retryOffsets.has(offset)) this.applyCommentBatch(offset, [post]);
+          });
+        },
+        onCommentBatchError: (failure) => this.applyCommentBatchError(failure),
+        onCommentsReady: (failedOffsets) => this.finalizeInitialComments(failedOffsets),
+        onReplyTargets: () => this.enrichReplyTargets(),
+      })
+      .catch((error: unknown) => {
+        if ((error as Error).name === 'AbortError' || this.destroyed) return;
+        this.status.hidden = false;
+        this.status.textContent = '评论重试失败，请稍后再试';
+      })
+      .finally(() => {
+        if (this.pageAbort !== request) return;
+        this.pageAbort = null;
+        if (!this.destroyed) this.setCommentsLoading(false);
+      });
+  }
+
+  private async loadPage(page: number, targetFloor?: number): Promise<void> {
     const nextPage = clampPage(page, this.pageCount);
     if (nextPage === this.currentPage && targetFloor === undefined) return;
     this.pageAbort?.abort();
@@ -2955,10 +3639,6 @@ class TopicLayout {
       this.renderComments(posts);
       this.commentsPane.scrollTop = 0;
       this.saveState();
-      if (updateHistory) {
-        const url = updatePageUrl(new URL(window.location.href), nextPage);
-        window.history.pushState(window.history.state, '', url);
-      }
       if (targetFloor) this.highlightFloor(targetFloor);
     } catch (error) {
       if ((error as Error).name === 'AbortError' || this.pageAbort !== request) return;
@@ -2966,11 +3646,14 @@ class TopicLayout {
       this.status.textContent = '评论加载失败，请重试';
       this.renderPagination();
     } finally {
-      if (this.pageAbort === request) this.setCommentsLoading(false);
+      if (this.pageAbort === request) {
+        this.pageAbort = null;
+        this.setCommentsLoading(false);
+      }
     }
   }
 
-  private async goToFloor(floor: number, updateHistory: boolean): Promise<void> {
+  private async goToFloor(floor: number): Promise<void> {
     if (floor <= 1) {
       this.articleScroll.scrollTo({ top: 0, behavior: 'smooth' });
       const article = this.articlePane.querySelector<HTMLElement>('.topic-post');
@@ -2979,10 +3662,18 @@ class TopicLayout {
     }
     const page = getCommentPageForFloor(floor, this.settings.commentsPerPage);
     if (page === this.currentPage) this.highlightFloor(floor);
-    else await this.loadPage(page, updateHistory, floor);
+    else await this.loadPage(page, floor);
   }
 
   private highlightFloor(floor: number): void {
+    const slot = this.commentsList.querySelector<HTMLElement>(
+      `.ldtk-comment-slot [data-post-number="${floor}"]`,
+    );
+    if (slot) {
+      slot.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      addHighlight(slot);
+      return;
+    }
     const post = this.commentsList.querySelector<HTMLElement>(`[data-post-number="${floor}"]`);
     post?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     if (post) addHighlight(post);
@@ -2991,16 +3682,65 @@ class TopicLayout {
   private readonly handleClick = (event: Event): void => {
     const target = event.target;
     if (!(target instanceof Element)) return;
+    const closePopover = target.closest<HTMLButtonElement>('[data-close-popover]');
+    if (closePopover) {
+      event.preventDefault();
+      const popover = closePopover.closest<HTMLElement>('.ldtk-inline-popover');
+      if (popover) this.closeInlinePopover(popover);
+      return;
+    }
+    const reactionOption = target.closest<HTMLButtonElement>('[data-reaction-id][data-post-id]');
+    if (reactionOption) {
+      event.preventDefault();
+      const reactionId = reactionOption.dataset.reactionId;
+      const postId = Number(reactionOption.dataset.postId);
+      const floor = Number(reactionOption.dataset.floor);
+      const popover = reactionOption.closest<HTMLElement>('.ldtk-reaction-picker');
+      if (!reactionId || !postId || !floor || !popover) return;
+      popover.querySelectorAll<HTMLButtonElement>('.ldtk-reaction-option').forEach((button) => {
+        button.disabled = true;
+      });
+      const reportError = (message: string): void => {
+        popover.querySelector('.ldtk-inline-popover-status')?.remove();
+        const error = createElement('p', 'ldtk-inline-popover-status', message);
+        error.setAttribute('role', 'alert');
+        popover.appendChild(error);
+        popover.querySelectorAll<HTMLButtonElement>('.ldtk-reaction-option').forEach((button) => {
+          button.disabled = false;
+        });
+        reactionOption.focus({ preventScroll: true });
+      };
+      this.requestPageAction(reactionOption, {
+        action: 'reaction',
+        postId,
+        floor,
+        reactionId,
+        onSuccess: () => {
+          const option = this.reactionOptions.get(reactionId);
+          if (option) this.reactionImages.set(postId, { id: reactionId, url: option.url });
+          this.closeInlinePopover(popover, false);
+          void this.updateVisiblePost({ topicId: this.source.topic.id, postId, type: 'acted' });
+        },
+        onError: reportError,
+      });
+      return;
+    }
     const copyCodeButton = target.closest<HTMLButtonElement>('[data-copy-code]');
     if (copyCodeButton) {
       event.preventDefault();
       this.copyCodeBlock(copyCodeButton);
       return;
     }
+    const retryCommentsButton = target.closest<HTMLButtonElement>('[data-retry-comments]');
+    if (retryCommentsButton) {
+      event.preventDefault();
+      this.retryFailedComments();
+      return;
+    }
     const pageButton = target.closest<HTMLButtonElement>('[data-page]');
     if (pageButton && this.pagination.contains(pageButton)) {
       event.preventDefault();
-      void this.loadPage(Number(pageButton.dataset.page), true);
+      void this.loadPage(Number(pageButton.dataset.page));
       return;
     }
     const repliesButton = target.closest<HTMLButtonElement>('[data-toggle-replies]');
@@ -3032,7 +3772,7 @@ class TopicLayout {
       event.preventDefault();
       const floor = Number(copyLinkButton.dataset.copyPostLink);
       copyLinkButton.disabled = true;
-      void copyToClipboard(buildNativeFloorUrl(floor))
+      void copyToClipboard(getNativeFloorUrl(floor))
         .then(() => showToast('已复制此楼链接'))
         .catch(() => showToast('复制链接失败，请重试'))
         .finally(() => {
@@ -3041,25 +3781,32 @@ class TopicLayout {
       return;
     }
     const actionButton = target.closest<HTMLButtonElement>('[data-topic-action][data-floor]');
+    const reactionPickerButton = target.closest<HTMLButtonElement>(
+      '[data-open-reactions][data-floor]',
+    );
+    if (reactionPickerButton) {
+      event.preventDefault();
+      this.openReactionPicker(reactionPickerButton);
+      return;
+    }
     if (actionButton) {
       event.preventDefault();
-      this.requestPageAction(actionButton);
+      if (actionButton.dataset.topicAction === 'boost') this.openBoostEditor(actionButton);
+      else if (actionButton.dataset.topicAction === 'likeUsers') this.openLikeUsers(actionButton);
+      else this.requestPageAction(actionButton);
       return;
     }
     const targetButton = target.closest<HTMLButtonElement>('[data-target-floor]');
     if (targetButton) {
       event.preventDefault();
-      void this.goToFloor(Number(targetButton.dataset.targetFloor), true);
+      void this.goToFloor(Number(targetButton.dataset.targetFloor));
       return;
     }
 
     const complexEmbed = target.closest('.poll, [data-poll-name], iframe, .lazyYT-container');
     if (complexEmbed) {
-      const post = target.closest<HTMLElement>('[data-post-number]');
-      if (post) {
-        event.preventDefault();
-        this.callbacks.handoffNative(Number(post.dataset.postNumber));
-      }
+      event.preventDefault();
+      showToast('此内容暂不支持在双栏内操作');
       return;
     }
 
@@ -3071,8 +3818,21 @@ class TopicLayout {
     const floor = route?.floor || (hashFloor ? Number(hashFloor) : undefined);
     if (route?.topicId === this.route.topicId && floor) {
       event.preventDefault();
-      void this.goToFloor(floor, true);
+      void this.goToFloor(floor);
     }
+  };
+
+  private readonly handleKeyDown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape') return;
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+    const popover =
+      target instanceof Element
+        ? target.closest<HTMLElement>('.ldtk-inline-popover')
+        : target.parentElement?.closest<HTMLElement>('.ldtk-inline-popover');
+    if (!popover) return;
+    event.preventDefault();
+    this.closeInlinePopover(popover);
   };
 
   private copyCodeBlock(button: HTMLButtonElement): void {
@@ -3111,7 +3871,7 @@ class TopicLayout {
         : route.floor
           ? getCommentPageForFloor(route.floor, this.settings.commentsPerPage)
           : 1;
-    void this.loadPage(page, false);
+    void this.loadPage(page);
   };
 
   private readonly handlePageHide = (): void => {
@@ -3192,7 +3952,6 @@ class TopicLayout {
       ...(this.articleFooterHeight === undefined
         ? {}
         : { articleFooterHeight: this.articleFooterHeight }),
-      nativeMode: false,
     });
   }
 }
@@ -3204,8 +3963,7 @@ interface ReusableTopicData {
   articleReplies: TopicPost[];
 }
 
-export type TopicLayoutRuntimeState =
-  'disabled' | 'unsupported' | 'loading' | 'active' | 'native' | 'failed';
+export type TopicLayoutRuntimeState = 'disabled' | 'unsupported' | 'loading' | 'active' | 'failed';
 
 export class TopicLayoutRuntime {
   private activeLayout: TopicLayout | null = null;
@@ -3224,16 +3982,12 @@ export class TopicLayoutRuntime {
     this.latestSettings = null;
     this.cleanupLayout();
     this.state = 'disabled';
-    removeReturnButton();
-    nativeAttemptKey = null;
   }
 
   suspend(): void {
     this.reusableData = null;
     this.cleanupLayout();
     this.state = 'unsupported';
-    removeReturnButton();
-    nativeAttemptKey = null;
   }
 
   invalidate(): void {
@@ -3264,25 +4018,6 @@ export class TopicLayoutRuntime {
     }
     const { route, pageRoot } = context;
 
-    const readingState = readTopicState(route.topicId);
-    if (readingState?.nativeMode && !force) {
-      this.cleanupLayout();
-      this.state = 'native';
-      ensureNativeMode({
-        route,
-        state: readingState,
-        requestReturn: () => void this.activate(settings, true),
-      });
-      return;
-    }
-    if (force && readingState?.nativeMode) {
-      writeTopicState(route.topicId, {
-        ...readingState,
-        nativeMode: false,
-        pendingAction: undefined,
-      });
-    }
-
     if (
       !force &&
       this.activeLayout?.matches(route, settings) &&
@@ -3301,6 +4036,13 @@ export class TopicLayoutRuntime {
       isTopicPageContextCurrent(this.activeContext)
         ? this.activeLayout
         : null;
+    const activationId = beginTopicActivation(route, getTopicResponsePrefetchStatus(route));
+    let activationFinished = false;
+    const finishActivation = (finalState: Parameters<typeof finishTopicActivation>[1]): void => {
+      if (activationFinished) return;
+      activationFinished = true;
+      finishTopicActivation(activationId, finalState);
+    };
     if (!retainedLayout) {
       prepareTopicLayout(settings);
       showLoadingOverlay();
@@ -3323,8 +4065,12 @@ export class TopicLayoutRuntime {
           : null;
       const source =
         cachedData?.source ??
-        (await TopicDataSource.create(route.topicId, request.signal, route.floor));
-      if (!this.canContinueActivation(version, context, source.topic.id)) return;
+        (await TopicDataSource.create(route.topicId, request.signal, route.floor, force));
+      markTopicPerfStage(activationId, 'topic_fetch');
+      if (!this.canContinueActivation(version, context, source.topic.id)) {
+        finishActivation('aborted');
+        return;
+      }
       if (source.isMegaTopic) {
         if (retainedLayout) {
           this.state = 'active';
@@ -3333,6 +4079,7 @@ export class TopicLayoutRuntime {
           this.cleanupLayout();
           this.state = 'unsupported';
         }
+        finishActivation('unsupported');
         return;
       }
 
@@ -3346,43 +4093,145 @@ export class TopicLayoutRuntime {
         perPage: settings.commentsPerPage,
         pageCount,
       });
-      const articleRepliesRequest = cachedData
+      setTopicPerfInitialPage(activationId, initialPage);
+      const createCandidate = (): TopicLayout =>
+        new TopicLayout(route, source, settings, initialPage, {
+          requestRefresh: () => {
+            const currentSettings = this.latestSettings;
+            return currentSettings ? this.activate(currentSettings, true) : Promise.resolve();
+          },
+        });
+
+      const progressive = !retainedLayout;
+      const pendingBatches: Array<{ pageOffset: number; posts: readonly TopicPost[] }> = [];
+      const pendingFailures: InitialCommentBatchError[] = [];
+      let failedPageOffsets: readonly number[] = [];
+      let firstCommentMarked = false;
+      let batchSequence = 0;
+      let articleRepliesRequest: Promise<TopicPost[]> | null = cachedData
         ? Promise.resolve(cachedData.articleReplies)
-        : (source.article.reply_count || 0) > 0
-          ? fetchPostReplies(source.article.id, 1, request.signal).catch((error: unknown) => {
-              if ((error as Error).name === 'AbortError') throw error;
-              return [];
-            })
-          : Promise.resolve([]);
-      const [posts, articleReplies] = await Promise.all([
-        source.loadPage(initialPage, settings.commentsPerPage, request.signal),
-        articleRepliesRequest,
-      ]);
-      if (!this.canContinueActivation(version, context, source.topic.id)) return;
-      retainedLayout?.persistState();
-      candidate = new TopicLayout(route, source, settings, initialPage, {
-        requestRefresh: () => {
-          const currentSettings = this.latestSettings;
-          return currentSettings ? this.activate(currentSettings, true) : Promise.resolve();
+        : null;
+      const startArticleReplies = (): Promise<TopicPost[]> => {
+        articleRepliesRequest ??=
+          (source.article.reply_count || 0) > 0
+            ? fetchPostReplies(
+                source.article.id,
+                1,
+                request.signal,
+                route.topicId,
+                route.floor,
+              ).catch((error: unknown) => {
+                if ((error as Error).name === 'AbortError') throw error;
+                return [];
+              })
+            : Promise.resolve([]);
+        return articleRepliesRequest;
+      };
+
+      if (retainedLayout) {
+        markTopicPerfStage(activationId, 'shell');
+        markTopicPerfStage(activationId, 'overlay_hidden');
+      } else {
+        candidate = createCandidate();
+        candidate.mountShell();
+        this.activeLayout = candidate;
+        this.activeContext = context;
+        markTopicPerfStage(activationId, 'shell');
+        hideLoadingOverlay();
+        markTopicPerfStage(activationId, 'overlay_hidden');
+        if (source.articleReady) {
+          markTopicPerfStage(activationId, 'article');
+          void startArticleReplies();
+        }
+      }
+
+      const initialResult = await source.loadInitial(
+        initialPage,
+        settings.commentsPerPage,
+        request.signal,
+        {
+          onArticle: () => {
+            if (!this.canContinueActivation(version, context, source.topic.id)) return;
+            void startArticleReplies();
+            if (!progressive) return;
+            candidate?.revealArticle();
+            markTopicPerfStage(activationId, 'article');
+          },
+          onCommentBatch: (batch) => {
+            if (!this.canContinueActivation(version, context, source.topic.id)) return;
+            markTopicPerfStage(activationId, `posts_batch_${++batchSequence}`);
+            if (progressive) candidate?.applyCommentBatch(batch.pageOffset, batch.posts);
+            else pendingBatches.push(batch);
+            if (!firstCommentMarked && batch.posts.length > 0) {
+              firstCommentMarked = true;
+              if (progressive) markTopicPerfStage(activationId, 'first_comment');
+            }
+          },
+          onCommentBatchError: (failure) => {
+            if (!this.canContinueActivation(version, context, source.topic.id)) return;
+            if (progressive) candidate?.applyCommentBatchError(failure);
+            else pendingFailures.push(failure);
+          },
+          onCommentsReady: (failedOffsets) => {
+            if (!this.canContinueActivation(version, context, source.topic.id)) return;
+            failedPageOffsets = failedOffsets;
+            if (progressive) candidate?.finalizeInitialComments(failedOffsets);
+            markTopicPerfStage(activationId, 'ready');
+          },
+          onReplyTargets: () => {
+            if (!this.canContinueActivation(version, context, source.topic.id)) return;
+            if (progressive) candidate?.enrichReplyTargets();
+          },
         },
-        handoffNative: (floor, action) => this.handoffToNative(route, settings, floor, action),
-      });
-      candidate.mount(posts, articleReplies);
+      );
+      failedPageOffsets = initialResult.failedPageOffsets;
+      const articleReplies = await startArticleReplies();
       if (!this.canContinueActivation(version, context, source.topic.id)) {
-        candidate.destroy(false, Boolean(retainedLayout));
+        finishActivation('aborted');
         return;
       }
-      retainedLayout?.destroy(false, true);
+
+      if (retainedLayout) {
+        retainedLayout.persistState();
+        const previousFocus = retainedLayout.root.contains(document.activeElement)
+          ? document.activeElement
+          : null;
+        candidate = createCandidate();
+        candidate.mountShell(articleReplies);
+        pendingBatches
+          .sort((left, right) => left.pageOffset - right.pageOffset)
+          .forEach((batch) => candidate?.applyCommentBatch(batch.pageOffset, batch.posts));
+        pendingFailures.forEach((failure) => candidate?.applyCommentBatchError(failure));
+        candidate.finalizeInitialComments(failedPageOffsets);
+        candidate.enrichReplyTargets();
+        markTopicPerfStage(activationId, 'article');
+        if (firstCommentMarked) markTopicPerfStage(activationId, 'first_comment');
+        retainedLayout.destroy(false, true);
+        this.restoreRetainedFocus(previousFocus, candidate);
+      } else {
+        candidate?.revealArticle(articleReplies);
+      }
+      if (!candidate) throw new Error('双栏布局候选未创建');
+      if (!this.canContinueActivation(version, context, source.topic.id)) {
+        candidate.destroy(false, Boolean(retainedLayout));
+        finishActivation('aborted');
+        return;
+      }
+      markTopicPerfStage(activationId, 'enriched');
       this.activeLayout = candidate;
       this.activeContext = context;
       this.reusableData = { topicId: route.topicId, pageRoot, source, articleReplies };
       this.state = 'active';
       candidate = null;
-      hideLoadingOverlay();
+      finishActivation('active');
     } catch (error) {
       candidate?.destroy(false, Boolean(retainedLayout));
-      if (!this.isCurrent(version) || (error as Error).name === 'AbortError') return;
+      if (!this.isCurrent(version) || (error as Error).name === 'AbortError') {
+        finishActivation('aborted');
+        return;
+      }
       if (!isTopicPageContextCurrent(context)) {
+        finishActivation('aborted');
         this.rejectPageContext();
         return;
       }
@@ -3395,9 +4244,50 @@ export class TopicLayoutRuntime {
         this.cleanupLayout();
         this.state = 'failed';
       }
+      finishActivation('failed');
     } finally {
       if (this.isCurrent(version)) this.loadingAbort = null;
+      if (!activationFinished) finishActivation(request.signal.aborted ? 'aborted' : 'failed');
     }
+  }
+
+  private restoreRetainedFocus(previous: Element | null, candidate: TopicLayout): void {
+    if (!(previous instanceof HTMLElement)) return;
+    const postId = previous.closest<HTMLElement>('[data-post-id]')?.dataset.postId;
+    const scope = postId
+      ? candidate.root.querySelector<HTMLElement>(`[data-post-id="${postId}"]`)
+      : candidate.root;
+    if (!scope) return;
+    const attributes = [
+      'data-topic-action',
+      'data-toggle-replies',
+      'data-load-replies',
+      'data-copy-post-link',
+      'data-page',
+      'data-retry-comments',
+    ] as const;
+    const matchingAttribute = attributes.find((attribute) => previous.hasAttribute(attribute));
+    let replacement: HTMLElement | null = null;
+    if (matchingAttribute) {
+      const value = previous.getAttribute(matchingAttribute);
+      replacement =
+        Array.from(scope.querySelectorAll<HTMLElement>(`[${matchingAttribute}]`)).find(
+          (element) => element.getAttribute(matchingAttribute) === value,
+        ) || null;
+    } else if (previous instanceof HTMLAnchorElement) {
+      replacement =
+        Array.from(scope.querySelectorAll<HTMLAnchorElement>('a[href]')).find(
+          (anchor) => anchor.href === previous.href,
+        ) || null;
+    } else if (previous instanceof HTMLButtonElement) {
+      replacement =
+        Array.from(scope.querySelectorAll<HTMLButtonElement>('button')).find(
+          (button) =>
+            button.getAttribute('aria-label') === previous.getAttribute('aria-label') &&
+            button.title === previous.title,
+        ) || null;
+    }
+    replacement?.focus({ preventScroll: true });
   }
 
   private isCurrent(version: number): boolean {
@@ -3438,42 +4328,6 @@ export class TopicLayoutRuntime {
     clearPendingTopicLayout();
     removeLoadingOverlay();
   }
-
-  private handoffToNative(
-    route: TopicRoute,
-    settings: DiscourseSettings,
-    floor: number,
-    action?: PendingNativeAction['action'],
-  ): void {
-    const previous = readTopicState(route.topicId) || {
-      page: getCommentPageForFloor(floor, settings.commentsPerPage),
-      leftScrollTop: 0,
-      rightScrollTop: 0,
-    };
-    this.activeLayout?.destroy();
-    this.activeLayout = null;
-    this.activeContext = null;
-    const state: TopicReadingState = {
-      ...previous,
-      nativeMode: true,
-      pendingAction: action ? { floor, action } : undefined,
-    };
-    writeTopicState(route.topicId, state);
-    nativeAttemptKey = null;
-    this.state = 'native';
-    ensureNativeMode({
-      route,
-      state,
-      requestReturn: () => void this.activate(settings, true),
-    });
-    const post = getNativePost(floor);
-    if (post && !action) {
-      post.scrollIntoView({ block: 'center' });
-      addHighlight(post);
-    } else if (!post && route.floor !== floor) {
-      window.location.assign(buildNativeFloorUrl(floor));
-    }
-  }
 }
 
 export const topicLayoutOwnedSelectors = [
@@ -3481,5 +4335,4 @@ export const topicLayoutOwnedSelectors = [
   `#${STYLE_ID}`,
   `#${LOADING_ROOT_ID}`,
   `#${LOADING_STYLE_ID}`,
-  `#${RETURN_BUTTON_ID}`,
 ] as const;

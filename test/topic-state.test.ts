@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   buildPaginationItems,
+  buildNativeFloorUrl,
   COMMENTS_PAGE_PARAM,
   deriveInitialPage,
   getCommentPageForFloor,
+  getTopicBaseUrl,
   parseTopicRoute,
   readTopicState,
   updatePageUrl,
@@ -80,26 +82,34 @@ describe('topic route and pagination state', () => {
     );
   });
 
-  it('round-trips scroll and native-mode state through session storage', () => {
+  it('separates native floor URLs from canonical split-page URLs', () => {
+    const floorUrl = new URL('https://linux.do/t/some-topic/123/50?x=1&ldo_comments_page=3#post');
+
+    expect(getTopicBaseUrl(floorUrl).href).toBe(
+      'https://linux.do/t/some-topic/123?x=1&ldo_comments_page=3#post',
+    );
+    expect(updatePageUrl(floorUrl, 4).href).toBe(
+      'https://linux.do/t/some-topic/123?x=1&ldo_comments_page=4',
+    );
+    expect(buildNativeFloorUrl(floorUrl, 72).href).toBe('https://linux.do/t/some-topic/123/72?x=1');
+  });
+
+  it('round-trips split scroll state through session storage', () => {
     writeTopicState('123', {
       page: 2,
       leftScrollTop: 80,
       rightScrollTop: 40,
       articleFooterHeight: 224,
-      nativeMode: true,
-      pendingAction: { floor: 12, action: 'reply' },
     });
     expect(readTopicState('123')).toEqual({
       page: 2,
       leftScrollTop: 80,
       rightScrollTop: 40,
       articleFooterHeight: 224,
-      nativeMode: true,
-      pendingAction: { floor: 12, action: 'reply' },
     });
   });
 
-  it('drops an invalid pending native action from stored state', () => {
+  it('drops legacy native-mode fields from stored state', () => {
     sessionStorage.setItem(
       'ldtk:split-reading:123',
       JSON.stringify({
@@ -114,8 +124,6 @@ describe('topic route and pagination state', () => {
       page: 1,
       leftScrollTop: 0,
       rightScrollTop: 0,
-      nativeMode: true,
-      pendingAction: undefined,
     });
   });
 });

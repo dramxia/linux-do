@@ -1,6 +1,6 @@
 /* Linux.do 工具箱 - 双栏阅读的详情页资格模型 */
 
-import { isSameTopicRoute, parseTopicRoute, type TopicRoute } from '../common/topic-route';
+import { isSameTopicIdentity, parseTopicRoute, type TopicRoute } from '../common/topic-route';
 
 const NATIVE_ARTICLE_SELECTOR =
   '#topic-title, .topic-post-stream, .topic-post[data-post-number], article[data-post-number]';
@@ -36,7 +36,7 @@ export function isSameTopicPageSnapshot(
   const sameRoute =
     left.route === null
       ? right.route === null
-      : right.route !== null && isSameTopicRoute(left.route, right.route);
+      : right.route !== null && isSameTopicIdentity(left.route, right.route);
   return (
     sameRoute &&
     left.pageRoot === right.pageRoot &&
@@ -53,6 +53,6 @@ export function isTopicPageContextCurrent(context: TopicPageContext): boolean {
   return (
     current !== null &&
     current.pageRoot === context.pageRoot &&
-    isSameTopicRoute(context.route, current.route)
+    isSameTopicIdentity(context.route, current.route)
   );
 }

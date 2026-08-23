@@ -8,6 +8,10 @@ export interface TopicRoute {
   floor?: number;
 }
 
+export interface TopicIdentity {
+  topicId: string;
+}
+
 function parsePositiveInteger(value: string | undefined): string | null {
   return value && /^[1-9]\d*$/.test(value) ? value : null;
 }
@@ -42,10 +46,18 @@ export function parseTopicRoute(pathname: string): TopicRoute | null {
   return null;
 }
 
-export function getTopicRouteKey(route: TopicRoute | null): string | null {
+export function getTopicLocationKey(route: TopicRoute | null): string | null {
   return route ? `${route.topicId}:${route.floor ?? ''}` : null;
 }
 
-export function isSameTopicRoute(left: TopicRoute, right: TopicRoute | null): boolean {
+export function getTopicIdentityKey(route: TopicIdentity | null): string | null {
+  return route?.topicId ?? null;
+}
+
+export function isSameTopicLocation(left: TopicRoute, right: TopicRoute | null): boolean {
   return left.topicId === right?.topicId && left.floor === right.floor;
+}
+
+export function isSameTopicIdentity(left: TopicIdentity, right: TopicIdentity | null): boolean {
+  return left.topicId === right?.topicId;
 }

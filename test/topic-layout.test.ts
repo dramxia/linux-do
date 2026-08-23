@@ -10,10 +10,11 @@ import type { TopicPost, TopicResponse } from '../src/content/topic-api';
 import { TOPIC_CODE_HIGHLIGHT_REQUEST_NAME } from '../src/content/topic-code-blocks';
 import {
   parseTopicActionRequest,
-  parseTopicReactionPickerRequest,
+  parseTopicInteractionRequest,
   TOPIC_ACTION_REQUEST_NAME,
   TOPIC_ACTION_RESULT_NAME,
-  TOPIC_REACTION_PICKER_REQUEST_NAME,
+  TOPIC_INTERACTION_REQUEST_NAME,
+  TOPIC_INTERACTION_RESULT_NAME,
 } from '../src/content/topic-actions';
 import { TOPIC_EVENT_NAME } from '../src/content/topic-events';
 
@@ -150,6 +151,87 @@ describe('topic split layout lifecycle', () => {
     expect(document.documentElement.classList.contains('ldtk-split-reading-pending')).toBe(false);
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
     expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
+  });
+
+  it('mounts an accessible stable shell before pending comments resolve', async () => {
+    let resolveComments!: (response: Response) => void;
+    const pendingComments = new Promise<Response>((resolve) => {
+      resolveComments = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(topic({ post_stream: { posts: [post(1, 1)], stream: [1, 2, 3] } })),
+        )
+        .mockReturnValueOnce(pendingComments),
+    );
+
+    const loading = refreshTopicLayout(enabledSettings);
+    await vi.waitFor(() =>
+      expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull(),
+    );
+
+    const commentsPane = document.querySelector<HTMLElement>('.ldtk-comments-pane');
+    const slots = Array.from(document.querySelectorAll<HTMLElement>('.ldtk-comment-slot'));
+    expect(commentsPane?.getAttribute('aria-busy')).toBe('true');
+    expect(slots).toHaveLength(2);
+    expect(slots.every((slot) => getComputedStyle(slot).minHeight === '118px')).toBe(true);
+    expect(slots.every((slot) => slot.querySelector('[aria-hidden="true"]'))).toBe(true);
+    expect(document.querySelectorAll('[role="status"][aria-live="polite"]')).toHaveLength(1);
+    expect(document.getElementById('ldtk-topic-reading-loading')?.getAttribute('aria-hidden')).toBe(
+      'true',
+    );
+
+    resolveComments(jsonResponse({ post_stream: { posts: [post(3, 3), post(2, 2)] } }));
+    await loading;
+
+    expect(commentsPane?.getAttribute('aria-busy')).toBe('false');
+    expect(
+      slots.map((slot) => slot.querySelector<HTMLElement>('.topic-post')?.dataset.postNumber),
+    ).toEqual(['2', '3']);
+  });
+
+  it('keeps successful comments visible when another initial batch fails', async () => {
+    const stream = Array.from({ length: 41 }, (_, index) => index + 1);
+    const settings = { ...enabledSettings, commentsPerPage: 40 as const };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('.json?track_visit')) {
+          return Promise.resolve(
+            jsonResponse(
+              topic({
+                posts_count: stream.length,
+                post_stream: { posts: [post(1, 1)], stream },
+              }),
+            ),
+          );
+        }
+        const ids = new URL(url, 'https://linux.do').searchParams.getAll('post_ids[]').map(Number);
+        if (ids.includes(2)) return Promise.resolve(jsonResponse({}, 500));
+        return Promise.resolve(
+          jsonResponse({ post_stream: { posts: ids.map((id) => post(id, id)) } }),
+        );
+      }),
+    );
+
+    await refreshTopicLayout(settings);
+
+    const slots = Array.from(document.querySelectorAll<HTMLElement>('.ldtk-comment-slot'));
+    expect(slots.filter((slot) => slot.dataset.state === 'failed')).toHaveLength(20);
+    expect(slots.filter((slot) => slot.dataset.state === 'ready')).toHaveLength(20);
+    expect(document.querySelectorAll('[data-retry-comments]')).toHaveLength(1);
+    expect(getComputedStyle(slots[0] as HTMLElement).minHeight).toBe('2360px');
+    expect(document.querySelector('.ldtk-comment-status')?.textContent).toContain(
+      '部分评论加载失败',
+    );
+    expect(document.querySelector('.ldtk-comments-pane')?.getAttribute('aria-busy')).toBe('false');
+    expect(document.querySelector<HTMLButtonElement>('[data-retry-comments]')?.disabled).toBe(
+      false,
+    );
   });
 
   it('updates to the centered sidebar layout without animation', async () => {
@@ -469,6 +551,127 @@ describe('topic split layout lifecycle', () => {
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
   });
 
+  it('preserves comment scroll and focused controls across a retained refresh', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(topic({ title: 'Before refresh' })))
+      .mockResolvedValueOnce(jsonResponse(topic({ title: 'After refresh' })));
+    vi.stubGlobal('fetch', fetchMock);
+    await refreshTopicLayout(enabledSettings);
+
+    const commentsPane = document.querySelector<HTMLElement>('.ldtk-comments-pane') as HTMLElement;
+    const focused = document.querySelector<HTMLButtonElement>('[data-copy-post-link="2"]');
+    commentsPane.scrollTop = 180;
+    focused?.focus();
+    await refreshTopicLayout(enabledSettings, true);
+
+    const nextPane = document.querySelector<HTMLElement>('.ldtk-comments-pane');
+    expect(nextPane?.scrollTop).toBe(180);
+    expect(document.activeElement).toMatchObject({ dataset: { copyPostLink: '2' } });
+  });
+
+  it('shows an article skeleton until a deep-route article candidate is verified', async () => {
+    window.history.replaceState({}, '', '/t/topic/123/40');
+    const pushState = vi.spyOn(window.history, 'pushState');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    let resolvePosts!: (response: Response) => void;
+    const pendingPosts = new Promise<Response>((resolve) => {
+      resolvePosts = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse(topic({ post_stream: { posts: [post(2, 2)], stream: [1, 2, 3] } })),
+        )
+        .mockReturnValueOnce(pendingPosts),
+    );
+
+    const loading = refreshTopicLayout(enabledSettings);
+    await vi.waitFor(() => expect(document.querySelector('.ldtk-article-skeleton')).not.toBeNull());
+    expect(document.querySelector('.ldtk-article-pane')?.getAttribute('aria-busy')).toBe('true');
+
+    resolvePosts(jsonResponse({ post_stream: { posts: [post(3, 3), post(1, 1)] } }));
+    await loading;
+
+    expect(document.querySelector('.ldtk-article-skeleton')).toBeNull();
+    expect(document.querySelector('.ldtk-article-pane')?.getAttribute('aria-busy')).toBe('false');
+    expect(document.querySelector('.ldtk-article-content')?.getAttribute('data-post-number')).toBe(
+      '1',
+    );
+    expect(window.location.pathname).toBe('/t/topic/123/40');
+    expect(new URL(window.location.href).searchParams.has('ldo_comments_page')).toBe(false);
+    expect(pushState).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+  });
+
+  it('restores a saved deep comment page without any history mutation', async () => {
+    const stream = Array.from({ length: 81 }, (_, index) => index + 1);
+    sessionStorage.setItem(
+      'ldtk:split-reading:123',
+      JSON.stringify({ page: 5, leftScrollTop: 0, rightScrollTop: 240 }),
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          topic({
+            posts_count: stream.length,
+            post_stream: { posts: stream.map((id) => post(id, id)), stream },
+          }),
+        ),
+      ),
+    );
+    const pushState = vi.spyOn(window.history, 'pushState');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+
+    await refreshTopicLayout({ ...enabledSettings, commentsPerPage: 10 });
+
+    expect(document.querySelector('.ldtk-pagination [aria-current="page"]')?.textContent).toBe('5');
+    expect(document.querySelector('[data-post-number="50"]')).not.toBeNull();
+    expect(document.querySelector<HTMLElement>('.ldtk-comments-pane')?.scrollTop).toBe(240);
+    expect(window.location.pathname).toBe('/t/topic/123');
+    expect(pushState).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+  });
+
+  it('keeps one activation alive while Discourse rewrites floors during deep loading', async () => {
+    window.history.replaceState({}, '', '/t/topic/123/40');
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    let resolveTopic!: (response: Response) => void;
+    const pendingTopic = new Promise<Response>((resolve) => {
+      resolveTopic = resolve;
+    });
+    const fetchMock = vi.fn().mockReturnValueOnce(pendingTopic);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const loading = refreshTopicLayout(enabledSettings);
+    for (const floor of [20, 50, 80]) {
+      window.history.replaceState({}, '', `/t/topic/123/${floor}`);
+    }
+    const stream = Array.from({ length: 61 }, (_, index) => index + 1);
+    resolveTopic(
+      jsonResponse(
+        topic({
+          posts_count: stream.length,
+          post_stream: { posts: stream.map((id) => post(id, id)), stream },
+        }),
+      ),
+    );
+    await loading;
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(document.querySelectorAll('.ldtk-topic-reading-root')).toHaveLength(1);
+    expect(window.location.pathname).toBe('/t/topic/123/80');
+    expect(new URL(window.location.href).searchParams.has('ldo_comments_page')).toBe(false);
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
   it('keeps the current split layout when a forced refresh fails', async () => {
     const fetchMock = vi
       .fn()
@@ -581,7 +784,7 @@ describe('topic split layout lifecycle', () => {
     );
   });
 
-  it('renders complete Boost content and the native Boost triggers in split mode', async () => {
+  it('renders complete Boost content and opens the split Boost editor in place', async () => {
     const article: TopicPost = {
       ...post(1, 1),
       can_boost: true,
@@ -638,24 +841,217 @@ describe('topic split layout lifecycle', () => {
       true,
     );
 
-    const nativeBoostInput = document.createElement('div');
-    nativeBoostInput.className = 'discourse-boosts__input-container';
-    document.getElementById('main-outlet')?.appendChild(nativeBoostInput);
-    expect(getComputedStyle(nativeBoostInput).visibility).toBe('visible');
-    expect(getComputedStyle(nativeBoostInput).pointerEvents).toBe('auto');
+    commentBoost?.click();
+    const editor = document.querySelector<HTMLFormElement>(
+      '.ldtk-comments-list [data-post-id="2"] .ldtk-boost-editor',
+    );
+    const input = editor?.querySelector<HTMLInputElement>('.ldtk-boost-input');
+    const submit = editor?.querySelector<HTMLButtonElement>('.ldtk-boost-submit');
+    expect(editor).not.toBeNull();
+    expect(input?.maxLength).toBe(16);
+    expect(input?.getAttribute('aria-describedby')).toBeTruthy();
+    expect(submit?.disabled).toBe(true);
+    expect(commentBoost?.getAttribute('aria-expanded')).toBe('true');
+    editor?.querySelector<HTMLButtonElement>('.ldtk-boost-cancel')?.click();
+    expect(document.querySelector('.ldtk-boost-editor')).toBeNull();
+    expect(commentBoost?.getAttribute('aria-expanded')).toBe('false');
+  });
 
-    const emojiPicker = document.createElement('div');
-    emojiPicker.className = 'fk-d-menu';
-    emojiPicker.dataset.content = '';
-    emojiPicker.dataset.identifier = 'emoji-picker';
-    const emojiButton = document.createElement('button');
-    emojiPicker.appendChild(emojiButton);
-    document.getElementById('main-outlet')?.appendChild(emojiPicker);
-    expect(getComputedStyle(emojiPicker).visibility).toBe('visible');
-    expect(getComputedStyle(emojiPicker).pointerEvents).toBe('auto');
-    expect(getComputedStyle(emojiPicker).zIndex).toBe('420');
-    expect(getComputedStyle(emojiButton).visibility).toBe('visible');
-    expect(getComputedStyle(emojiButton).pointerEvents).toBe('auto');
+  it('submits Boost from a paginated comment without changing the split URL', async () => {
+    const stream = Array.from({ length: 13 }, (_, index) => index + 1);
+    const targetPost = { ...post(12, 12), boosts: [], can_boost: true };
+    window.history.replaceState({}, '', '/t/topic/123?ldo_comments_page=2');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('.json?track_visit')) {
+          return Promise.resolve(
+            jsonResponse(
+              topic({
+                posts_count: stream.length,
+                post_stream: { posts: [post(1, 1)], stream },
+              }),
+            ),
+          );
+        }
+        const ids = new URL(url, 'https://linux.do').searchParams.getAll('post_ids[]').map(Number);
+        return Promise.resolve(
+          jsonResponse({
+            post_stream: {
+              posts: ids.map((id) => (id === targetPost.id ? targetPost : post(id, id))),
+            },
+          }),
+        );
+      }),
+    );
+    let actionRequest: ReturnType<typeof parseTopicActionRequest> = null;
+    document.addEventListener(
+      TOPIC_ACTION_REQUEST_NAME,
+      (event) => {
+        if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
+        actionRequest = parseTopicActionRequest(event.detail);
+        if (!actionRequest) return;
+        event.target.dispatchEvent(
+          new CustomEvent(TOPIC_ACTION_RESULT_NAME, {
+            detail: JSON.stringify({
+              requestId: actionRequest.requestId,
+              ok: true,
+              phase: 'settled',
+            }),
+          }),
+        );
+      },
+      { once: true },
+    );
+
+    await refreshTopicLayout({ ...enabledSettings, commentsPerPage: 10 });
+    document
+      .querySelector<HTMLButtonElement>('[data-post-id="12"] [data-topic-action="boost"]')
+      ?.click();
+    const editor = document.querySelector<HTMLFormElement>(
+      '[data-post-id="12"] .ldtk-boost-editor',
+    );
+    const input = editor?.querySelector<HTMLInputElement>('.ldtk-boost-input');
+    if (input) {
+      input.value = '分页助推';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    editor?.requestSubmit();
+
+    expect(actionRequest).toMatchObject({
+      action: 'boost',
+      floor: 12,
+      postId: 12,
+      boostRaw: '分页助推',
+    });
+    const actionUrl = new URL(actionRequest?.routeUrl || window.location.href);
+    expect(actionUrl.pathname).toBe('/t/topic/123/12');
+    expect(actionUrl.searchParams.has('ldo_comments_page')).toBe(false);
+    expect(new URL(window.location.href).searchParams.get('ldo_comments_page')).toBe('2');
+  });
+
+  it('keeps a failed Boost editor open with its value and focus', async () => {
+    const boostedPost = { ...post(2, 2), boosts: [], can_boost: true };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          topic({
+            post_stream: {
+              posts: [post(1, 1), boostedPost, post(3, 3)],
+              stream: [1, 2, 3],
+            },
+          }),
+        ),
+      ),
+    );
+    document.addEventListener(
+      TOPIC_ACTION_REQUEST_NAME,
+      (event) => {
+        if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
+        const request = parseTopicActionRequest(event.detail);
+        if (!request) return;
+        event.target.dispatchEvent(
+          new CustomEvent(TOPIC_ACTION_RESULT_NAME, {
+            detail: JSON.stringify({
+              requestId: request.requestId,
+              ok: false,
+              phase: 'settled',
+              message: '你已经助推过此楼层',
+            }),
+          }),
+        );
+      },
+      { once: true },
+    );
+
+    await refreshTopicLayout(enabledSettings);
+    document
+      .querySelector<HTMLButtonElement>('[data-post-id="2"] [data-topic-action="boost"]')
+      ?.click();
+    const editor = document.querySelector<HTMLFormElement>('[data-post-id="2"] .ldtk-boost-editor');
+    const input = editor?.querySelector<HTMLInputElement>('.ldtk-boost-input');
+    if (input) {
+      input.value = '保留输入';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    editor?.requestSubmit();
+
+    expect(document.querySelector('.ldtk-boost-editor')).toBe(editor);
+    expect(input?.value).toBe('保留输入');
+    expect(input?.getAttribute('aria-invalid')).toBe('true');
+    expect(document.activeElement).toBe(input);
+    expect(editor?.querySelector('.ldtk-boost-error')?.textContent).toBe('你已经助推过此楼层');
+  });
+
+  it('shows paginated like users inside split mode without changing history', async () => {
+    const likedPost: TopicPost = {
+      ...post(2, 2),
+      actions_summary: [{ id: 2, count: 31, can_act: true, acted: false }],
+      reaction_users_count: 31,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          topic({
+            post_stream: {
+              posts: [post(1, 1), likedPost, post(3, 3)],
+              stream: [1, 2, 3],
+            },
+          }),
+        ),
+      ),
+    );
+    const requests: ReturnType<typeof parseTopicInteractionRequest>[] = [];
+    document.addEventListener(TOPIC_INTERACTION_REQUEST_NAME, (event) => {
+      if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
+      const request = parseTopicInteractionRequest(event.detail);
+      if (!request || request.interaction !== 'likeUsers') return;
+      requests.push(request);
+      const page = request.page || 0;
+      event.target.dispatchEvent(
+        new CustomEvent(TOPIC_INTERACTION_RESULT_NAME, {
+          detail: JSON.stringify({
+            requestId: request.requestId,
+            interaction: request.interaction,
+            ok: true,
+            users: [
+              {
+                id: page + 1,
+                username: page === 0 ? 'alice' : 'bob',
+                name: page === 0 ? 'Alice' : 'Bob',
+                avatarTemplate: `/avatar/${page + 1}/{size}.png`,
+              },
+            ],
+            total: 31,
+            hasMore: page === 0,
+          }),
+        }),
+      );
+    });
+
+    await refreshTopicLayout(enabledSettings);
+    const url = window.location.href;
+    const button = document.querySelector<HTMLButtonElement>(
+      '[data-post-id="2"] .post-action-menu__like-count',
+    );
+    button?.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.ldtk-like-user')?.textContent).toContain('Alice'),
+    );
+    document.querySelector<HTMLButtonElement>('.ldtk-like-users-more')?.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.ldtk-like-users-list')?.textContent).toContain('Bob'),
+    );
+
+    expect(requests.map((request) => request?.page)).toEqual([0, 1]);
+    expect(window.location.href).toBe(url);
+    expect(button?.getAttribute('aria-expanded')).toBe('true');
+    document.querySelector<HTMLButtonElement>('.ldtk-inline-popover-close')?.click();
+    expect(button?.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(button);
   });
 
   it('refreshes the article Boost row after a discourse-boosts event', async () => {
@@ -802,6 +1198,11 @@ describe('topic split layout lifecycle', () => {
     expect(likeButton?.querySelector('svg')?.classList.contains('d-icon-lucide-far-heart')).toBe(
       true,
     );
+    expect(
+      actions
+        ?.querySelector('.ldtk-reaction-picker-trigger svg')
+        ?.classList.contains('d-icon-lucide-smile-plus'),
+    ).toBe(true);
     expect(actions?.querySelector('.post-action-menu__copy-link')).not.toBeNull();
     expect(actions?.querySelector('.post-action-menu__bookmark')).not.toBeNull();
     expect(actions?.querySelector('.post-action-menu__show-more')).not.toBeNull();
@@ -817,9 +1218,9 @@ describe('topic split layout lifecycle', () => {
         ?.classList.contains('d-icon-lucide-arrow-up-from-bracket'),
     ).toBe(true);
 
-    actions?.querySelector<HTMLButtonElement>('.post-action-menu__like')?.click();
+    actions?.querySelector<HTMLButtonElement>('.post-action-menu__bookmark')?.click();
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({ action: 'like', topicId: 123, postId: 2, floor: 2 });
+    expect(requests[0]).toMatchObject({ action: 'bookmark', topicId: 123, postId: 2, floor: 2 });
     expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
     const composer = document.createElement('section');
@@ -830,7 +1231,7 @@ describe('topic split layout lifecycle', () => {
     expect(getComputedStyle(composer).visibility).toBe('visible');
   });
 
-  it('forwards like hover and focus to the native reaction picker without leaving split mode', async () => {
+  it('opens and uses a split-owned reaction picker without native DOM or navigation', async () => {
     const actionablePost: TopicPost = {
       ...post(2, 2),
       actions_summary: [{ id: 2, count: 0, can_act: true, acted: false }],
@@ -850,34 +1251,58 @@ describe('topic split layout lifecycle', () => {
       ),
     );
     const requests: unknown[] = [];
-    document.addEventListener(TOPIC_REACTION_PICKER_REQUEST_NAME, (event) => {
-      if (event instanceof CustomEvent) {
-        requests.push(parseTopicReactionPickerRequest(event.detail));
-      }
+    document.addEventListener(TOPIC_INTERACTION_REQUEST_NAME, (event) => {
+      if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
+      const request = parseTopicInteractionRequest(event.detail);
+      if (!request) return;
+      requests.push(request);
+      event.target.dispatchEvent(
+        new CustomEvent(TOPIC_INTERACTION_RESULT_NAME, {
+          detail: JSON.stringify({
+            requestId: request.requestId,
+            interaction: request.interaction,
+            ok: true,
+            reactionOptions: [
+              { id: 'heart', url: 'https://linux.do/heart.png', isMain: true },
+              { id: 'cry', url: 'https://linux.do/cry.png', isMain: false },
+            ],
+          }),
+        }),
+      );
+    });
+    document.addEventListener(TOPIC_ACTION_REQUEST_NAME, (event) => {
+      if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
+      const request = parseTopicActionRequest(event.detail);
+      if (!request || request.action !== 'reaction') return;
+      requests.push(request);
+      event.target.dispatchEvent(
+        new CustomEvent(TOPIC_ACTION_RESULT_NAME, {
+          detail: JSON.stringify({ requestId: request.requestId, ok: true, phase: 'settled' }),
+        }),
+      );
     });
 
     await refreshTopicLayout(enabledSettings);
 
     const button = document.querySelector<HTMLButtonElement>(
-      '.ldtk-topic-reading-root [data-post-id="2"] .post-action-menu__like',
+      '.ldtk-topic-reading-root [data-post-id="2"] .ldtk-reaction-picker-trigger',
     );
     expect(button?.getAttribute('aria-haspopup')).toBe('menu');
+    const url = window.location.href;
     const pointerOver = new MouseEvent('pointerover', { bubbles: true });
     Object.defineProperty(pointerOver, 'pointerType', { value: 'mouse' });
     button?.dispatchEvent(pointerOver);
-    const pointerOut = new MouseEvent('pointerout', { bubbles: true });
-    Object.defineProperty(pointerOut, 'pointerType', { value: 'mouse' });
-    button?.dispatchEvent(pointerOut);
-    button?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
-    button?.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-
-    expect(requests).toHaveLength(4);
-    expect(requests).toEqual([
-      expect.objectContaining({ topicId: 123, postId: 2, floor: 2, open: true }),
-      expect.objectContaining({ topicId: 123, postId: 2, floor: 2, open: false }),
-      expect.objectContaining({ topicId: 123, postId: 2, floor: 2, open: true }),
-      expect.objectContaining({ topicId: 123, postId: 2, floor: 2, open: false }),
-    ]);
+    expect(requests).toHaveLength(0);
+    button?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelectorAll('.ldtk-reaction-option')).toHaveLength(2);
+    });
+    expect(requests[0]).toMatchObject({ interaction: 'reactionOptions', postId: 2, floor: 2 });
+    document.querySelector<HTMLButtonElement>('[data-reaction-id="cry"]')?.click();
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1]).toMatchObject({ action: 'reaction', reactionId: 'cry', postId: 2 });
+    expect(window.location.href).toBe(url);
+    expect(document.querySelector('.ldtk-reaction-picker')).toBeNull();
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
     expect(
       getComputedStyle(document.getElementById('main-outlet') as HTMLElement).display,
@@ -885,12 +1310,7 @@ describe('topic split layout lifecycle', () => {
     expect(getComputedStyle(document.getElementById('main-outlet') as HTMLElement).visibility).toBe(
       'visible',
     );
-    const nativePicker = document.createElement('div');
-    nativePicker.className = 'discourse-reactions-picker is-expanded';
-    document.getElementById('main-outlet')?.appendChild(nativePicker);
-    expect(getComputedStyle(nativePicker).visibility).toBe('visible');
-    expect(getComputedStyle(nativePicker).pointerEvents).toBe('auto');
-    expect(getComputedStyle(nativePicker).zIndex).toBe('410');
+    expect(document.querySelector('#main-outlet .discourse-reactions-picker')).toBeNull();
   });
 
   it('shows the selected custom reaction image after an acted event', async () => {
@@ -1405,5 +1825,44 @@ describe('topic split layout lifecycle', () => {
     expect(document.querySelector('.ldtk-pagination [aria-current="page"]')?.textContent).toBe('3');
     expect(refreshButton?.disabled).toBe(false);
     expect(refreshButton?.getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('changes comment pages without writing browser history', async () => {
+    const stream = Array.from({ length: 22 }, (_, index) => index + 1);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('.json?track_visit')) {
+          return Promise.resolve(
+            jsonResponse(
+              topic({
+                posts_count: stream.length,
+                post_stream: { posts: [post(1, 1)], stream },
+              }),
+            ),
+          );
+        }
+        const ids = new URL(url, 'https://linux.do').searchParams.getAll('post_ids[]').map(Number);
+        return Promise.resolve(
+          jsonResponse({ post_stream: { posts: ids.map((id) => post(id, id)) } }),
+        );
+      }),
+    );
+    await refreshTopicLayout({ ...enabledSettings, commentsPerPage: 10 });
+    const pushState = vi.spyOn(window.history, 'pushState');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const url = window.location.href;
+
+    document.querySelector<HTMLButtonElement>('.ldtk-pagination [data-page="2"]')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('.ldtk-pagination [aria-current="page"]')?.textContent).toBe(
+        '2',
+      );
+    });
+
+    expect(window.location.href).toBe(url);
+    expect(pushState).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
   });
 });

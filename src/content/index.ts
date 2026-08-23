@@ -4,11 +4,14 @@ import { injectBase64Button } from './base64';
 import { registerMessageHandlers } from './messages';
 import { getCachedSettings, onSettingsChanged } from '../common/settings';
 import type { DiscourseSettings } from '../common/settings';
+import { parseTopicRoute } from '../common/topic-route';
 import { RefreshScheduler } from './refresh-state';
 import { ManagedObserver } from './managed-observer';
 import { prepareTopicLayout, topicLayoutOwnedSelectors } from './topic-layout';
 import { TopicLayoutController } from './topic-layout-controller';
 import { imageViewerOwnedSelectors, initImageViewer } from './image-viewer';
+import { noteTopicRouteDetected } from './topic-perf';
+import { TopicPrefetchCoordinator } from './topic-prefetch';
 
 interface Enhancement {
   refresh: (settings: DiscourseSettings) => void | Promise<void>;
@@ -51,6 +54,7 @@ const selectionToolsScheduler = new RefreshScheduler(
   100,
 );
 const topicLayoutController = new TopicLayoutController();
+const topicPrefetchCoordinator = new TopicPrefetchCoordinator();
 
 function isToolkitMutation(mutation: MutationRecord): boolean {
   const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
@@ -93,6 +97,7 @@ function init(settings: DiscourseSettings): void {
   bindDynamicPageEvents();
   topicLayoutController.start(settings);
   onSettingsChanged((settings) => {
+    topicPrefetchCoordinator.update(settings);
     topicLayoutController.updateSettings(settings);
     void enhancementScheduler.run();
   });
@@ -108,7 +113,10 @@ function waitForDomReady(): Promise<void> {
 
 async function bootstrap(): Promise<void> {
   prepareTopicLayout();
+  const initialRoute = parseTopicRoute(window.location.pathname);
+  if (initialRoute) noteTopicRouteDetected(initialRoute);
   const settings = await getCachedSettings();
+  topicPrefetchCoordinator.update(settings);
   prepareTopicLayout(settings);
   await waitForDomReady();
   init(settings);

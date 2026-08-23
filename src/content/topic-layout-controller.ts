@@ -1,6 +1,10 @@
 /* Linux.do 工具箱 - 双栏阅读的单一生命周期控制器 */
 import type { DiscourseSettings } from '../common/settings';
-import { HISTORY_NAVIGATION_EVENT_NAME, PAGE_NAVIGATION_EVENT_NAME } from '../common/topic-route';
+import {
+  getTopicIdentityKey,
+  HISTORY_NAVIGATION_EVENT_NAME,
+  PAGE_NAVIGATION_EVENT_NAME,
+} from '../common/topic-route';
 import { parseTopicEventDetail, TOPIC_EVENT_NAME } from './topic-events';
 import { TopicLayoutRuntime, type TopicLayoutRuntimeState } from './topic-layout';
 import {
@@ -28,6 +32,7 @@ export class TopicLayoutController {
   private started = false;
   private resizeFrame: number | null = null;
   private pageRootObserver: MutationObserver | null = null;
+  private dirtyLoadingTopicId: string | null = null;
 
   constructor(private readonly runtime: TopicLayoutDriver = new TopicLayoutRuntime()) {}
 
@@ -67,6 +72,7 @@ export class TopicLayoutController {
     this.pageRootObserver = null;
     if (this.resizeFrame !== null) window.cancelAnimationFrame(this.resizeFrame);
     this.resizeFrame = null;
+    this.dirtyLoadingTopicId = null;
     this.runtime.disable();
   }
 
@@ -76,6 +82,7 @@ export class TopicLayoutController {
     if (!this.started) return;
 
     if (!settings.enableSplitReading) {
+      this.dirtyLoadingTopicId = null;
       this.runtime.disable();
       return;
     }
@@ -99,6 +106,7 @@ export class TopicLayoutController {
       this.runtime.reconcilePageContext();
       return;
     }
+    this.dirtyLoadingTopicId = null;
     this.runtime.invalidate();
     void this.applyIntent();
   };
@@ -111,6 +119,7 @@ export class TopicLayoutController {
       this.runtime.reconcilePageContext();
       return;
     }
+    this.dirtyLoadingTopicId = null;
     this.runtime.invalidate();
     this.runtime.suspend();
   };
@@ -137,9 +146,11 @@ export class TopicLayoutController {
     const detail = parseTopicEventDetail(event.detail);
     const route = captureTopicPageSnapshot().route;
     if (!detail || !route || String(detail.topicId) !== route.topicId) return;
-    const loading = this.runtime.getState() === 'loading';
+    if (this.runtime.getState() === 'loading') {
+      this.dirtyLoadingTopicId = getTopicIdentityKey(route);
+      return;
+    }
     this.runtime.invalidate();
-    if (loading && this.settings?.enableSplitReading) void this.applyIntent();
   };
 
   private readonly handlePageRootMutations = (mutations: MutationRecord[]): void => {
@@ -163,13 +174,24 @@ export class TopicLayoutController {
     const settings = this.settings;
     if (!settings) return;
     if (!settings.enableSplitReading) {
+      this.dirtyLoadingTopicId = null;
       this.runtime.disable();
       return;
     }
     if (!asTopicPageContext(this.pageSnapshot) || !this.wideViewport) {
+      this.dirtyLoadingTopicId = null;
       this.runtime.suspend();
       return;
     }
     await this.runtime.activate(settings);
+    const activeTopicId = getTopicIdentityKey(captureTopicPageSnapshot().route);
+    if (
+      this.runtime.getState() === 'active' &&
+      this.dirtyLoadingTopicId !== null &&
+      this.dirtyLoadingTopicId === activeTopicId
+    ) {
+      this.dirtyLoadingTopicId = null;
+      this.runtime.invalidate();
+    }
   }
 }

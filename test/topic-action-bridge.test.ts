@@ -1,11 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   parseTopicActionResult,
+  parseTopicInteractionResult,
   TOPIC_ACTION_REQUEST_NAME,
   TOPIC_ACTION_RESULT_NAME,
-  TOPIC_REACTION_PICKER_REQUEST_NAME,
+  TOPIC_INTERACTION_REQUEST_NAME,
+  TOPIC_INTERACTION_RESULT_NAME,
   type TopicActionRequest,
-  type TopicReactionPickerRequest,
+  type TopicInteractionRequest,
 } from '../src/content/topic-actions';
 import {
   HISTORY_NAVIGATION_EVENT_NAME,
@@ -24,23 +26,34 @@ interface BridgeTestWindow extends Window {
 }
 
 const pageWindow = window as unknown as BridgeTestWindow;
-let routeTo: (url: string) => void = () => undefined;
 let topicController: unknown = null;
 let reactionToggleCallback: ((value: unknown) => void) | null = null;
 let pageChangeCallback: (() => void) | null = null;
+const ajax = vi.fn();
+const routeTo = vi.fn();
 const preventCloak = vi.fn();
 const highlightSyntax = vi.fn();
-const siteSettings = { autohighlight_all_code: true };
+const siteSettings = {
+  autohighlight_all_code: true,
+  discourse_reactions_enabled_reactions: 'heart|laughing|cry',
+  discourse_reactions_reaction_for_like: 'heart',
+};
 const session = { highlightJsPath: '/highlight-js/common.js' };
 
-function request(action: TopicActionRequest['action'], postId = 2): TopicActionRequest {
+function request(
+  action: TopicActionRequest['action'],
+  postId = 2,
+  extra: Partial<TopicActionRequest> = {},
+): TopicActionRequest {
   return {
     requestId: `bridge:${postId}`,
     topicId: 123,
     postId,
     floor: postId,
     action,
-    routeUrl: `${window.location.origin}/t/topic/123/${postId}?ldo_comments_page=1`,
+    routeUrl: `${window.location.origin}/t/topic/123/${postId}?ldo_comments_page=5`,
+    ...(action === 'boost' ? { boostRaw: '支持一下' } : {}),
+    ...extra,
   };
 }
 
@@ -60,16 +73,46 @@ function dispatchRequest(button: HTMLButtonElement, detail: TopicActionRequest):
   });
 }
 
-function dispatchReactionPicker(
+function dispatchInteraction(
   button: HTMLButtonElement,
-  detail: TopicReactionPickerRequest,
-): void {
-  button.dispatchEvent(
-    new CustomEvent(TOPIC_REACTION_PICKER_REQUEST_NAME, {
-      bubbles: true,
-      detail: JSON.stringify(detail),
-    }),
-  );
+  detail: TopicInteractionRequest,
+): Promise<unknown> {
+  return new Promise((resolve) => {
+    button.addEventListener(
+      TOPIC_INTERACTION_RESULT_NAME,
+      (event) => resolve(parseTopicInteractionResult((event as CustomEvent).detail)),
+      { once: true },
+    );
+    button.dispatchEvent(
+      new CustomEvent(TOPIC_INTERACTION_REQUEST_NAME, {
+        bubbles: true,
+        detail: JSON.stringify(detail),
+      }),
+    );
+  });
+}
+
+function installPostController(
+  post: Record<string, unknown>,
+  methods = {},
+): { loadPost: ReturnType<typeof vi.fn> } {
+  const loadPost = vi.fn().mockResolvedValue(post);
+  topicController = {
+    model: {
+      id: 123,
+      bookmarks: [],
+      postStream: { findLoadedPost: vi.fn(), loadPost },
+    },
+    ...methods,
+  };
+  return { loadPost };
+}
+
+function expectPageUntouched(url: string, scrollTo: ReturnType<typeof vi.spyOn>): void {
+  expect(window.location.href).toBe(url);
+  expect(routeTo).not.toHaveBeenCalled();
+  expect(preventCloak).not.toHaveBeenCalled();
+  expect(scrollTo).not.toHaveBeenCalled();
 }
 
 beforeAll(async () => {
@@ -102,17 +145,15 @@ beforeAll(async () => {
           }),
       };
     }
-    if (moduleName === 'discourse/lib/url')
-      return { default: { routeTo: (url: string) => routeTo(url) } };
+    if (moduleName === 'discourse/lib/url') return { default: { routeTo } };
+    if (moduleName === 'discourse/lib/ajax') return { ajax };
     if (moduleName === 'discourse/lib/text') {
       return {
         emojiUrlFor: (reactionId: string) =>
           `https://cdn.linux.do/images/emoji/twitter/${reactionId}.png`,
       };
     }
-    if (moduleName === 'discourse/lib/highlight-syntax') {
-      return { default: highlightSyntax };
-    }
+    if (moduleName === 'discourse/lib/highlight-syntax') return { default: highlightSyntax };
     return undefined;
   };
   await import('../src/page/topic-events-bridge');
@@ -120,9 +161,10 @@ beforeAll(async () => {
 
 beforeEach(() => {
   document.body.innerHTML = '<main id="main-outlet"></main>';
-  window.history.replaceState({}, '', '/t/topic/123');
-  routeTo = () => undefined;
+  window.history.replaceState({}, '', '/t/topic/123?ldo_comments_page=5');
   topicController = null;
+  ajax.mockReset().mockResolvedValue({ id: 91, cooked: '<p>支持一下</p>' });
+  routeTo.mockReset();
   preventCloak.mockReset();
   highlightSyntax.mockReset();
 });
@@ -143,7 +185,6 @@ describe('page-world topic action bridge', () => {
       siteSettings,
       session,
     );
-    expect(root.querySelector<HTMLElement>('.cooked')?.dataset.ldtkHighlightProcessed).toBe('true');
   });
 
   it('dispatches definitive navigation signals for history and completed page changes', () => {
@@ -159,7 +200,7 @@ describe('page-world topic action bridge', () => {
     expect(pageNavigation).toHaveBeenCalledOnce();
   });
 
-  it('forwards the local custom reaction result with its native emoji URL', async () => {
+  it('forwards custom reaction state with its emoji URL', async () => {
     const detail = new Promise((resolve) => {
       document.addEventListener(
         TOPIC_EVENT_NAME,
@@ -167,12 +208,10 @@ describe('page-world topic action bridge', () => {
         { once: true },
       );
     });
-
     reactionToggleCallback?.({
       post: { id: 2, topic_id: 123, current_user_reaction: { id: 'cry' } },
       reaction: { id: 'cry' },
     });
-
     await expect(detail).resolves.toEqual({
       topicId: 123,
       type: 'acted',
@@ -182,367 +221,262 @@ describe('page-world topic action bridge', () => {
     });
   });
 
-  it('clicks an already loaded native control and reports success', async () => {
-    const nativePost = document.createElement('article');
-    nativePost.className = 'topic-post';
-    nativePost.dataset.postId = '2';
-    nativePost.dataset.postNumber = '2';
-    const nativeLike = document.createElement('button');
-    nativeLike.className = 'post-action-menu__like';
-    const click = vi.fn();
-    nativeLike.addEventListener('click', click);
-    nativePost.appendChild(nativeLike);
-    document.getElementById('main-outlet')?.appendChild(nativePost);
-    const visibleButton = document.createElement('button');
-    document.body.appendChild(visibleButton);
-
-    await expect(dispatchRequest(visibleButton, request('like'))).resolves.toEqual({
-      requestId: 'bridge:2',
-      ok: true,
-      phase: 'triggered',
-    });
-    expect(click).toHaveBeenCalledOnce();
-  });
-
-  it('uses the Discourse Reactions control when the like button is replaced by the plugin', async () => {
-    const nativePost = document.createElement('article');
-    nativePost.className = 'topic-post';
-    nativePost.dataset.postId = '2';
-    nativePost.dataset.postNumber = '2';
-    const shim = document.createElement('div');
-    shim.className = 'discourse-reactions-actions-button-shim';
-    const nativeReaction = document.createElement('div');
-    nativeReaction.className = 'discourse-reactions-reaction-button';
-    const click = vi.fn();
-    nativeReaction.addEventListener('click', click);
-    shim.appendChild(nativeReaction);
-    nativePost.appendChild(shim);
-    document.getElementById('main-outlet')?.appendChild(nativePost);
-    const visibleButton = document.createElement('button');
-    document.body.appendChild(visibleButton);
-
-    await expect(dispatchRequest(visibleButton, request('like'))).resolves.toEqual({
-      requestId: 'bridge:2',
-      ok: true,
-      phase: 'triggered',
-    });
-    expect(click).toHaveBeenCalledOnce();
-  });
-
-  it('forwards hover to the native reactions picker and anchors it to the split button', () => {
-    const nativePost = document.createElement('article');
-    nativePost.className = 'topic-post';
-    nativePost.dataset.postId = '2';
-    nativePost.dataset.postNumber = '2';
-    const shim = document.createElement('div');
-    shim.className = 'discourse-reactions-actions-button-shim';
-    const nativeReaction = document.createElement('div');
-    nativeReaction.className = 'discourse-reactions-reaction-button';
-    const pointerTypes: string[] = [];
-    nativeReaction.addEventListener('pointerover', (event) => {
-      pointerTypes.push((event as PointerEvent).pointerType);
-    });
-    nativeReaction.addEventListener('pointerout', (event) => {
-      pointerTypes.push((event as PointerEvent).pointerType);
-    });
-    shim.appendChild(nativeReaction);
-    nativePost.appendChild(shim);
-    document.getElementById('main-outlet')?.appendChild(nativePost);
-    const visibleButton = document.createElement('button');
-    visibleButton.getBoundingClientRect = () =>
-      DOMRect.fromRect({ x: 180, y: 112, width: 32, height: 32 });
-    document.body.appendChild(visibleButton);
-    const pickerRequest: TopicReactionPickerRequest = {
+  it('returns reaction options without touching native post controls', async () => {
+    const visibleButton = document.body.appendChild(document.createElement('button'));
+    const url = window.location.href;
+    const request: TopicInteractionRequest = {
+      requestId: 'options:2',
       topicId: 123,
       postId: 2,
       floor: 2,
-      open: true,
-      routeUrl: `${window.location.origin}/t/topic/123/2?ldo_comments_page=1`,
+      interaction: 'reactionOptions',
+      routeUrl: `${window.location.origin}/t/topic/123/2`,
     };
 
-    dispatchReactionPicker(visibleButton, pickerRequest);
-    dispatchReactionPicker(visibleButton, { ...pickerRequest, open: false });
-
-    expect(pointerTypes).toEqual(['mouse', 'mouse']);
-    expect(nativeReaction.getBoundingClientRect().x).toBe(180);
+    await expect(dispatchInteraction(visibleButton, request)).resolves.toEqual({
+      requestId: 'options:2',
+      interaction: 'reactionOptions',
+      ok: true,
+      reactionOptions: [
+        {
+          id: 'heart',
+          url: 'https://cdn.linux.do/images/emoji/twitter/heart.png',
+          isMain: true,
+        },
+        {
+          id: 'laughing',
+          url: 'https://cdn.linux.do/images/emoji/twitter/laughing.png',
+          isMain: false,
+        },
+        {
+          id: 'cry',
+          url: 'https://cdn.linux.do/images/emoji/twitter/cry.png',
+          isMain: false,
+        },
+      ],
+    });
+    expect(window.location.href).toBe(url);
+    expect(document.querySelector('.discourse-reactions-picker')).toBeNull();
   });
 
-  it('tracks the Discourse Reactions users panel until it closes', async () => {
-    const nativePost = document.createElement('article');
-    nativePost.className = 'topic-post';
-    nativePost.dataset.postId = '2';
-    nativePost.dataset.postNumber = '2';
-    const nativeCounter = document.createElement('div');
-    nativeCounter.className = 'discourse-reactions-counter';
-    const statePanel = document.createElement('div');
-    statePanel.className = 'discourse-reactions-state-panel';
-    nativeCounter.appendChild(statePanel);
-    nativeCounter.addEventListener('click', () => {
-      statePanel.classList.add('is-expanded');
-      window.setTimeout(() => statePanel.classList.remove('is-expanded'), 0);
+  it('loads like users through the data endpoint without native DOM or navigation', async () => {
+    ajax.mockResolvedValueOnce({
+      post_action_users: [
+        {
+          id: 9,
+          username: 'alice',
+          name: 'Alice',
+          avatar_template: '/user_avatar/alice/{size}/9.png',
+        },
+      ],
+      total_rows_post_action_users: 1,
     });
-    nativePost.appendChild(nativeCounter);
-    document.getElementById('main-outlet')?.appendChild(nativePost);
-    const visibleButton = document.createElement('button');
-    visibleButton.getBoundingClientRect = () =>
-      DOMRect.fromRect({ x: 160, y: 96, width: 32, height: 32 });
-    document.body.appendChild(visibleButton);
-    const results: unknown[] = [];
-    visibleButton.addEventListener(TOPIC_ACTION_RESULT_NAME, (event) => {
-      results.push(parseTopicActionResult((event as CustomEvent).detail));
-    });
-
-    visibleButton.dispatchEvent(
-      new CustomEvent(TOPIC_ACTION_REQUEST_NAME, {
-        bubbles: true,
-        detail: JSON.stringify(request('likeUsers')),
+    const visibleButton = document.body.appendChild(document.createElement('button'));
+    const url = window.location.href;
+    await expect(
+      dispatchInteraction(visibleButton, {
+        requestId: 'users:50',
+        topicId: 123,
+        postId: 50,
+        floor: 50,
+        interaction: 'likeUsers',
+        page: 0,
+        pageSize: 30,
+        routeUrl: `${window.location.origin}/t/topic/123/50`,
       }),
-    );
-
-    await vi.waitFor(() => expect(results).toHaveLength(2));
-    expect(results).toEqual([
-      { requestId: 'bridge:2', ok: true, phase: 'triggered' },
-      { requestId: 'bridge:2', ok: true, phase: 'settled' },
-    ]);
-    expect(nativeCounter.getBoundingClientRect().x).toBe(160);
-  });
-
-  it('anchors the native bookmark menu to the visible split button and reports close', async () => {
-    const nativePost = document.createElement('article');
-    nativePost.className = 'topic-post';
-    nativePost.dataset.postId = '2';
-    nativePost.dataset.postNumber = '2';
-    const nativeBookmark = document.createElement('button');
-    nativeBookmark.className = 'post-action-menu__bookmark';
-    nativeBookmark.setAttribute('aria-expanded', 'false');
-    nativeBookmark.addEventListener('click', () => {
-      nativeBookmark.setAttribute('aria-expanded', 'true');
-      window.setTimeout(() => nativeBookmark.setAttribute('aria-expanded', 'false'), 0);
+    ).resolves.toEqual({
+      requestId: 'users:50',
+      interaction: 'likeUsers',
+      ok: true,
+      users: [
+        {
+          id: 9,
+          username: 'alice',
+          name: 'Alice',
+          avatarTemplate: '/user_avatar/alice/{size}/9.png',
+        },
+      ],
+      total: 1,
+      hasMore: false,
     });
-    nativePost.appendChild(nativeBookmark);
-    document.getElementById('main-outlet')?.appendChild(nativePost);
-    const visibleButton = document.createElement('button');
-    visibleButton.getBoundingClientRect = () =>
-      DOMRect.fromRect({ x: 120, y: 80, width: 32, height: 32 });
-    document.body.appendChild(visibleButton);
-    const results: unknown[] = [];
-    visibleButton.addEventListener(TOPIC_ACTION_RESULT_NAME, (event) => {
-      results.push(parseTopicActionResult((event as CustomEvent).detail));
+    expect(ajax).toHaveBeenCalledWith('/post_action_users', {
+      data: { id: 50, post_action_type_id: 2, page: 0, limit: 30 },
     });
-
-    visibleButton.dispatchEvent(
-      new CustomEvent(TOPIC_ACTION_REQUEST_NAME, {
-        bubbles: true,
-        detail: JSON.stringify(request('bookmark')),
-      }),
-    );
-
-    await vi.waitFor(() => expect(results).toHaveLength(2));
-    expect(results).toEqual([
-      { requestId: 'bridge:2', ok: true, phase: 'triggered' },
-      { requestId: 'bridge:2', ok: true, phase: 'settled' },
-    ]);
-    expect(nativeBookmark.getBoundingClientRect().x).toBe(120);
-  });
-
-  it('opens the native Boost menu from the split-layout rocket button', async () => {
-    const nativePost = document.createElement('article');
-    nativePost.className = 'topic-post';
-    nativePost.dataset.postId = '2';
-    nativePost.dataset.postNumber = '2';
-    const nativeBoost = document.createElement('button');
-    nativeBoost.className = 'discourse-boosts__add-btn';
-    nativeBoost.setAttribute('aria-expanded', 'false');
-    nativeBoost.addEventListener('click', () => {
-      nativeBoost.setAttribute('aria-expanded', 'true');
-      window.setTimeout(() => nativeBoost.setAttribute('aria-expanded', 'false'), 0);
-    });
-    nativePost.appendChild(nativeBoost);
-    document.getElementById('main-outlet')?.appendChild(nativePost);
-    const visibleButton = document.createElement('button');
-    visibleButton.getBoundingClientRect = () =>
-      DOMRect.fromRect({ x: 144, y: 88, width: 32, height: 32 });
-    document.body.appendChild(visibleButton);
-    const results: unknown[] = [];
-    visibleButton.addEventListener(TOPIC_ACTION_RESULT_NAME, (event) => {
-      results.push(parseTopicActionResult((event as CustomEvent).detail));
-    });
-
-    visibleButton.dispatchEvent(
-      new CustomEvent(TOPIC_ACTION_REQUEST_NAME, {
-        bubbles: true,
-        detail: JSON.stringify(request('boost')),
-      }),
-    );
-
-    await vi.waitFor(() => expect(results).toHaveLength(2));
-    expect(results).toEqual([
-      { requestId: 'bridge:2', ok: true, phase: 'triggered' },
-      { requestId: 'bridge:2', ok: true, phase: 'settled' },
-    ]);
-    expect(nativeBoost.getBoundingClientRect().x).toBe(144);
-  });
-
-  it('uncloaks the native first post for Boost without navigating', async () => {
-    const nativePostWrapper = document.createElement('div');
-    nativePostWrapper.dataset.postNumber = '1';
-    const click = vi.fn();
-    Object.defineProperty(nativePostWrapper, 'scrollIntoView', {
-      value: vi.fn(() => {
-        window.setTimeout(() => {
-          const renderedPostWrapper = document.createElement('div');
-          renderedPostWrapper.className = 'topic-post';
-          renderedPostWrapper.dataset.postNumber = '1';
-          const nativePost = document.createElement('article');
-          nativePost.dataset.postId = '1';
-          const nativeBoost = document.createElement('button');
-          nativeBoost.className = 'post-action-menu__boost';
-          nativeBoost.setAttribute('aria-expanded', 'false');
-          nativeBoost.addEventListener('click', () => {
-            click();
-            nativeBoost.setAttribute('aria-expanded', 'true');
-            window.setTimeout(() => nativeBoost.setAttribute('aria-expanded', 'false'), 0);
-          });
-          nativePost.appendChild(nativeBoost);
-          renderedPostWrapper.appendChild(nativePost);
-          nativePostWrapper.replaceWith(renderedPostWrapper);
-        }, 0);
-      }),
-    });
-    document.getElementById('main-outlet')?.appendChild(nativePostWrapper);
-    routeTo = vi.fn();
-    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
-    const visibleButton = document.createElement('button');
-    document.body.appendChild(visibleButton);
-    const results: unknown[] = [];
-    visibleButton.addEventListener(TOPIC_ACTION_RESULT_NAME, (event) => {
-      results.push(parseTopicActionResult((event as CustomEvent).detail));
-    });
-
-    visibleButton.dispatchEvent(
-      new CustomEvent(TOPIC_ACTION_REQUEST_NAME, {
-        bubbles: true,
-        detail: JSON.stringify(request('boost', 1)),
-      }),
-    );
-
-    await vi.waitFor(() => expect(results).toHaveLength(2));
-    expect(results).toEqual([
-      { requestId: 'bridge:1', ok: true, phase: 'triggered' },
-      { requestId: 'bridge:1', ok: true, phase: 'settled' },
-    ]);
-    expect(click).toHaveBeenCalledOnce();
-    expect(preventCloak).toHaveBeenCalledWith(1, true);
-    expect(preventCloak).toHaveBeenCalledWith(1, false);
-    expect(scrollTo).toHaveBeenCalled();
+    expect(window.location.href).toBe(url);
+    expect(document.getElementById('main-outlet')?.childElementCount).toBe(0);
     expect(routeTo).not.toHaveBeenCalled();
   });
 
-  it('opens replies through the topic controller without navigating the hidden layout', async () => {
-    const post = { id: 8 };
-    const loadPost = vi.fn().mockResolvedValue(post);
+  it('toggles a custom reaction directly without loading or routing the post stream', async () => {
+    ajax.mockResolvedValueOnce({
+      id: 50,
+      current_user_reaction: { id: 'cry', can_undo: true },
+    });
+    const visibleButton = document.body.appendChild(document.createElement('button'));
+    const url = window.location.href;
+    await expect(
+      dispatchRequest(
+        visibleButton,
+        request('reaction', 50, {
+          reactionId: 'cry',
+        }),
+      ),
+    ).resolves.toEqual({
+      requestId: 'bridge:50',
+      ok: true,
+      phase: 'settled',
+    });
+    expect(ajax).toHaveBeenCalledWith(
+      '/discourse-reactions/posts/50/custom-reactions/cry/toggle.json',
+      { type: 'PUT' },
+    );
+    expect(window.location.href).toBe(url);
+    expect(topicController).toBeNull();
+    expect(routeTo).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale-topic interaction requests without touching the page', async () => {
+    const visibleButton = document.body.appendChild(document.createElement('button'));
+    let settled = false;
+    void dispatchInteraction(visibleButton, {
+      requestId: 'options:stale',
+      topicId: 123,
+      postId: 50,
+      floor: 50,
+      interaction: 'reactionOptions',
+      routeUrl: `${window.location.origin}/t/topic/456/50`,
+    }).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(ajax).not.toHaveBeenCalled();
+    expect(routeTo).not.toHaveBeenCalled();
+  });
+
+  it('silently loads an unrendered post and toggles its like model', async () => {
+    const togglePromise = vi.fn().mockResolvedValue(undefined);
+    const post = { id: 50, likeAction: { togglePromise } };
+    const { loadPost } = installPostController(post);
+    const button = document.body.appendChild(document.createElement('button'));
+    const url = window.location.href;
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+
+    await expect(dispatchRequest(button, request('like', 50))).resolves.toEqual({
+      requestId: 'bridge:50',
+      ok: true,
+      phase: 'settled',
+    });
+    expect(loadPost).toHaveBeenCalledWith(50);
+    expect(togglePromise).toHaveBeenCalledWith(post);
+    expectPageUntouched(url, scrollTo);
+  });
+
+  it.each([
+    ['bookmark', 'toggleBookmark'],
+    ['edit', 'editPost'],
+    ['delete', 'deletePostWithConfirmation'],
+    ['recover', 'recoverPost'],
+    ['flag', 'showPostFlags'],
+  ] as const)(
+    'runs %s through the loaded post model without navigation',
+    async (action, method) => {
+      const post = { id: 50 };
+      const invoke = vi.fn().mockResolvedValue(undefined);
+      const { loadPost } = installPostController(post, { [method]: invoke });
+      const button = document.body.appendChild(document.createElement('button'));
+      const url = window.location.href;
+      const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+
+      await expect(dispatchRequest(button, request(action, 50))).resolves.toEqual({
+        requestId: 'bridge:50',
+        ok: true,
+        phase: 'settled',
+      });
+      expect(loadPost).toHaveBeenCalledWith(50);
+      expect(invoke).toHaveBeenCalledWith(post);
+      expectPageUntouched(url, scrollTo);
+    },
+  );
+
+  it('opens replies through the topic controller without navigating', async () => {
+    const post = { id: 50 };
     const replyToPost = vi.fn().mockImplementation(async () => {
       const composer = document.createElement('section');
       composer.id = 'reply-control';
       composer.className = 'open';
       document.body.appendChild(composer);
     });
-    topicController = {
-      model: {
-        postStream: {
-          findLoadedPost: vi.fn(),
-          loadPost,
-        },
-      },
-      replyToPost,
-    };
-    routeTo = vi.fn();
-    const visibleButton = document.createElement('button');
-    document.body.appendChild(visibleButton);
+    const { loadPost } = installPostController(post, { replyToPost });
+    const button = document.body.appendChild(document.createElement('button'));
+    const url = window.location.href;
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
 
-    await expect(dispatchRequest(visibleButton, request('reply', 8))).resolves.toEqual({
-      requestId: 'bridge:8',
+    await expect(dispatchRequest(button, request('reply', 50))).resolves.toEqual({
+      requestId: 'bridge:50',
       ok: true,
-      phase: 'triggered',
+      phase: 'settled',
     });
-    expect(loadPost).toHaveBeenCalledWith(8);
+    expect(loadPost).toHaveBeenCalledWith(50);
     expect(replyToPost).toHaveBeenCalledWith(post);
-    expect(routeTo).not.toHaveBeenCalled();
-    expect(document.querySelector('#reply-control.open')).not.toBeNull();
+    expectPageUntouched(url, scrollTo);
   });
 
-  it('falls back to the composer service when the topic controller does not open it', async () => {
-    const topic = {
-      draft_key: 'topic_123',
-      draft_sequence: 4,
-      details: { can_create_post: true },
-    };
-    const post = { id: 8, topic };
-    const replyToPost = vi.fn();
-    const open = vi.fn().mockImplementation(async () => {
-      const composer = document.createElement('section');
-      composer.id = 'reply-control';
-      composer.className = 'open';
-      document.body.appendChild(composer);
-    });
-    topicController = {
-      model: {
-        postStream: {
-          findLoadedPost: vi.fn().mockReturnValue(post),
-        },
-      },
-      composer: { open },
-      replyToPost,
-    };
-    const visibleButton = document.createElement('button');
-    document.body.appendChild(visibleButton);
+  it('submits Boost directly through the plugin endpoint without touching page state', async () => {
+    const button = document.body.appendChild(document.createElement('button'));
+    const url = window.location.href;
+    const pushState = vi.spyOn(window.history, 'pushState');
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
 
-    await expect(dispatchRequest(visibleButton, request('reply', 8))).resolves.toEqual({
-      requestId: 'bridge:8',
+    await expect(dispatchRequest(button, request('boost', 50))).resolves.toEqual({
+      requestId: 'bridge:50',
       ok: true,
-      phase: 'triggered',
+      phase: 'settled',
     });
-    expect(replyToPost).toHaveBeenCalledWith(post);
-    expect(open).toHaveBeenCalledWith({
-      action: 'reply',
-      draftKey: 'topic_123',
-      draftSequence: 4,
-      post,
+    expect(ajax).toHaveBeenCalledWith('/discourse-boosts/posts/50/boosts', {
+      type: 'POST',
+      data: { raw: '支持一下' },
     });
+    expect(pushState).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+    expectPageUntouched(url, scrollTo);
   });
 
-  it('waits for a missing floor action menu before clicking the reply fallback', async () => {
+  it('returns a quiet inline error when Boost fails and never falls back to navigation', async () => {
+    ajax.mockRejectedValue({ responseJSON: { errors: ['你已经助推过此楼层'] } });
+    const button = document.body.appendChild(document.createElement('button'));
+    const url = window.location.href;
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+
+    await expect(dispatchRequest(button, request('boost', 50))).resolves.toEqual({
+      requestId: 'bridge:50',
+      ok: false,
+      phase: 'settled',
+      message: '你已经助推过此楼层',
+    });
+    expectPageUntouched(url, scrollTo);
+  });
+
+  it('reports unavailable silent actions instead of clicking hidden native controls', async () => {
+    const nativePost = document.createElement('article');
+    nativePost.dataset.postId = '50';
+    const nativeButton = document.createElement('button');
+    nativeButton.className = 'post-action-menu__edit';
     const click = vi.fn();
-    routeTo = (url: string) => {
-      window.history.pushState({}, '', url);
-      const nativePost = document.createElement('article');
-      nativePost.className = 'topic-post';
-      nativePost.dataset.postId = '8';
-      nativePost.dataset.postNumber = '8';
-      document.getElementById('main-outlet')?.appendChild(nativePost);
-      window.setTimeout(() => {
-        const nativeReply = document.createElement('button');
-        nativeReply.className = 'post-action-menu__reply';
-        nativeReply.addEventListener('click', () => {
-          click();
-          const composer = document.createElement('section');
-          composer.id = 'reply-control';
-          composer.className = 'open';
-          document.body.appendChild(composer);
-        });
-        nativePost.appendChild(nativeReply);
-      }, 0);
-    };
-    const visibleButton = document.createElement('button');
-    document.body.appendChild(visibleButton);
+    nativeButton.addEventListener('click', click);
+    nativePost.appendChild(nativeButton);
+    document.getElementById('main-outlet')?.appendChild(nativePost);
+    const button = document.body.appendChild(document.createElement('button'));
+    const url = window.location.href;
 
-    await expect(dispatchRequest(visibleButton, request('reply', 8))).resolves.toEqual({
-      requestId: 'bridge:8',
-      ok: true,
-      phase: 'triggered',
+    await expect(dispatchRequest(button, request('edit', 50))).resolves.toMatchObject({
+      requestId: 'bridge:50',
+      ok: false,
+      phase: 'settled',
     });
-    expect(click).toHaveBeenCalledOnce();
-    expect(window.location.search).toContain('ldo_comments_page=1');
-    expect(document.querySelector('#reply-control.open')).not.toBeNull();
+    expect(click).not.toHaveBeenCalled();
+    expect(window.location.href).toBe(url);
+    expect(routeTo).not.toHaveBeenCalled();
   });
 });
