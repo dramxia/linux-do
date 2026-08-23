@@ -1,32 +1,33 @@
 /* Linux.do 工具箱 - 双栏阅读的单一生命周期控制器 */
 import type { DiscourseSettings } from '../common/settings';
+import { HISTORY_NAVIGATION_EVENT_NAME, PAGE_NAVIGATION_EVENT_NAME } from '../common/topic-route';
 import { parseTopicEventDetail, TOPIC_EVENT_NAME } from './topic-events';
-import { parseTopicRoute } from './topic-state';
 import { TopicLayoutRuntime, type TopicLayoutRuntimeState } from './topic-layout';
+import {
+  asTopicPageContext,
+  captureTopicPageSnapshot,
+  isSameTopicPageSnapshot,
+  type TopicPageSnapshot,
+} from './topic-page-context';
 
 const MIN_VIEWPORT_WIDTH = 1280;
 
 interface TopicLayoutDriver {
   activate(settings: DiscourseSettings, force?: boolean): Promise<void>;
   disable(): void;
+  suspend(): void;
   invalidate(): void;
-  updateGeometry(): void;
+  reconcilePageContext(): void;
   getState(): TopicLayoutRuntimeState;
-}
-
-function getRouteKey(): string | null {
-  const route = parseTopicRoute(window.location.pathname);
-  return route ? `${route.topicId}:${route.floor ?? ''}` : null;
 }
 
 export class TopicLayoutController {
   private settings: DiscourseSettings | null = null;
-  private routeKey: string | null = null;
-  private pageRoot: HTMLElement | null = null;
+  private pageSnapshot: TopicPageSnapshot = captureTopicPageSnapshot();
   private wideViewport = window.innerWidth >= MIN_VIEWPORT_WIDTH;
   private started = false;
-  private navigationFrame: number | null = null;
   private resizeFrame: number | null = null;
+  private pageRootObserver: MutationObserver | null = null;
 
   constructor(private readonly runtime: TopicLayoutDriver = new TopicLayoutRuntime()) {}
 
@@ -40,9 +41,14 @@ export class TopicLayoutController {
     this.capturePageContext();
     window.addEventListener('discourse-navigate-completed', this.handleNavigation);
     window.addEventListener('page:change', this.handleNavigation);
+    window.addEventListener('popstate', this.handleHistoryNavigation);
     window.addEventListener('pageshow', this.handlePageShow);
     window.addEventListener('resize', this.handleResize, { passive: true });
+    document.addEventListener(HISTORY_NAVIGATION_EVENT_NAME, this.handleHistoryNavigation);
+    document.addEventListener(PAGE_NAVIGATION_EVENT_NAME, this.handleNavigation);
     document.addEventListener(TOPIC_EVENT_NAME, this.handleTopicEvent as EventListener);
+    this.pageRootObserver = new MutationObserver(this.handlePageRootMutations);
+    this.pageRootObserver.observe(document.body, { childList: true, subtree: true });
     void this.applyIntent();
   }
 
@@ -51,12 +57,15 @@ export class TopicLayoutController {
     this.started = false;
     window.removeEventListener('discourse-navigate-completed', this.handleNavigation);
     window.removeEventListener('page:change', this.handleNavigation);
+    window.removeEventListener('popstate', this.handleHistoryNavigation);
     window.removeEventListener('pageshow', this.handlePageShow);
     window.removeEventListener('resize', this.handleResize);
+    document.removeEventListener(HISTORY_NAVIGATION_EVENT_NAME, this.handleHistoryNavigation);
+    document.removeEventListener(PAGE_NAVIGATION_EVENT_NAME, this.handleNavigation);
     document.removeEventListener(TOPIC_EVENT_NAME, this.handleTopicEvent as EventListener);
-    if (this.navigationFrame !== null) window.cancelAnimationFrame(this.navigationFrame);
+    this.pageRootObserver?.disconnect();
+    this.pageRootObserver = null;
     if (this.resizeFrame !== null) window.cancelAnimationFrame(this.resizeFrame);
-    this.navigationFrame = null;
     this.resizeFrame = null;
     this.runtime.disable();
   }
@@ -80,25 +89,31 @@ export class TopicLayoutController {
 
   private readonly handleNavigation = (): void => {
     if (!this.started) return;
-    this.reconcilePageContext(true);
-    if (this.navigationFrame !== null) return;
-    this.navigationFrame = window.requestAnimationFrame(() => {
-      this.navigationFrame = null;
-      if (this.started) this.reconcilePageContext(false);
-    });
-  };
-
-  private reconcilePageContext(updateGeometry: boolean): void {
-    const previousRouteKey = this.routeKey;
-    const previousPageRoot = this.pageRoot;
+    const previous = this.pageSnapshot;
     this.capturePageContext();
-    if (previousRouteKey === this.routeKey && previousPageRoot === this.pageRoot) {
-      if (updateGeometry) this.runtime.updateGeometry();
+    if (isSameTopicPageSnapshot(previous, this.pageSnapshot)) {
+      if (this.runtime.getState() === 'unsupported') {
+        void this.applyIntent();
+        return;
+      }
+      this.runtime.reconcilePageContext();
       return;
     }
     this.runtime.invalidate();
     void this.applyIntent();
-  }
+  };
+
+  private readonly handleHistoryNavigation = (): void => {
+    if (!this.started) return;
+    const previous = this.pageSnapshot;
+    this.capturePageContext();
+    if (isSameTopicPageSnapshot(previous, this.pageSnapshot)) {
+      this.runtime.reconcilePageContext();
+      return;
+    }
+    this.runtime.invalidate();
+    this.runtime.suspend();
+  };
 
   private readonly handlePageShow = (event: PageTransitionEvent): void => {
     if (event.persisted) this.handleNavigation();
@@ -110,7 +125,7 @@ export class TopicLayoutController {
       this.resizeFrame = null;
       const nextWideViewport = window.innerWidth >= MIN_VIEWPORT_WIDTH;
       if (nextWideViewport === this.wideViewport) {
-        if (nextWideViewport) this.runtime.updateGeometry();
+        if (nextWideViewport) this.runtime.reconcilePageContext();
         return;
       }
       this.wideViewport = nextWideViewport;
@@ -120,16 +135,27 @@ export class TopicLayoutController {
 
   private readonly handleTopicEvent = (event: CustomEvent<unknown>): void => {
     const detail = parseTopicEventDetail(event.detail);
-    const route = parseTopicRoute(window.location.pathname);
+    const route = captureTopicPageSnapshot().route;
     if (!detail || !route || String(detail.topicId) !== route.topicId) return;
     const loading = this.runtime.getState() === 'loading';
     this.runtime.invalidate();
     if (loading && this.settings?.enableSplitReading) void this.applyIntent();
   };
 
+  private readonly handlePageRootMutations = (mutations: MutationRecord[]): void => {
+    if (mutations.length === 0) return;
+    const snapshot = captureTopicPageSnapshot();
+    if (
+      snapshot.pageRoot !== this.pageSnapshot.pageRoot ||
+      Boolean(snapshot.topicMarker) !== Boolean(this.pageSnapshot.topicMarker) ||
+      (this.runtime.getState() === 'unsupported' && asTopicPageContext(snapshot) !== null)
+    ) {
+      this.handleNavigation();
+    }
+  };
+
   private capturePageContext(): void {
-    this.routeKey = getRouteKey();
-    this.pageRoot = document.getElementById('main-outlet');
+    this.pageSnapshot = captureTopicPageSnapshot();
     this.wideViewport = window.innerWidth >= MIN_VIEWPORT_WIDTH;
   }
 
@@ -138,6 +164,10 @@ export class TopicLayoutController {
     if (!settings) return;
     if (!settings.enableSplitReading) {
       this.runtime.disable();
+      return;
+    }
+    if (!asTopicPageContext(this.pageSnapshot) || !this.wideViewport) {
+      this.runtime.suspend();
       return;
     }
     await this.runtime.activate(settings);

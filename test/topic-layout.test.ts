@@ -1043,6 +1043,32 @@ describe('topic split layout lifecycle', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each(['/latest', '/t/category/99/topic/123'])(
+    'never activates outside a strict topic detail route: %s',
+    async (pathname) => {
+      window.history.replaceState({}, '', pathname);
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      await refreshTopicLayout(enabledSettings);
+
+      expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();
+      expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects a topic response that does not match the detail route', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(topic({ id: 456 })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await refreshTopicLayout(enabledSettings);
+
+    expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();
+    expect(document.getElementById('ldtk-topic-reading-loading')).toBeNull();
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(false);
+  });
+
   it('does not activate for mega topics', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(topic({ posts_count: 10_000 })));
     vi.stubGlobal('fetch', fetchMock);
@@ -1074,6 +1100,53 @@ describe('topic split layout lifecycle', () => {
     await refreshTopicLayout(enabledSettings);
     expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(false);
+  });
+
+  it('removes every stale split root when leaving a topic page', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
+    await refreshTopicLayout(enabledSettings);
+    document.body.appendChild(
+      Object.assign(document.createElement('section'), {
+        className: 'ldtk-topic-reading-root',
+      }),
+    );
+
+    window.history.replaceState({}, '', '/latest');
+    topicLayoutRuntime.suspend();
+
+    expect(document.querySelectorAll('.ldtk-topic-reading-root')).toHaveLength(0);
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(false);
+  });
+
+  it('cleans up when the native topic article is replaced under the same URL', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
+    await refreshTopicLayout(enabledSettings);
+
+    document
+      .getElementById('main-outlet')
+      ?.querySelector('[data-post-number="1"]')
+      ?.replaceWith(Object.assign(document.createElement('section'), { className: 'topic-list' }));
+    topicLayoutRuntime.reconcilePageContext();
+
+    expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(false);
+  });
+
+  it('stays active when Discourse rebuilds valid topic DOM under the same route', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
+    await refreshTopicLayout(enabledSettings);
+
+    const replacement = document.createElement('article');
+    replacement.className = 'topic-post';
+    replacement.dataset.postNumber = '1';
+    document
+      .getElementById('main-outlet')
+      ?.querySelector('[data-post-number="1"]')
+      ?.replaceWith(replacement);
+    topicLayoutRuntime.reconcilePageContext();
+
+    expect(document.querySelector('.ldtk-topic-reading-root')).not.toBeNull();
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);
   });
 
   it('is idempotent for repeated refreshes on the same topic', async () => {
@@ -1174,6 +1247,29 @@ describe('topic split layout lifecycle', () => {
     await pendingRefresh;
 
     expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(false);
+  });
+
+  it('does not mount a pending response after the native topic page is replaced', async () => {
+    let resolveRequest: (response: Response) => void = () => undefined;
+    const pendingResponse = new Promise<Response>((resolve) => {
+      resolveRequest = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => pendingResponse),
+    );
+
+    const pendingRefresh = refreshTopicLayout(enabledSettings);
+    await Promise.resolve();
+    document
+      .getElementById('main-outlet')
+      ?.replaceWith(Object.assign(document.createElement('main'), { id: 'main-outlet' }));
+    resolveRequest(jsonResponse(topic()));
+    await pendingRefresh;
+
+    expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();
+    expect(document.getElementById('ldtk-topic-reading-loading')).toBeNull();
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(false);
   });
 

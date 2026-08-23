@@ -21,6 +21,21 @@ describe('topic route and pagination state', () => {
     expect(parseTopicRoute(pathname)).toEqual(expected);
   });
 
+  it.each([
+    '/',
+    '/latest',
+    '/top/2026/8',
+    '/t',
+    '/t/topic',
+    '/t/topic/0',
+    '/t/topic/123/not-a-floor',
+    '/t/category/99/topic/123',
+    '/t/topic/archive/123',
+    '/t//123',
+  ])('rejects non-detail route %s', (pathname) => {
+    expect(parseTopicRoute(pathname)).toBeNull();
+  });
+
   it('maps floors to comment pages with floor 1 reserved for the article', () => {
     expect(getCommentPageForFloor(1, 10)).toBe(1);
     expect(getCommentPageForFloor(2, 10)).toBe(1);

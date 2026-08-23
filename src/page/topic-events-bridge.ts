@@ -1,6 +1,11 @@
 /* Linux.do 工具箱 - MAIN world Discourse MessageBus 事件桥 */
 
 import {
+  HISTORY_NAVIGATION_EVENT_NAME,
+  PAGE_NAVIGATION_EVENT_NAME,
+  parseTopicRoute,
+} from '../common/topic-route';
+import {
   parseTopicEventDetail,
   sanitizeTopicMessage,
   TOPIC_EVENT_NAME,
@@ -46,6 +51,7 @@ interface PluginApiModule {
 interface PageWindow extends Window {
   MessageBus?: MessageBusClient;
   require?: (moduleName: string) => unknown;
+  __ldtkHistoryNavigationHookInstalled?: boolean;
   Discourse?: {
     __container__?: DiscourseContainer;
   };
@@ -117,10 +123,8 @@ let discourseContainer: DiscourseContainer | null = null;
 const pendingReactionPickers = new WeakMap<Element, () => void>();
 
 function getTopicId(): number | null {
-  const parts = window.location.pathname.split('/').filter(Boolean);
-  if (parts[0] !== 't') return null;
-  const value = parts.slice(1).find((part) => /^\d+$/.test(part));
-  return value ? Number(value) : null;
+  const route = parseTopicRoute(window.location.pathname);
+  return route ? Number(route.topicId) : null;
 }
 
 function dispatchActionResult(
@@ -146,9 +150,8 @@ function validateActionRoute(request: TopicTargetRequest): URL | null {
   try {
     const url = new URL(request.routeUrl, window.location.origin);
     if (url.origin !== window.location.origin) return null;
-    const parts = url.pathname.split('/').filter(Boolean);
-    const routeTopicId = parts.slice(1).find((part) => /^\d+$/.test(part));
-    return parts[0] === 't' && Number(routeTopicId) === request.topicId ? url : null;
+    const route = parseTopicRoute(url.pathname);
+    return Number(route?.topicId) === request.topicId ? url : null;
   } catch {
     return null;
   }
@@ -631,6 +634,31 @@ function subscribeToCurrentTopic(): boolean {
   return true;
 }
 
+function dispatchPageNavigation(): void {
+  subscribeToCurrentTopic();
+  document.dispatchEvent(new Event(PAGE_NAVIGATION_EVENT_NAME));
+}
+
+function dispatchHistoryNavigation(): void {
+  subscribeToCurrentTopic();
+  document.dispatchEvent(new Event(HISTORY_NAVIGATION_EVENT_NAME));
+}
+
+function installHistoryNavigationHook(): void {
+  if (pageWindow.__ldtkHistoryNavigationHookInstalled) return;
+  const pushState = history.pushState.bind(history);
+  const replaceState = history.replaceState.bind(history);
+  history.pushState = (data, unused, url) => {
+    pushState(data, unused, url);
+    dispatchHistoryNavigation();
+  };
+  history.replaceState = (data, unused, url) => {
+    replaceState(data, unused, url);
+    dispatchHistoryNavigation();
+  };
+  pageWindow.__ldtkHistoryNavigationHookInstalled = true;
+}
+
 function installPluginHook(): boolean {
   if (pluginHookInstalled || !pageWindow.require) return pluginHookInstalled;
   try {
@@ -638,7 +666,7 @@ function installPluginHook(): boolean {
     if (!module?.withPluginApi) return false;
     module.withPluginApi('1.0.0', (api) => {
       discourseContainer = api.container || null;
-      api.onPageChange(() => subscribeToCurrentTopic());
+      api.onPageChange(dispatchPageNavigation);
       api.onAppEvent?.('discourse-reactions:reaction-toggled', forwardReactionToggle);
       subscribeToCurrentTopic();
     });
@@ -656,7 +684,8 @@ function discover(attempt = 0): void {
   window.setTimeout(() => discover(attempt + 1), 250);
 }
 
-window.addEventListener('popstate', () => subscribeToCurrentTopic());
+installHistoryNavigationHook();
+window.addEventListener('popstate', dispatchHistoryNavigation);
 document.addEventListener('DOMContentLoaded', () => subscribeToCurrentTopic(), { once: true });
 document.addEventListener(TOPIC_ACTION_REQUEST_NAME, handleActionRequest);
 document.addEventListener(TOPIC_REACTION_PICKER_REQUEST_NAME, handleReactionPickerRequest);

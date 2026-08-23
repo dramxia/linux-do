@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, type DiscourseSettings } from '../src/common/settings';
+import {
+  HISTORY_NAVIGATION_EVENT_NAME,
+  PAGE_NAVIGATION_EVENT_NAME,
+} from '../src/common/topic-route';
 import { TopicLayoutController } from '../src/content/topic-layout-controller';
 import type { TopicLayoutRuntimeState } from '../src/content/topic-layout';
 import type { TopicPost, TopicResponse } from '../src/content/topic-api';
@@ -18,8 +22,11 @@ class RuntimeDriver {
   disable = vi.fn(() => {
     this.state = 'disabled';
   });
+  suspend = vi.fn(() => {
+    this.state = 'unsupported';
+  });
   invalidate = vi.fn();
-  updateGeometry = vi.fn();
+  reconcilePageContext = vi.fn();
   getState = vi.fn(() => this.state);
 }
 
@@ -64,7 +71,8 @@ describe('TopicLayoutController', () => {
   let controller: TopicLayoutController;
 
   beforeEach(() => {
-    document.body.innerHTML = '<main id="main-outlet"></main>';
+    document.body.innerHTML =
+      '<main id="main-outlet"><article class="topic-post" data-post-number="1"></article></main>';
     window.history.replaceState({}, '', '/t/topic/123');
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
     driver = new RuntimeDriver();
@@ -87,6 +95,19 @@ describe('TopicLayoutController', () => {
     expect(driver.invalidate).not.toHaveBeenCalled();
   });
 
+  it('never activates outside a topic detail page', async () => {
+    window.history.replaceState({}, '', '/latest');
+    document.body.innerHTML =
+      '<main id="main-outlet"><section class="topic-list"></section></main>';
+    controller = new TopicLayoutController(driver);
+
+    controller.start(enabledSettings);
+    await Promise.resolve();
+
+    expect(driver.activate).not.toHaveBeenCalled();
+    expect(driver.suspend).toHaveBeenCalledOnce();
+  });
+
   it('deduplicates repeated route events for the same page context', async () => {
     controller.start(enabledSettings);
     await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(1));
@@ -97,7 +118,7 @@ describe('TopicLayoutController', () => {
 
     expect(driver.activate).toHaveBeenCalledTimes(1);
     expect(driver.invalidate).not.toHaveBeenCalled();
-    expect(driver.updateGeometry).toHaveBeenCalledTimes(3);
+    expect(driver.reconcilePageContext).toHaveBeenCalledTimes(3);
   });
 
   it('invalidates data and activates once when the topic context changes', async () => {
@@ -109,6 +130,40 @@ describe('TopicLayoutController', () => {
     await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(2));
 
     expect(driver.invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('suspends immediately on a history route change and waits for topic DOM', async () => {
+    controller.start(enabledSettings);
+    await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(1));
+
+    window.history.replaceState({}, '', '/t/another-topic/456');
+    document.dispatchEvent(new Event(HISTORY_NAVIGATION_EVENT_NAME));
+
+    expect(driver.suspend).toHaveBeenCalledOnce();
+    expect(driver.activate).toHaveBeenCalledTimes(1);
+
+    document.getElementById('main-outlet')?.replaceChildren(
+      Object.assign(document.createElement('article'), {
+        className: 'topic-post',
+      }),
+    );
+    document.querySelector<HTMLElement>('.topic-post')?.setAttribute('data-post-number', '1');
+    document.dispatchEvent(new Event(PAGE_NAVIGATION_EVENT_NAME));
+
+    await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(2));
+  });
+
+  it('reactivates on page completion when Discourse reuses the same topic DOM nodes', async () => {
+    controller.start(enabledSettings);
+    await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(1));
+
+    window.history.replaceState({}, '', '/t/another-topic/456');
+    document.dispatchEvent(new Event(HISTORY_NAVIGATION_EVENT_NAME));
+    expect(driver.suspend).toHaveBeenCalledOnce();
+
+    document.dispatchEvent(new Event(PAGE_NAVIGATION_EVENT_NAME));
+
+    await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(2));
   });
 
   it('keeps a failed state stable until a new layout intent arrives', async () => {
@@ -182,12 +237,13 @@ describe('TopicLayoutController', () => {
     window.dispatchEvent(new Event('resize'));
     runFrame?.(0);
     expect(driver.activate).toHaveBeenCalledTimes(1);
-    expect(driver.updateGeometry).toHaveBeenCalledTimes(1);
+    expect(driver.reconcilePageContext).toHaveBeenCalledTimes(1);
 
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1200 });
     window.dispatchEvent(new Event('resize'));
     runFrame?.(0);
-    await vi.waitFor(() => expect(driver.activate).toHaveBeenCalledTimes(2));
+    expect(driver.activate).toHaveBeenCalledTimes(1);
+    expect(driver.suspend).toHaveBeenCalledOnce();
   });
 });
 
@@ -233,6 +289,28 @@ describe('TopicLayoutController integration', () => {
     expect(document.querySelectorAll('.ldtk-topic-reading-root')).toHaveLength(1);
   });
 
+  it('never fetches while split reading is repeatedly toggled on a home page', async () => {
+    window.history.replaceState({}, '', '/latest');
+    document
+      .getElementById('main-outlet')
+      ?.replaceChildren(
+        Object.assign(document.createElement('section'), { className: 'topic-list' }),
+      );
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    controller.start({ ...enabledSettings, enableSplitReading: false });
+
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      controller.updateSettings(enabledSettings);
+      controller.updateSettings({ ...enabledSettings, enableSplitReading: false });
+    }
+    await Promise.resolve();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();
+    expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(false);
+  });
+
   it('does not retry a failed load until the user creates a new enable intent', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ error: 'failed' }, 500));
     vi.stubGlobal('fetch', fetchMock);
@@ -255,7 +333,7 @@ describe('TopicLayoutController integration', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('cleans up after an early navigation event once the home URL settles', async () => {
+  it('cleans up when the definitive history signal follows an early navigation event', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
     controller.start(enabledSettings);
     await vi.waitFor(() => {
@@ -264,6 +342,7 @@ describe('TopicLayoutController integration', () => {
 
     window.dispatchEvent(new Event('page:change'));
     window.history.replaceState({}, '', '/latest');
+    document.dispatchEvent(new Event(HISTORY_NAVIGATION_EVENT_NAME));
 
     await vi.waitFor(() => {
       expect(document.querySelector('.ldtk-topic-reading-root')).toBeNull();

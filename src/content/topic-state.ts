@@ -1,12 +1,9 @@
 /* Linux.do 工具箱 - 双栏阅读的分页、路由与会话状态 */
 
+export { parseTopicRoute, type TopicRoute } from '../common/topic-route';
+
 export const COMMENTS_PAGE_PARAM = 'ldo_comments_page';
 const SESSION_PREFIX = 'ldtk:split-reading:';
-
-export interface TopicRoute {
-  topicId: string;
-  floor?: number;
-}
 
 export interface PendingNativeAction {
   floor: number;
@@ -33,16 +30,6 @@ const NATIVE_ACTIONS = new Set<PendingNativeAction['action']>([
   'delete',
   'recover',
 ]);
-
-export function parseTopicRoute(pathname: string): TopicRoute | null {
-  const parts = pathname.split('/').filter(Boolean);
-  if (parts[0] !== 't') return null;
-
-  const numericParts = parts.slice(1).filter((part) => /^\d+$/.test(part));
-  if (numericParts.length === 0) return null;
-  const [topicId, floor] = numericParts;
-  return { topicId, floor: floor ? Number(floor) : undefined };
-}
 
 export function getPageCount(commentCount: number, perPage: number): number {
   return Math.max(1, Math.ceil(Math.max(0, commentCount) / perPage));

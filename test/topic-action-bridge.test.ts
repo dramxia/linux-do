@@ -7,6 +7,10 @@ import {
   type TopicActionRequest,
   type TopicReactionPickerRequest,
 } from '../src/content/topic-actions';
+import {
+  HISTORY_NAVIGATION_EVENT_NAME,
+  PAGE_NAVIGATION_EVENT_NAME,
+} from '../src/common/topic-route';
 import { parseTopicEventDetail, TOPIC_EVENT_NAME } from '../src/content/topic-events';
 
 interface BridgeTestWindow extends Window {
@@ -22,6 +26,7 @@ const pageWindow = window as unknown as BridgeTestWindow;
 let routeTo: (url: string) => void = () => undefined;
 let topicController: unknown = null;
 let reactionToggleCallback: ((value: unknown) => void) | null = null;
+let pageChangeCallback: (() => void) | null = null;
 
 function request(action: TopicActionRequest['action'], postId = 2): TopicActionRequest {
   return {
@@ -73,7 +78,9 @@ beforeAll(async () => {
       return {
         withPluginApi: (_version: string, callback: (api: unknown) => void) =>
           callback({
-            onPageChange: vi.fn(),
+            onPageChange: (pageCallback: () => void) => {
+              pageChangeCallback = pageCallback;
+            },
             onAppEvent: (name: string, eventCallback: (value: unknown) => void) => {
               if (name === 'discourse-reactions:reaction-toggled') {
                 reactionToggleCallback = eventCallback;
@@ -104,6 +111,19 @@ beforeEach(() => {
 });
 
 describe('page-world topic action bridge', () => {
+  it('dispatches definitive navigation signals for history and completed page changes', () => {
+    const historyNavigation = vi.fn();
+    const pageNavigation = vi.fn();
+    document.addEventListener(HISTORY_NAVIGATION_EVENT_NAME, historyNavigation);
+    document.addEventListener(PAGE_NAVIGATION_EVENT_NAME, pageNavigation);
+
+    window.history.pushState({}, '', '/latest');
+    pageChangeCallback?.();
+
+    expect(historyNavigation).toHaveBeenCalledOnce();
+    expect(pageNavigation).toHaveBeenCalledOnce();
+  });
+
   it('forwards the local custom reaction result with its native emoji URL', async () => {
     const detail = new Promise((resolve) => {
       document.addEventListener(

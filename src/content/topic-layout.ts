@@ -1,5 +1,6 @@
 /* Linux.do 工具箱 - 主题正文/评论双栏阅读模式 */
 import type { DiscourseSettings } from '../common/settings';
+import { isSameTopicRoute, parseTopicRoute, type TopicRoute } from '../common/topic-route';
 import { injectButtons } from './buttons';
 import { copyToClipboard, showToast } from './output';
 import { fetchPostReplies, TopicDataSource, type TopicPost } from './topic-api';
@@ -15,19 +16,22 @@ import {
 import { parseTopicEventDetail, TOPIC_EVENT_NAME, type TopicEventDetail } from './topic-events';
 import { TopicReadTracker } from './topic-read-tracking';
 import {
+  captureTopicPageContext,
+  isTopicPageContextCurrent,
+  type TopicPageContext,
+} from './topic-page-context';
+import {
   buildPaginationItems,
   clampPage,
   COMMENTS_PAGE_PARAM,
   deriveInitialPage,
   getCommentPageForFloor,
   getPageCount,
-  parseTopicRoute,
   readTopicState,
   updatePageUrl,
   writeTopicState,
   type PendingNativeAction,
   type TopicReadingState,
-  type TopicRoute,
 } from './topic-state';
 
 const ROOT_CLASS = 'ldtk-topic-reading-root';
@@ -1326,6 +1330,16 @@ function hideLoadingOverlay(): void {
   }, 200);
 }
 
+function removeLoadingOverlay(): void {
+  loadingOverlayVersion += 1;
+  if (loadingOverlayHideTimer !== null) {
+    window.clearTimeout(loadingOverlayHideTimer);
+    loadingOverlayHideTimer = null;
+  }
+  document.getElementById(LOADING_ROOT_ID)?.remove();
+  document.getElementById(LOADING_STYLE_ID)?.remove();
+}
+
 function ensureLayoutStyle(): void {
   if (document.getElementById(STYLE_ID)) return;
   const style = createElement('style');
@@ -1591,9 +1605,13 @@ class TopicLayout {
 
   matches(route: TopicRoute, settings: DiscourseSettings): boolean {
     return (
-      this.route.topicId === route.topicId &&
+      isSameTopicRoute(this.route, route) &&
       this.settings.commentsPerPage === settings.commentsPerPage
     );
+  }
+
+  matchesRoute(route: TopicRoute | null): boolean {
+    return isSameTopicRoute(this.route, route);
   }
 
   private ensureStyle(): void {
@@ -3020,7 +3038,7 @@ class TopicLayout {
 
 interface ReusableTopicData {
   topicId: string;
-  pageRoot: HTMLElement | null;
+  pageRoot: HTMLElement;
   source: TopicDataSource;
   articleReplies: TopicPost[];
 }
@@ -3030,6 +3048,7 @@ export type TopicLayoutRuntimeState =
 
 export class TopicLayoutRuntime {
   private activeLayout: TopicLayout | null = null;
+  private activeContext: TopicPageContext | null = null;
   private loadingAbort: AbortController | null = null;
   private refreshVersion = 0;
   private latestSettings: DiscourseSettings | null = null;
@@ -3048,28 +3067,41 @@ export class TopicLayoutRuntime {
     nativeAttemptKey = null;
   }
 
+  suspend(): void {
+    this.reusableData = null;
+    this.cleanupLayout();
+    this.state = 'unsupported';
+    removeReturnButton();
+    nativeAttemptKey = null;
+  }
+
   invalidate(): void {
     this.reusableData = null;
   }
 
-  updateGeometry(): void {
+  reconcilePageContext(): void {
+    if (
+      this.activeLayout &&
+      (!this.activeContext || !isTopicPageContextCurrent(this.activeContext))
+    ) {
+      this.rejectPageContext();
+      return;
+    }
     this.activeLayout?.updateHeaderOffset();
   }
 
   async activate(settings: DiscourseSettings, force = false): Promise<void> {
     this.latestSettings = settings;
-    const route = parseTopicRoute(window.location.pathname);
     if (!settings.enableSplitReading) {
       this.disable();
       return;
     }
-    if (window.innerWidth < MIN_VIEWPORT_WIDTH || !route) {
-      this.cleanupLayout();
-      this.state = 'unsupported';
-      removeReturnButton();
-      nativeAttemptKey = null;
+    const context = captureTopicPageContext();
+    if (window.innerWidth < MIN_VIEWPORT_WIDTH || !context) {
+      this.rejectPageContext();
       return;
     }
+    const { route, pageRoot } = context;
 
     const readingState = readTopicState(route.topicId);
     if (readingState?.nativeMode && !force) {
@@ -3090,14 +3122,24 @@ export class TopicLayoutRuntime {
       });
     }
 
-    if (!force && this.activeLayout?.matches(route, settings)) {
+    if (
+      !force &&
+      this.activeLayout?.matches(route, settings) &&
+      this.activeContext &&
+      isTopicPageContextCurrent(this.activeContext)
+    ) {
       this.activeLayout.updateHeaderOffset();
       this.state = 'active';
       return;
     }
 
     const retainedLayout =
-      force && this.activeLayout?.matches(route, settings) ? this.activeLayout : null;
+      force &&
+      this.activeLayout?.matches(route, settings) &&
+      this.activeContext &&
+      isTopicPageContextCurrent(this.activeContext)
+        ? this.activeLayout
+        : null;
     if (!retainedLayout) {
       prepareTopicLayout(settings);
       showLoadingOverlay();
@@ -3112,7 +3154,6 @@ export class TopicLayoutRuntime {
     let candidate: TopicLayout | null = null;
 
     try {
-      const pageRoot = document.getElementById('main-outlet');
       const cachedData =
         !force &&
         this.reusableData?.topicId === route.topicId &&
@@ -3122,7 +3163,7 @@ export class TopicLayoutRuntime {
       const source =
         cachedData?.source ??
         (await TopicDataSource.create(route.topicId, request.signal, route.floor));
-      if (!this.canContinueActivation(version, route)) return;
+      if (!this.canContinueActivation(version, context, source.topic.id)) return;
       if (source.isMegaTopic) {
         if (retainedLayout) {
           this.state = 'active';
@@ -3156,7 +3197,7 @@ export class TopicLayoutRuntime {
         source.loadPage(initialPage, settings.commentsPerPage, request.signal),
         articleRepliesRequest,
       ]);
-      if (!this.canContinueActivation(version, route)) return;
+      if (!this.canContinueActivation(version, context, source.topic.id)) return;
       retainedLayout?.persistState();
       candidate = new TopicLayout(route, source, settings, initialPage, {
         requestRefresh: () => {
@@ -3166,12 +3207,13 @@ export class TopicLayoutRuntime {
         handoffNative: (floor, action) => this.handoffToNative(route, settings, floor, action),
       });
       candidate.mount(posts, articleReplies);
-      if (!this.canContinueActivation(version, route)) {
+      if (!this.canContinueActivation(version, context, source.topic.id)) {
         candidate.destroy(false, Boolean(retainedLayout));
         return;
       }
       retainedLayout?.destroy(false, true);
       this.activeLayout = candidate;
+      this.activeContext = context;
       this.reusableData = { topicId: route.topicId, pageRoot, source, articleReplies };
       this.state = 'active';
       candidate = null;
@@ -3179,6 +3221,10 @@ export class TopicLayoutRuntime {
     } catch (error) {
       candidate?.destroy(false, Boolean(retainedLayout));
       if (!this.isCurrent(version) || (error as Error).name === 'AbortError') return;
+      if (!isTopicPageContextCurrent(context)) {
+        this.rejectPageContext();
+        return;
+      }
       if (retainedLayout && this.activeLayout === retainedLayout) {
         this.state = 'active';
         console.warn('[Linux.do 工具箱] 双栏阅读刷新失败，已保留当前双栏内容', error);
@@ -3197,17 +3243,21 @@ export class TopicLayoutRuntime {
     return version === this.refreshVersion;
   }
 
-  private canContinueActivation(version: number, route: TopicRoute): boolean {
+  private canContinueActivation(
+    version: number,
+    context: TopicPageContext,
+    responseTopicId: number,
+  ): boolean {
     if (!this.isCurrent(version)) return false;
-    const currentRoute = parseTopicRoute(window.location.pathname);
-    if (currentRoute?.topicId === route.topicId && currentRoute.floor === route.floor) {
+    if (isTopicPageContextCurrent(context) && String(responseTopicId) === context.route.topicId) {
       return true;
     }
-    this.cleanupLayout();
-    this.state = 'unsupported';
-    removeReturnButton();
-    nativeAttemptKey = null;
+    this.rejectPageContext();
     return false;
+  }
+
+  private rejectPageContext(): void {
+    this.suspend();
   }
 
   private cancelLoading(): void {
@@ -3220,11 +3270,12 @@ export class TopicLayoutRuntime {
     this.cancelLoading();
     this.activeLayout?.destroy();
     this.activeLayout = null;
+    this.activeContext = null;
     document.documentElement.classList.remove(ACTIVE_CLASS);
-    document.querySelector(`.${ROOT_CLASS}`)?.remove();
+    document.querySelectorAll(`.${ROOT_CLASS}`).forEach((root) => root.remove());
     document.getElementById(STYLE_ID)?.remove();
     clearPendingTopicLayout();
-    hideLoadingOverlay();
+    removeLoadingOverlay();
   }
 
   private handoffToNative(
@@ -3240,6 +3291,7 @@ export class TopicLayoutRuntime {
     };
     this.activeLayout?.destroy();
     this.activeLayout = null;
+    this.activeContext = null;
     const state: TopicReadingState = {
       ...previous,
       nativeMode: true,
