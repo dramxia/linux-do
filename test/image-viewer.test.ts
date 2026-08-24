@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { imageViewerOwnedSelectors, initImageViewer } from '../src/content/image-viewer';
 import { DEFAULT_SETTINGS, type DiscourseSettings } from '../src/common/settings';
 
@@ -77,6 +77,38 @@ describe('initImageViewer', () => {
     const event = clickMouse(img);
     expect(event.defaultPrevented).toBe(true);
     expect(document.querySelector('.ldtk-image-viewer')).not.toBeNull();
+  });
+
+  it('keeps the preview image hidden until decoding and initial layout finish', async () => {
+    const source = createPostImage();
+    initImageViewer(settingsWith());
+    clickMouse(source);
+
+    const overlay = document.querySelector<HTMLElement>('.ldtk-image-viewer');
+    const preview = overlay?.querySelector<HTMLImageElement>('.ldtk-viewer-img');
+    let finishDecode!: () => void;
+    const decode = new Promise<void>((resolve) => {
+      finishDecode = resolve;
+    });
+    Object.defineProperties(preview as HTMLImageElement, {
+      naturalWidth: { configurable: true, value: 1600 },
+      naturalHeight: { configurable: true, value: 900 },
+      decode: { configurable: true, value: vi.fn(() => decode) },
+    });
+
+    preview?.dispatchEvent(new Event('load'));
+
+    expect(overlay?.getAttribute('aria-busy')).toBe('true');
+    expect(overlay?.classList.contains('ldtk-image-ready')).toBe(false);
+    expect(getComputedStyle(preview as HTMLImageElement).visibility).toBe('hidden');
+
+    finishDecode();
+    await vi.waitFor(() => {
+      expect(overlay?.classList.contains('ldtk-image-ready')).toBe(true);
+    });
+    expect(overlay?.getAttribute('aria-busy')).toBe('false');
+    expect((preview as HTMLImageElement).style.transform).toBe('translate3d(0px, 0px, 0) scale(1)');
+    expect(getComputedStyle(preview as HTMLImageElement).visibility).toBe('visible');
   });
 
   it('does not open the viewer when a native lightbox overlay is already open', () => {

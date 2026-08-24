@@ -435,7 +435,28 @@ async function toggleReaction(request: TopicActionRequest): Promise<void> {
   );
 }
 
-async function executeModelAction(request: TopicActionRequest): Promise<void> {
+interface SharedIssueActionResult {
+  sharedIssueCount: number;
+  userCreatedSharedIssue: boolean;
+}
+
+async function toggleSharedIssue(request: TopicActionRequest): Promise<SharedIssueActionResult> {
+  const result = await getAjax()('/solution/shared_issue', {
+    type: 'POST',
+    data: { topic_id: request.topicId },
+  });
+  const count = Number(readProperty(result, 'count'));
+  const userCreatedSharedIssue = readProperty(result, 'user_created_shared_issue');
+  if (!Number.isInteger(count) || count < 0 || typeof userCreatedSharedIssue !== 'boolean') {
+    throw new Error('相同问题状态响应无效');
+  }
+  return { sharedIssueCount: count, userCreatedSharedIssue };
+}
+
+async function executeModelAction(
+  request: TopicActionRequest,
+): Promise<SharedIssueActionResult | void> {
+  if (request.action === 'sharedIssue') return toggleSharedIssue(request);
   if (request.action === 'boost') {
     await submitBoost(request);
     return;
@@ -577,7 +598,13 @@ function handleActionRequest(event: Event): void {
   if (!validateActionRoute(request)) return;
   const target = event.target;
   void executeModelAction(request)
-    .then(() => dispatchActionResult(target, request, { ok: true, phase: 'settled' }))
+    .then((result) =>
+      dispatchActionResult(target, request, {
+        ok: true,
+        phase: 'settled',
+        ...(result || {}),
+      }),
+    )
     .catch((error: unknown) => {
       dispatchActionResult(target, request, {
         ok: false,

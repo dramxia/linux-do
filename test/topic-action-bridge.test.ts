@@ -422,6 +422,27 @@ describe('page-world topic action bridge', () => {
     expectPageUntouched(url, scrollTo);
   });
 
+  it('toggles the solved shared-issue state through the plugin endpoint', async () => {
+    ajax.mockResolvedValueOnce({ count: 8, user_created_shared_issue: true });
+    const button = document.body.appendChild(document.createElement('button'));
+    const url = window.location.href;
+
+    await expect(dispatchRequest(button, request('sharedIssue', 1))).resolves.toEqual({
+      requestId: 'bridge:1',
+      ok: true,
+      phase: 'settled',
+      sharedIssueCount: 8,
+      userCreatedSharedIssue: true,
+    });
+    expect(ajax).toHaveBeenCalledWith('/solution/shared_issue', {
+      type: 'POST',
+      data: { topic_id: 123 },
+    });
+    expect(window.location.href).toBe(url);
+    expect(topicController).toBeNull();
+    expect(routeTo).not.toHaveBeenCalled();
+  });
+
   it('submits Boost directly through the plugin endpoint without touching page state', async () => {
     const button = document.body.appendChild(document.createElement('button'));
     const url = window.location.href;

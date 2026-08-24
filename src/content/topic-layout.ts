@@ -9,7 +9,9 @@ import {
   getTopicResponsePrefetchStatus,
   TopicDataSource,
   type InitialCommentBatchError,
+  type TopicAcceptedAnswer,
   type TopicPost,
+  type TopicPostReaction,
 } from './topic-api';
 import {
   beginTopicActivation,
@@ -218,6 +220,14 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
 .ldtk-article-content {
   max-width: 760px;
   margin: 0 auto;
+}
+.ldtk-article-solved {
+  width: 100%;
+  max-width: 760px;
+  margin: 20px auto 0;
+}
+.ldtk-article-solved > .accepted-answers {
+  width: 100%;
 }
 .ldtk-article-footer {
   position: relative;
@@ -993,6 +1003,60 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
 .ldtk-post-menu-button.bookmarked {
   color: var(--ldtk-brand);
 }
+.ldtk-post-reactions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+}
+.ldtk-post-reaction-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 6px;
+  color: var(--ldtk-muted-foreground);
+  font-size: 13px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ldtk-post-reaction-image {
+  display: block;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+.ldtk-post-reaction-code {
+  max-width: 76px;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+.ldtk-post-reaction-count {
+  min-width: 1ch;
+  text-align: center;
+}
+.ldtk-post-accepted {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 5px 6px;
+  color: var(--success, #008a3b);
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ldtk-post-accepted .d-icon {
+  display: block;
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
+}
 .ldtk-inline-popover {
   position: absolute;
   z-index: 12;
@@ -1429,6 +1493,21 @@ function formatDate(value: string): string {
   }).format(date);
 }
 
+function formatRelativeDate(value: string): string {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return value;
+  const elapsed = Date.now() - timestamp;
+  if (elapsed < 0) return formatDate(value);
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} 天`;
+  return formatDate(value);
+}
+
 function getAvatarUrl(template?: string): string | null {
   if (!template) return null;
   const url = template.replace('{size}', '90');
@@ -1475,6 +1554,7 @@ function createDiscourseIcon(name: string): SVGSVGElement {
 
 /* lucide 图标路径 —— 正文操作栏与评论操作栏共用同一图标体系（24x24，stroke 2，圆角端点） */
 const LUCIDE_ICONS: Readonly<Record<string, string>> = {
+  'arrow-down': '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
   'arrow-left': '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
   'arrow-up-from-bracket':
     '<path d="M7 17V7h10"/><path d="m7 7 10 10"/><path d="M12 3v9"/><path d="m8 7 4-4 4 4"/>',
@@ -1486,6 +1566,7 @@ const LUCIDE_ICONS: Readonly<Record<string, string>> = {
   'chevron-right': '<path d="m9 18 6-6-6-6"/>',
   'chevron-up': '<path d="m18 15-6-6-6 6"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  'square-check': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 12 2 2 4-4"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   ellipsis:
     '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
@@ -1495,6 +1576,7 @@ const LUCIDE_ICONS: Readonly<Record<string, string>> = {
   flag: '<path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 5.5 2q1.5.5 3 0a1 1 0 0 1 1 .6c.2.3.5.8.5 1.4v8a1 1 0 0 1-.4.8A6 6 0 0 1 14 16c-3 0-5-2-5.5-2q-1.5-.5-3 0a1 1 0 0 0-.5.4V22"/>',
   heart:
     '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v7"/><path d="M10 10.5V6a2 2 0 0 0-4 0v9"/><path d="M6 14V8a2 2 0 0 0-4 0v7a8 8 0 0 0 8 8h2a8 8 0 0 0 8-8v-4a2 2 0 0 0-4 0v2"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
   pencil:
     '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
@@ -1515,6 +1597,7 @@ const LUCIDE_NAME_MAP: Readonly<Record<string, string>> = {
   'd-unliked': 'far-heart',
   'd-post-share': 'arrow-up-from-bracket',
   'discourse-bookmark-clock': 'bookmark-clock',
+  'far-square-check': 'square-check',
 };
 /* 需要填充（而非描边）表示“已激活”状态的图标 */
 const LUCIDE_FILLED_ICONS: ReadonlySet<string> = new Set(['heart', 'bookmark']);
@@ -1759,6 +1842,7 @@ class TopicLayout {
   private readonly eventVersions = new Map<number, number>();
   private readonly reactionImages = new Map<number, { id: string; url?: string }>();
   private readonly reactionOptions = new Map<string, TopicReactionOption>();
+  private reactionOptionsPromise: Promise<TopicReactionOption[]> | null = null;
   private readonly replyAborts = new Map<number, AbortController>();
   private readonly codeCopyResetTimers = new Map<HTMLButtonElement, number>();
   private readonly failedCommentOffsets = new Set<number>();
@@ -2215,7 +2299,8 @@ class TopicLayout {
     if (summary) footer.appendChild(summary);
     body.appendChild(cooked);
     content.appendChild(body);
-    this.articleScroll.replaceChildren(header, content);
+    const solved = this.createSolvedArea();
+    this.articleScroll.replaceChildren(header, content, ...(solved ? [solved] : []));
     this.articlePane.replaceChildren(this.articleScroll, footer);
     this.articlePane.setAttribute('aria-busy', 'false');
     this.articleFooter = footer;
@@ -2579,6 +2664,18 @@ class TopicLayout {
       return button;
     };
 
+    const reactionSummary = this.createPostReactionSummary(post);
+    if (reactionSummary) controls.appendChild(reactionSummary);
+
+    if (
+      this.source.topic.accepted_answers?.some((answer) => answer.post_number === post.post_number)
+    ) {
+      const solution = createElement('span', 'ldtk-post-accepted');
+      solution.setAttribute('aria-label', '已采纳为解决方案');
+      solution.append(createDiscourseIcon('check'), '解决方案');
+      controls.appendChild(solution);
+    }
+
     if (like && post.yours !== true) {
       const likeLabel = hasCustomReaction
         ? `取消 ${currentReactionId} 表态`
@@ -2832,6 +2929,182 @@ class TopicLayout {
     return { element: content, text: text || `查看 ${post.post_number} 楼回复` };
   }
 
+  private createAcceptedAnswers(answers: readonly TopicAcceptedAnswer[]): HTMLElement {
+    const accordion = createElement(
+      'aside',
+      'accepted-answers d-post-accordion ldtk-accepted-answers',
+    );
+    const layout = createElement('div', 'd-post-accordion__layout');
+    const header = createElement('div', 'd-post-accordion__header');
+    const title = createElement('h3', 'accepted-answers__title');
+    title.append(createDiscourseIcon('far-square-check'), '已解决');
+    header.appendChild(title);
+    if (answers.length > 1) {
+      header.appendChild(
+        createElement('span', 'accepted-answers__solution-count', `${answers.length} 解决方案`),
+      );
+    }
+
+    const items = createElement('div', 'd-post-accordion__items');
+    answers.forEach((answer, index) => {
+      const hasContent = Boolean(answer.cooked?.trim());
+      const expanded = hasContent && index === 0;
+      const item = createElement(
+        'div',
+        `quote d-post-accordion-item ldtk-solution-item${
+          hasContent ? ' d-post-accordion-item--has-content' : ''
+        }`,
+      );
+      item.dataset.username = answer.username;
+      item.dataset.post = String(answer.post_number);
+      item.dataset.topic = String(answer.topic_id);
+      if (expanded) item.dataset.expanded = 'true';
+      if (hasContent && (answer.cooked?.length || 0) > 540) item.dataset.overflowing = 'true';
+      item.style.setProperty('--max-lines-displayed', '6');
+
+      const itemHeader = createElement('div', 'd-post-accordion-item__header');
+      if (hasContent) itemHeader.dataset.toggleSolution = String(answer.id);
+      const metadata = createElement('div', 'd-post-accordion-item__metadata');
+      const user = createElement('a', 'user-link');
+      user.href = `/u/${encodeURIComponent(answer.username)}`;
+      const avatarUrl = getAvatarUrl(answer.avatar_template);
+      if (avatarUrl) {
+        const avatar = createElement('img', 'avatar');
+        avatar.src = avatarUrl;
+        avatar.alt = '';
+        avatar.width = 24;
+        avatar.height = 24;
+        avatar.loading = 'lazy';
+        user.appendChild(avatar);
+      }
+      user.appendChild(createElement('span', '', answer.name || answer.username));
+      const dot = createElement('span', 'dot-separator');
+      const date = createElement('a', 'date-link');
+      date.href = answer.url || getNativeFloorUrl(answer.post_number);
+      date.title = formatDate(answer.created_at);
+      date.setAttribute('aria-label', formatDate(answer.created_at));
+      const createdAt = createElement('time', '', formatRelativeDate(answer.created_at));
+      createdAt.dateTime = answer.created_at;
+      date.appendChild(createdAt);
+      metadata.append(user, dot, date);
+
+      const controls = createElement('div', 'd-post-accordion-item__controls');
+      if (hasContent) {
+        const toggle = createIconButton(
+          'btn btn-flat d-post-accordion-item__toggle',
+          expanded ? 'chevron-up' : 'chevron-down',
+          expanded ? '收起' : '展开',
+        );
+        toggle.setAttribute('aria-expanded', String(expanded));
+        controls.appendChild(toggle);
+      } else {
+        const jump = createElement('a', 'btn btn-flat d-post-accordion-item__jump');
+        jump.href = answer.url || getNativeFloorUrl(answer.post_number);
+        jump.title = '跳转到解决方案';
+        jump.setAttribute('aria-label', '跳转到解决方案');
+        jump.appendChild(createDiscourseIcon('arrow-down'));
+        controls.appendChild(jump);
+      }
+      itemHeader.append(metadata, controls);
+      item.appendChild(itemHeader);
+
+      if (hasContent) {
+        const body = createElement('div', 'd-post-accordion-item__body');
+        const quote = createElement('blockquote', 'd-post-accordion-item__content');
+        quote.id = `ldtk-solution-${answer.id}`;
+        quote.appendChild(createCooked(answer.cooked || ''));
+        const readMore = createElement('div', 'd-post-accordion-item__read-more');
+        const link = createElement('a', 'read-more-link ldtk-solution-more', '阅读更多');
+        link.href = answer.url || getNativeFloorUrl(answer.post_number);
+        readMore.appendChild(link);
+        body.append(quote, readMore);
+        item.appendChild(body);
+      }
+      items.appendChild(item);
+    });
+
+    layout.append(header, items);
+    accordion.appendChild(layout);
+    return accordion;
+  }
+
+  private getSharedIssueLabel(count = this.source.topic.shared_issue_count || 0): string {
+    return count > 0 ? `俺也一样 (${count})` : '俺也一样';
+  }
+
+  private createSharedIssueButton(): HTMLButtonElement | null {
+    const topic = this.source.topic;
+    if (topic.shared_issue_visible !== true) return null;
+    const label = this.getSharedIssueLabel();
+    const button = createButton(
+      'btn btn-icon-text btn-default ldtk-shared-issue-button post-action-menu__solved-shared-issue',
+      '',
+      label,
+    );
+    button.title = label;
+    button.append(createDiscourseIcon('hand'), createElement('span', 'd-button-label', label));
+    button.dataset.topicAction = 'sharedIssue';
+    button.dataset.postId = String(this.source.article.id);
+    button.dataset.floor = '1';
+    button.setAttribute('aria-pressed', String(topic.user_created_shared_issue === true));
+    button.classList.toggle('has-shared-issue', topic.user_created_shared_issue === true);
+
+    if (this.source.article.yours === true) {
+      button.disabled = true;
+      button.title = '主题作者不能标记相同问题';
+    } else if (topic.closed === true) {
+      button.disabled = true;
+      button.title = '主题已关闭';
+    } else if (topic.archived === true) {
+      button.disabled = true;
+      button.title = '主题已归档';
+    }
+    button.classList.toggle('disabled', button.disabled);
+    return button;
+  }
+
+  private createSolvedArea(): HTMLElement | null {
+    const answers = this.source.topic.accepted_answers || [];
+    const sharedIssueButton = this.createSharedIssueButton();
+    if (answers.length === 0 && !sharedIssueButton) return null;
+    const area = createElement('section', 'ldtk-article-solved');
+    if (answers.length > 0) area.appendChild(this.createAcceptedAnswers(answers));
+    if (sharedIssueButton) {
+      const row = createElement('div', 'solved-shared-issue-row');
+      row.appendChild(sharedIssueButton);
+      area.appendChild(row);
+    }
+    return area;
+  }
+
+  private updateSharedIssueButton(
+    button: HTMLButtonElement,
+    count: number,
+    userCreatedSharedIssue: boolean,
+  ): void {
+    this.source.topic.shared_issue_count = count;
+    this.source.topic.user_created_shared_issue = userCreatedSharedIssue;
+    const label = this.getSharedIssueLabel(count);
+    button.querySelector<HTMLElement>('.d-button-label')?.replaceChildren(label);
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    button.setAttribute('aria-pressed', String(userCreatedSharedIssue));
+    button.classList.toggle('has-shared-issue', userCreatedSharedIssue);
+  }
+
+  private toggleAcceptedAnswer(header: HTMLElement): void {
+    const item = header.closest<HTMLElement>('.d-post-accordion-item');
+    const button = header.querySelector<HTMLButtonElement>('.d-post-accordion-item__toggle');
+    if (!item || !button) return;
+    const expanded = !item.hasAttribute('data-expanded');
+    if (expanded) item.dataset.expanded = 'true';
+    else item.removeAttribute('data-expanded');
+    button.setAttribute('aria-expanded', String(expanded));
+    button.setAttribute('aria-label', expanded ? '收起' : '展开');
+    button.title = expanded ? '收起' : '展开';
+    setButtonIcon(button, expanded ? 'chevron-up' : 'chevron-down');
+  }
+
   private createArticleReplySummary(
     article: TopicPost,
     replies: readonly TopicPost[],
@@ -2937,6 +3210,117 @@ class TopicLayout {
     image.removeAttribute('width');
     image.removeAttribute('height');
     return image;
+  }
+
+  private createLikeUsersCountButton(post: TopicPost, count: number): HTMLButtonElement {
+    const button = createPostMenuButton({
+      className: 'post-action-menu__like-count button-count like-count',
+      icon: 'd-liked',
+      label: `${count} 个赞，查看表态用户`,
+      visibleLabel: formatCompactNumber(count),
+    });
+    button.dataset.topicAction = 'likeUsers';
+    button.dataset.postId = String(post.id);
+    button.dataset.floor = String(post.post_number);
+    button.dataset.reactionSummaryId = 'heart';
+    button.setAttribute('aria-haspopup', 'dialog');
+    button.setAttribute('aria-expanded', 'false');
+    return button;
+  }
+
+  private createPostReactionImage(url: string): HTMLImageElement {
+    const image = createElement('img', 'ldtk-post-reaction-image');
+    image.src = url;
+    image.alt = '';
+    image.loading = 'lazy';
+    image.draggable = false;
+    return image;
+  }
+
+  private createSerializedReactionSummary(reaction: TopicPostReaction): HTMLElement {
+    const summary = createElement('span', 'ldtk-post-reaction-summary');
+    summary.dataset.reactionSummaryId = reaction.id;
+    const count = Math.max(0, reaction.count);
+    const label = `${reaction.id} 表态 ${count} 次`;
+    summary.setAttribute('aria-label', label);
+    summary.title = label;
+    const url = reaction.emoji_url || this.reactionOptions.get(reaction.id)?.url;
+    if (url) {
+      summary.appendChild(this.createPostReactionImage(url));
+    } else {
+      summary.appendChild(createElement('span', 'ldtk-post-reaction-code', `:${reaction.id}:`));
+    }
+    summary.appendChild(
+      createElement('span', 'ldtk-post-reaction-count', formatCompactNumber(count)),
+    );
+    return summary;
+  }
+
+  private hydratePostReactionSummary(summary: HTMLElement, post: TopicPost): void {
+    const missingImages = summary.querySelectorAll<HTMLElement>(
+      '.ldtk-post-reaction-summary .ldtk-post-reaction-code',
+    );
+    if (missingImages.length === 0) return;
+    void this.loadReactionOptions(summary, post.id, post.post_number)
+      .then(() => {
+        if (this.destroyed || !summary.isConnected) return;
+        summary
+          .querySelectorAll<HTMLElement>('.ldtk-post-reaction-summary[data-reaction-summary-id]')
+          .forEach((item) => {
+            const reactionId = item.dataset.reactionSummaryId;
+            const placeholder = item.querySelector<HTMLElement>('.ldtk-post-reaction-code');
+            const url = reactionId ? this.reactionOptions.get(reactionId)?.url : undefined;
+            if (placeholder && url) placeholder.replaceWith(this.createPostReactionImage(url));
+          });
+      })
+      .catch(() => {
+        // Keep the readable reaction shortcode when Discourse's emoji service is unavailable.
+      });
+  }
+
+  private createPostReactionSummary(post: TopicPost): HTMLElement | null {
+    const reactions = (post.reactions || [])
+      .map((reaction, index) => ({ reaction, index }))
+      .filter(({ reaction }) => reaction.count > 0)
+      .sort((left, right) => right.reaction.count - left.reaction.count || left.index - right.index)
+      .slice(0, 3)
+      .map(({ reaction }) => reaction);
+    const fallbackCount = this.getPostReactionCount(post);
+    if (reactions.length === 0 && fallbackCount === 0) return null;
+
+    const summary = createElement('div', 'ldtk-post-reactions');
+    summary.setAttribute('aria-label', '评论表态');
+    if (reactions.length === 0) {
+      summary.appendChild(this.createLikeUsersCountButton(post, fallbackCount));
+      return summary;
+    }
+    reactions.forEach((reaction) => {
+      summary.appendChild(
+        reaction.id === 'heart'
+          ? this.createLikeUsersCountButton(post, reaction.count)
+          : this.createSerializedReactionSummary(reaction),
+      );
+    });
+    if (
+      reactions.some(
+        (reaction) =>
+          reaction.id !== 'heart' && !reaction.emoji_url && !this.reactionOptions.has(reaction.id),
+      )
+    ) {
+      queueMicrotask(() => {
+        if (!this.destroyed && summary.isConnected) this.hydratePostReactionSummary(summary, post);
+      });
+    }
+    return summary;
+  }
+
+  private getPostReactionCount(post: TopicPost): number {
+    const likeCount = post.actions_summary?.find((action) => action.id === 2)?.count || 0;
+    const serializedCount = (post.reactions || []).reduce(
+      (total, reaction) => total + Math.max(0, reaction.count),
+      0,
+    );
+    return Math.max(0, post.reaction_users_count || 0, likeCount, serializedCount);
   }
 
   private createInlineReply(post: TopicPost): HTMLElement {
@@ -3119,7 +3503,7 @@ class TopicLayout {
       reactionId?: string;
       form?: HTMLFormElement;
       input?: HTMLInputElement;
-      onSuccess?: () => void;
+      onSuccess?: (result: NonNullable<ReturnType<typeof parseTopicActionResult>>) => void;
       onError?: (message: string) => void;
     },
   ): void {
@@ -3179,7 +3563,18 @@ class TopicLayout {
       }
       finish();
       override?.form?.remove();
-      override?.onSuccess?.();
+      if (
+        action === 'sharedIssue' &&
+        result.sharedIssueCount !== undefined &&
+        result.userCreatedSharedIssue !== undefined
+      ) {
+        this.updateSharedIssueButton(
+          button,
+          result.sharedIssueCount,
+          result.userCreatedSharedIssue,
+        );
+      }
+      override?.onSuccess?.(result);
       if (['like', 'bookmark', 'boost', 'delete', 'recover'].includes(action)) {
         void this.updateVisiblePost({ topicId: request.topicId, postId, type: 'revised' });
       }
@@ -3339,6 +3734,32 @@ class TopicLayout {
     });
   }
 
+  private loadReactionOptions(
+    target: HTMLElement,
+    postId: number,
+    floor: number,
+  ): Promise<TopicReactionOption[]> {
+    if (this.reactionOptions.size > 0) {
+      return Promise.resolve([...this.reactionOptions.values()]);
+    }
+    if (!this.reactionOptionsPromise) {
+      this.reactionOptionsPromise = this.requestInteraction(target, {
+        interaction: 'reactionOptions',
+        postId,
+        floor,
+      })
+        .then((result) => {
+          const options = result.reactionOptions || [];
+          options.forEach((option) => this.reactionOptions.set(option.id, option));
+          return options;
+        })
+        .finally(() => {
+          this.reactionOptionsPromise = null;
+        });
+    }
+    return this.reactionOptionsPromise;
+  }
+
   private openReactionPicker(button: HTMLButtonElement): HTMLElement | null {
     const postId = Number(button.dataset.postId);
     const floor = Number(button.dataset.floor);
@@ -3351,19 +3772,13 @@ class TopicLayout {
     status.setAttribute('role', 'status');
     popover.appendChild(status);
     this.positionInlinePopover(button, popover);
-    void this.requestInteraction(popover, {
-      interaction: 'reactionOptions',
-      postId,
-      floor,
-    })
-      .then((result) => {
+    void this.loadReactionOptions(popover, postId, floor)
+      .then((options) => {
         if (!popover.isConnected) return;
-        const options = result.reactionOptions || [];
         const currentReactionId = this.source.getCachedPost(postId)?.current_user_reaction?.id;
         const list = createElement('div', 'ldtk-reaction-options');
         list.setAttribute('role', 'group');
         options.forEach((option) => {
-          this.reactionOptions.set(option.id, option);
           const item = createButton('ldtk-reaction-option', '', `使用 ${option.id} 表态`);
           item.dataset.reactionId = option.id;
           item.dataset.postId = String(postId);
@@ -3470,14 +3885,16 @@ class TopicLayout {
     const postId = Number(button.dataset.postId);
     const floor = Number(button.dataset.floor);
     if (!postId || !floor) return;
-    const total = Math.max(0, this.source.getCachedPost(postId)?.reaction_users_count || 0);
+    const post = this.source.getCachedPost(postId);
+    if (!post) return;
+    const total = this.getPostReactionCount(post);
     const popover = this.createInlinePopover(
       button,
-      `${formatCompactNumber(total)} 个赞`,
+      `${formatCompactNumber(total)} 个表态`,
       'ldtk-like-users-popover',
     );
     if (!popover) return;
-    const status = createElement('p', 'ldtk-inline-popover-status', '正在加载点赞用户...');
+    const status = createElement('p', 'ldtk-inline-popover-status', '正在加载表态用户...');
     status.setAttribute('role', 'status');
     const list = createElement('ul', 'ldtk-like-users-list');
     popover.append(status, list);
@@ -3502,7 +3919,7 @@ class TopicLayout {
           page += 1;
           status.remove();
           if (list.childElementCount === 0) {
-            const empty = createElement('p', 'ldtk-inline-popover-status', '暂无可显示的点赞用户');
+            const empty = createElement('p', 'ldtk-inline-popover-status', '暂无可显示的表态用户');
             list.replaceWith(empty);
             loadMore.remove();
             return;
@@ -3815,6 +4232,12 @@ class TopicLayout {
         .finally(() => {
           copyLinkButton.disabled = false;
         });
+      return;
+    }
+    const solutionHeader = target.closest<HTMLElement>('[data-toggle-solution]');
+    if (solutionHeader && !target.closest('a')) {
+      event.preventDefault();
+      this.toggleAcceptedAnswer(solutionHeader);
       return;
     }
     const actionButton = target.closest<HTMLButtonElement>('[data-topic-action][data-floor]');

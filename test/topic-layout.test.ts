@@ -362,6 +362,144 @@ describe('topic split layout lifecycle', () => {
     expect(nextIcon?.classList.contains('d-icon-lucide-chevron-right')).toBe(true);
   });
 
+  it('renders solved answers and the shared-issue button above the article controls', async () => {
+    const acceptedAnswers = [
+      {
+        id: 22,
+        topic_id: 123,
+        post_number: 2,
+        username: 'solver-one',
+        name: 'Solver One',
+        avatar_template: '/user_avatar/solver-one/{size}/22.png',
+        created_at: '2026-08-22T01:00:00.000Z',
+        cooked: '<p>first accepted answer</p>',
+        url: '/t/topic/123/2',
+      },
+      {
+        id: 33,
+        topic_id: 123,
+        post_number: 3,
+        username: 'solver-two',
+        created_at: '2026-08-22T02:00:00.000Z',
+        cooked: '<p>second accepted answer</p>',
+        url: '/t/topic/123/3',
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          topic({
+            accepted_answers: acceptedAnswers,
+            has_accepted_answer: true,
+            shared_issue_visible: true,
+            shared_issue_count: 6,
+            user_created_shared_issue: false,
+          }),
+        ),
+      ),
+    );
+    const requests: unknown[] = [];
+    document.addEventListener(
+      TOPIC_ACTION_REQUEST_NAME,
+      (event) => {
+        if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
+        const request = parseTopicActionRequest(event.detail);
+        if (!request) return;
+        requests.push(request);
+        event.target.dispatchEvent(
+          new CustomEvent(TOPIC_ACTION_RESULT_NAME, {
+            detail: JSON.stringify({
+              requestId: request.requestId,
+              ok: true,
+              phase: 'settled',
+              sharedIssueCount: 7,
+              userCreatedSharedIssue: true,
+            }),
+          }),
+        );
+      },
+      { once: true },
+    );
+
+    await refreshTopicLayout(enabledSettings);
+
+    const articleScroll = document.querySelector<HTMLElement>('.ldtk-article-scroll');
+    const articleFooter = document.querySelector<HTMLElement>('.ldtk-article-footer');
+    const solved = document.querySelector<HTMLElement>('.ldtk-article-solved');
+    const accordion = document.querySelector<HTMLElement>(
+      'aside.accepted-answers.d-post-accordion.ldtk-accepted-answers',
+    );
+    const items = Array.from(document.querySelectorAll<HTMLElement>('.d-post-accordion-item'));
+    const sharedIssueRow = document.querySelector<HTMLElement>('.solved-shared-issue-row');
+    const sharedIssue = document.querySelector<HTMLButtonElement>('.ldtk-shared-issue-button');
+    expect(articleScroll?.contains(solved as HTMLElement)).toBe(true);
+    expect(articleFooter?.contains(solved as HTMLElement)).toBe(false);
+    expect(accordion?.querySelector(':scope > .d-post-accordion__layout')).not.toBeNull();
+    expect(accordion?.querySelector('.accepted-answers__title')?.textContent).toBe('已解决');
+    expect(accordion?.querySelector('.accepted-answers__solution-count')?.textContent).toBe(
+      '2 解决方案',
+    );
+    expect(items).toHaveLength(2);
+    expect(items[0]?.dataset.expanded).toBe('true');
+    expect(items[1]?.hasAttribute('data-expanded')).toBe(false);
+    const solutionMarkers = Array.from(
+      document.querySelectorAll<HTMLElement>('.ldtk-comments-list .ldtk-post-accepted'),
+    );
+    expect(solutionMarkers).toHaveLength(2);
+    expect(
+      solutionMarkers.map((marker) =>
+        marker.closest('.topic-post')?.getAttribute('data-post-number'),
+      ),
+    ).toEqual(['2', '3']);
+    expect(solutionMarkers.every((marker) => marker.textContent === '解决方案')).toBe(true);
+    expect(
+      solutionMarkers.every((marker) => marker.getAttribute('aria-label') === '已采纳为解决方案'),
+    ).toBe(true);
+    expect(solutionMarkers.every((marker) => marker.querySelector('.d-icon-lucide-check'))).toBe(
+      true,
+    );
+    expect(
+      items[0]?.querySelector('.d-post-accordion-item__content .cooked')?.textContent,
+    ).toContain('first accepted answer');
+    expect(items[0]?.querySelector<HTMLAnchorElement>('.read-more-link')?.pathname).toBe(
+      '/t/topic/123/2',
+    );
+    expect(items[0]?.querySelector('.user-link .avatar')).not.toBeNull();
+    expect(items[0]?.querySelector('.dot-separator')).not.toBeNull();
+    expect(items[0]?.querySelector('.date-link')).not.toBeNull();
+    expect(sharedIssueRow?.contains(sharedIssue as HTMLButtonElement)).toBe(true);
+    expect(sharedIssue?.classList.contains('btn-default')).toBe(true);
+    expect(sharedIssue?.classList.contains('ldtk-post-menu-button')).toBe(false);
+    expect(sharedIssue?.querySelector('.d-button-label')?.textContent).toBe('俺也一样 (6)');
+    expect(sharedIssue?.getAttribute('aria-pressed')).toBe('false');
+    expect(sharedIssue?.querySelector('.d-icon-lucide-hand')).not.toBeNull();
+
+    items[0]?.querySelector<HTMLElement>('.d-post-accordion-item__header')?.click();
+    expect(items[0]?.hasAttribute('data-expanded')).toBe(false);
+    expect(
+      items[0]
+        ?.querySelector<HTMLButtonElement>('.d-post-accordion-item__toggle')
+        ?.getAttribute('aria-expanded'),
+    ).toBe('false');
+    items[1]?.querySelector<HTMLElement>('.d-post-accordion-item__header')?.click();
+    expect(items[1]?.dataset.expanded).toBe('true');
+
+    sharedIssue?.click();
+    await vi.waitFor(() => {
+      expect(requests).toHaveLength(1);
+      expect(sharedIssue?.querySelector('.d-button-label')?.textContent).toBe('俺也一样 (7)');
+      expect(sharedIssue?.getAttribute('aria-pressed')).toBe('true');
+      expect(sharedIssue?.classList.contains('has-shared-issue')).toBe(true);
+    });
+    expect(requests[0]).toMatchObject({
+      action: 'sharedIssue',
+      topicId: 123,
+      postId: 1,
+      floor: 1,
+    });
+  });
+
   it('highlights article code blocks and provides the native-style copy control', async () => {
     const article = {
       ...post(1, 1),
@@ -977,11 +1115,17 @@ describe('topic split layout lifecycle', () => {
     expect(editor?.querySelector('.ldtk-boost-error')?.textContent).toBe('你已经助推过此楼层');
   });
 
-  it('does not add count controls to the operation bar', async () => {
+  it('renders at most three reaction types and opens the reaction-users popover', async () => {
     const likedPost: TopicPost = {
       ...post(2, 2),
       actions_summary: [{ id: 2, count: 31, can_act: true, acted: false }],
-      reaction_users_count: 31,
+      reaction_users_count: 76,
+      reactions: [
+        { id: 'heart', type: 'emoji', count: 31 },
+        { id: 'laughing', type: 'emoji', count: 23 },
+        { id: 'cry', type: 'emoji', count: 17 },
+        { id: 'open_mouth', type: 'emoji', count: 5 },
+      ],
     };
     vi.stubGlobal(
       'fetch',
@@ -996,10 +1140,109 @@ describe('topic split layout lifecycle', () => {
         ),
       ),
     );
+    const requests: unknown[] = [];
+    const handleInteraction = (event: Event): void => {
+      if (!(event instanceof CustomEvent) || !(event.target instanceof Element)) return;
+      const request = parseTopicInteractionRequest(event.detail);
+      if (!request) return;
+      requests.push(request);
+      const result =
+        request.interaction === 'reactionOptions'
+          ? {
+              reactionOptions: [
+                { id: 'heart', url: '/images/emoji/twitter/heart.png', isMain: true },
+                { id: 'laughing', url: '/images/emoji/twitter/laughing.png', isMain: false },
+                { id: 'cry', url: '/images/emoji/twitter/cry.png', isMain: false },
+                {
+                  id: 'open_mouth',
+                  url: '/images/emoji/twitter/open_mouth.png',
+                  isMain: false,
+                },
+              ],
+            }
+          : {
+              users: [
+                {
+                  id: 9,
+                  username: 'liked-user',
+                  name: 'Liked User',
+                  avatarTemplate: '/user_avatar/liked-user/{size}/9.png',
+                },
+              ],
+              total: 76,
+              hasMore: false,
+            };
+      event.target.dispatchEvent(
+        new CustomEvent(TOPIC_INTERACTION_RESULT_NAME, {
+          detail: JSON.stringify({
+            requestId: request.requestId,
+            interaction: request.interaction,
+            ok: true,
+            ...result,
+          }),
+        }),
+      );
+      if (request.interaction === 'likeUsers') {
+        document.removeEventListener(TOPIC_INTERACTION_REQUEST_NAME, handleInteraction);
+      }
+    };
+    document.addEventListener(TOPIC_INTERACTION_REQUEST_NAME, handleInteraction);
+
     await refreshTopicLayout(enabledSettings);
+
     const controls = document.querySelector('[data-post-id="2"] .ldtk-post-controls');
-    expect(controls?.querySelector('.post-action-menu__like-count')).toBeNull();
+    const reactionSummary = controls?.querySelector<HTMLElement>('.ldtk-post-reactions');
+    const visibleReactions = Array.from(
+      reactionSummary?.querySelectorAll<HTMLElement>('[data-reaction-summary-id]') || [],
+    );
+    expect(visibleReactions.map((reaction) => reaction.dataset.reactionSummaryId)).toEqual([
+      'heart',
+      'laughing',
+      'cry',
+    ]);
+    expect(visibleReactions.map((reaction) => reaction.textContent)).toEqual(['31', '23', '17']);
+    expect(reactionSummary?.querySelector('[data-reaction-summary-id="open_mouth"]')).toBeNull();
+    await vi.waitFor(() => {
+      expect(requests[0]).toMatchObject({
+        interaction: 'reactionOptions',
+        postId: 2,
+        floor: 2,
+      });
+      expect(
+        reactionSummary?.querySelector<HTMLImageElement>(
+          '[data-reaction-summary-id="laughing"] img',
+        )?.src,
+      ).toContain('/images/emoji/twitter/laughing.png');
+      expect(
+        reactionSummary?.querySelector<HTMLImageElement>('[data-reaction-summary-id="cry"] img')
+          ?.src,
+      ).toContain('/images/emoji/twitter/cry.png');
+    });
+    expect(reactionSummary?.querySelector('.ldtk-post-reaction-code')).toBeNull();
+
+    const likeCount = reactionSummary?.querySelector<HTMLButtonElement>(
+      '.post-action-menu__like-count',
+    );
+    expect(likeCount?.dataset.topicAction).toBe('likeUsers');
+    expect(likeCount?.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(likeCount?.getAttribute('aria-expanded')).toBe('false');
+    expect(likeCount?.querySelector('.d-icon-lucide-heart')).not.toBeNull();
     expect(controls?.querySelector('.post-action-menu__show-replies')).toBeNull();
+
+    likeCount?.click();
+    await vi.waitFor(() => {
+      expect(requests).toHaveLength(2);
+      expect(document.querySelector('.ldtk-like-user')?.textContent).toContain('Liked User');
+    });
+    expect(requests[1]).toMatchObject({
+      interaction: 'likeUsers',
+      postId: 2,
+      floor: 2,
+      page: 0,
+      pageSize: 30,
+    });
+    expect(document.querySelector('.ldtk-inline-popover-title')?.textContent).toBe('76 个表态');
+    expect(likeCount?.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('refreshes the article Boost row after a discourse-boosts event', async () => {
@@ -1286,11 +1529,20 @@ describe('topic split layout lifecycle', () => {
     await vi.waitFor(() => {
       expect(document.querySelectorAll('.ldtk-reaction-option')).toHaveLength(2);
     });
-    expect(requests[2]).toMatchObject({ interaction: 'reactionOptions', postId: 2, floor: 2 });
+    expect(requests).toHaveLength(2);
+    expect(
+      requests.filter(
+        (request) =>
+          typeof request === 'object' &&
+          request !== null &&
+          'interaction' in request &&
+          request.interaction === 'reactionOptions',
+      ),
+    ).toHaveLength(1);
 
     document.querySelector<HTMLButtonElement>('[data-reaction-id="cry"]')?.click();
-    await vi.waitFor(() => expect(requests).toHaveLength(4));
-    expect(requests[3]).toMatchObject({ action: 'reaction', reactionId: 'cry', postId: 2 });
+    await vi.waitFor(() => expect(requests).toHaveLength(3));
+    expect(requests[2]).toMatchObject({ action: 'reaction', reactionId: 'cry', postId: 2 });
     expect(window.location.href).toBe(url);
     expect(document.querySelector('.ldtk-reaction-picker')).toBeNull();
     expect(document.documentElement.classList.contains('ldtk-split-reading-active')).toBe(true);

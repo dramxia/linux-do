@@ -16,6 +16,7 @@ const TOPIC_ACTIONS = [
   'recover',
   'flag',
   'share',
+  'sharedIssue',
 ] as const;
 const TOPIC_INTERACTIONS = ['reactionOptions', 'likeUsers'] as const;
 
@@ -39,6 +40,8 @@ export interface TopicActionResult {
   ok: boolean;
   phase: TopicActionResultPhase;
   message?: string;
+  sharedIssueCount?: number;
+  userCreatedSharedIssue?: boolean;
 }
 
 export interface TopicInteractionRequest {
@@ -158,11 +161,16 @@ export function parseTopicActionResult(value: unknown): TopicActionResult | null
   const parsed = parseSerialized(value);
   if (!parsed || typeof parsed !== 'object') return null;
   const detail = parsed as Partial<TopicActionResult>;
+  const hasSharedIssueCount = detail.sharedIssueCount !== undefined;
+  const hasSharedIssueState = detail.userCreatedSharedIssue !== undefined;
   if (
     !isRequestId(detail.requestId) ||
     typeof detail.ok !== 'boolean' ||
     !['triggered', 'settled'].includes(detail.phase as TopicActionResultPhase) ||
-    (detail.message !== undefined && typeof detail.message !== 'string')
+    (detail.message !== undefined && typeof detail.message !== 'string') ||
+    hasSharedIssueCount !== hasSharedIssueState ||
+    (hasSharedIssueCount && !isNonNegativeInteger(detail.sharedIssueCount)) ||
+    (hasSharedIssueState && typeof detail.userCreatedSharedIssue !== 'boolean')
   ) {
     return null;
   }
@@ -171,6 +179,10 @@ export function parseTopicActionResult(value: unknown): TopicActionResult | null
     ok: detail.ok,
     phase: detail.phase as TopicActionResultPhase,
     ...(detail.message === undefined ? {} : { message: detail.message }),
+    ...(detail.sharedIssueCount === undefined ? {} : { sharedIssueCount: detail.sharedIssueCount }),
+    ...(detail.userCreatedSharedIssue === undefined
+      ? {}
+      : { userCreatedSharedIssue: detail.userCreatedSharedIssue }),
   };
 }
 

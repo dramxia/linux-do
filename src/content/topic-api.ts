@@ -57,6 +57,20 @@ export interface TopicPostCurrentReaction {
   can_undo?: boolean;
 }
 
+export interface TopicAcceptedAnswer {
+  id: number;
+  topic_id: number;
+  post_number: number;
+  username: string;
+  name?: string;
+  avatar_template?: string;
+  created_at: string;
+  cooked?: string;
+  url?: string;
+  accepter_name?: string;
+  accepter_username?: string;
+}
+
 export interface TopicPost {
   id: number;
   topic_id: number;
@@ -95,6 +109,8 @@ export interface TopicResponse {
   title: string;
   fancy_title?: string;
   slug?: string;
+  closed?: boolean;
+  archived?: boolean;
   posts_count: number;
   highest_post_number?: number;
   last_read_post_number?: number;
@@ -103,6 +119,12 @@ export interface TopicResponse {
   like_count?: number;
   participant_count?: number;
   word_count?: number;
+  accepted_answers?: TopicAcceptedAnswer[];
+  has_accepted_answer?: boolean;
+  shared_issue_count?: number;
+  user_created_shared_issue?: boolean;
+  can_create_shared_issue?: boolean;
+  shared_issue_visible?: boolean;
   details?: {
     can_create_post?: boolean;
     participants?: TopicParticipant[];

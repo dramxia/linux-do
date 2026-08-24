@@ -89,6 +89,39 @@ describe('topic action bridge validation', () => {
     expect(parseTopicActionRequest(request)).toBeNull();
   });
 
+  it('accepts a shared-issue action and its state payload', () => {
+    expect(
+      parseTopicActionRequest({
+        requestId: 'shared-issue:1',
+        topicId: 123,
+        postId: 456,
+        floor: 1,
+        action: 'sharedIssue',
+        routeUrl: 'https://linux.do/t/topic/123',
+      }),
+    ).toMatchObject({ action: 'sharedIssue' });
+    expect(
+      parseTopicActionResult({
+        requestId: 'shared-issue:1',
+        ok: true,
+        phase: 'settled',
+        sharedIssueCount: 7,
+        userCreatedSharedIssue: true,
+      }),
+    ).toMatchObject({ sharedIssueCount: 7, userCreatedSharedIssue: true });
+  });
+
+  it('rejects incomplete shared-issue result state', () => {
+    expect(
+      parseTopicActionResult({
+        requestId: 'shared-issue:2',
+        ok: true,
+        phase: 'settled',
+        sharedIssueCount: 7,
+      }),
+    ).toBeNull();
+  });
+
   it('rejects results with an unknown phase', () => {
     expect(
       parseTopicActionResult({ requestId: 'action:2', ok: true, phase: 'finished' }),

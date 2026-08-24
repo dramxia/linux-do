@@ -42,11 +42,21 @@ const VIEWER_STYLE = `
   border-radius: 6px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
   cursor: grab;
-  will-change: transform;
-  transition: transform 0.18s ease;
+  opacity: 0;
+  visibility: hidden;
+  will-change: transform, opacity;
+  transition:
+    transform 0.18s ease,
+    opacity 0.14s ease;
+}
+.ldtk-image-viewer.ldtk-image-ready img.ldtk-viewer-img {
+  opacity: 1;
+  visibility: visible;
 }
 .ldtk-image-viewer.ldtk-animating img.ldtk-viewer-img {
-  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  transition:
+    transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.14s ease;
 }
 .ldtk-image-viewer.ldtk-dragging img.ldtk-viewer-img {
   cursor: grabbing;
@@ -311,6 +321,8 @@ class ImageViewer {
   private closed = false;
   private readonly source: HTMLImageElement;
   private readonly fullUrl: string;
+  private imageLoadVersion = 0;
+  private imageRevealFrame: number | null = null;
   private removeGlobalListeners: (() => void) | null = null;
   private scrollLockCount = 0;
   private savedScrollX = 0;
@@ -325,6 +337,7 @@ class ImageViewer {
     this.overlay.className = 'ldtk-image-viewer ldtk-animating';
     this.overlay.setAttribute('role', 'dialog');
     this.overlay.setAttribute('aria-label', '图片预览');
+    this.overlay.setAttribute('aria-busy', 'true');
 
     this.img = document.createElement('img');
     this.img.className = 'ldtk-viewer-img';
@@ -365,7 +378,7 @@ class ImageViewer {
       this.overlay.classList.add('ldtk-open');
     });
     if (this.img.complete && this.img.naturalWidth > 0) {
-      this.onImageReady();
+      void this.onImageReady();
     }
   }
 
@@ -383,11 +396,37 @@ class ImageViewer {
     return button;
   }
 
-  private onImageReady(): void {
+  private hideImageUntilReady(): number {
+    const version = ++this.imageLoadVersion;
+    if (this.imageRevealFrame !== null) {
+      window.cancelAnimationFrame(this.imageRevealFrame);
+      this.imageRevealFrame = null;
+    }
+    this.overlay.classList.remove('ldtk-image-ready');
+    this.overlay.setAttribute('aria-busy', 'true');
+    return version;
+  }
+
+  private async onImageReady(): Promise<void> {
+    const version = this.hideImageUntilReady();
+    if (typeof this.img.decode === 'function') {
+      try {
+        await this.img.decode();
+      } catch {
+        // Some browser/image combinations reject decode after a successful load.
+      }
+    }
+    if (this.closed || version !== this.imageLoadVersion || this.img.naturalWidth <= 0) return;
     this.naturalWidth = this.img.naturalWidth;
     this.naturalHeight = this.img.naturalHeight;
     this.computeFitScale();
     this.reset();
+    this.imageRevealFrame = window.requestAnimationFrame(() => {
+      this.imageRevealFrame = null;
+      if (this.closed || version !== this.imageLoadVersion) return;
+      this.overlay.classList.add('ldtk-image-ready');
+      this.overlay.setAttribute('aria-busy', 'false');
+    });
   }
 
   private computeFitScale(): void {
@@ -446,8 +485,9 @@ class ImageViewer {
   }
 
   private bindEvents(): void {
-    this.img.addEventListener('load', () => this.onImageReady());
+    this.img.addEventListener('load', () => void this.onImageReady());
     this.img.addEventListener('error', () => {
+      this.hideImageUntilReady();
       if (this.img.src !== this.fullUrl) {
         this.img.src = this.fullUrl;
         return;
@@ -638,6 +678,11 @@ class ImageViewer {
     if (this.closed) return;
     this.closed = true;
     viewerOpen = false;
+    this.imageLoadVersion += 1;
+    if (this.imageRevealFrame !== null) {
+      window.cancelAnimationFrame(this.imageRevealFrame);
+      this.imageRevealFrame = null;
+    }
     this.removeGlobalListeners?.();
     this.scrollLockCount = 0;
     this.restoreScrollPosition?.();
