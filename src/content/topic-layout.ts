@@ -63,6 +63,7 @@ const MIN_VIEWPORT_WIDTH = 1280;
 const SHELL_OFFSET_EPSILON = 0.2;
 const ARTICLE_FOOTER_DEFAULT_HEIGHT = 130;
 const ARTICLE_FOOTER_MIN_HEIGHT = 64;
+const ARTICLE_FOOTER_RESIZER_HEIGHT = 16;
 const ARTICLE_FOOTER_MAX_RATIO = 0.5;
 const ARTICLE_CONTENT_MIN_HEIGHT = 160;
 const ARTICLE_FOOTER_KEYBOARD_STEP = 16;
@@ -190,6 +191,14 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   cursor: col-resize !important;
   user-select: none !important;
 }
+.ldtk-reading-pane,
+.ldtk-article-scroll,
+.ldtk-article-footer {
+  background: var(--ldtk-background);
+  border: 1px solid var(--ldtk-border);
+  border-radius: var(--ldtk-radius);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 5%);
+}
 .ldtk-reading-pane {
   min-width: 0;
   height: 100%;
@@ -197,14 +206,12 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: auto;
-  background: var(--ldtk-background);
-  border: 1px solid var(--ldtk-border);
-  border-radius: var(--ldtk-radius);
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 5%);
 }
 .ldtk-article-pane {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  height: 100%;
   overflow-x: hidden;
   overflow-y: hidden;
   scrollbar-gutter: auto;
@@ -319,13 +326,10 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   flex: 0 0 auto;
   width: 100%;
   max-height: min(21vh, 130px);
-  padding: 0 clamp(24px, 3.5vw, 56px) 8px;
+  padding: 10px clamp(24px, 3.5vw, 56px) 8px;
   overflow-x: hidden;
   overflow-y: auto;
   color: var(--ldtk-foreground);
-  background: var(--ldtk-background);
-  border-top: 1px solid var(--ldtk-border);
-  box-shadow: 0 -6px 18px rgb(0 0 0 / 5%);
   scrollbar-gutter: auto;
 }
 .ldtk-article-footer > * {
@@ -334,16 +338,16 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   margin-left: auto;
 }
 .ldtk-article-footer-resizer {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 3;
   display: flex;
+  flex: 0 0 16px;
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 24px;
+  height: 16px;
   border: 0;
-  background: var(--ldtk-background);
+  background: transparent;
   cursor: row-resize;
   touch-action: none;
 }
@@ -364,7 +368,7 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   outline: 2px solid var(--ldtk-ring);
   outline-offset: -2px;
 }
-.ldtk-article-footer-resizer + .ldtk-post-controls {
+.ldtk-article-footer > .ldtk-post-controls {
   margin-top: 2px;
 }
 .ldtk-article-pane[data-resizing-footer="true"],
@@ -1923,7 +1927,7 @@ interface ColumnResize {
 class TopicLayout {
   readonly root = createElement('section', ROOT_CLASS);
   private readonly grid = createElement('div', 'ldtk-reading-grid');
-  private readonly articlePane = createElement('section', 'ldtk-reading-pane ldtk-article-pane');
+  private readonly articlePane = createElement('section', 'ldtk-article-pane');
   private readonly columnResizer = createElement('div', 'ldtk-column-resizer');
   private readonly articleScroll = createElement('div', 'ldtk-article-scroll');
   private readonly commentsPane = createElement('section', 'ldtk-reading-pane ldtk-comments-pane');
@@ -2559,7 +2563,6 @@ class TopicLayout {
     resizer.addEventListener('pointercancel', this.handleArticleFooterResizeEnd);
     resizer.addEventListener('lostpointercapture', this.handleArticleFooterResizeEnd);
     resizer.addEventListener('keydown', this.handleArticleFooterResizeKeyDown);
-    footer.appendChild(resizer);
     footer.appendChild(this.createPostControls(this.source.article));
     const boosts = this.createBoosts(this.source.article);
     if (boosts) footer.appendChild(boosts);
@@ -2575,7 +2578,7 @@ class TopicLayout {
     content.appendChild(body);
     const solved = this.createSolvedArea();
     this.articleScroll.replaceChildren(header, content, ...(solved ? [solved] : []));
-    this.articlePane.replaceChildren(this.articleScroll, footer);
+    this.articlePane.replaceChildren(this.articleScroll, resizer, footer);
     this.articlePane.setAttribute('aria-busy', 'false');
     this.articleFooter = footer;
     this.articleFooterResizer = resizer;
@@ -2595,7 +2598,7 @@ class TopicLayout {
         ARTICLE_FOOTER_MIN_HEIGHT,
         Math.min(
           Math.floor(paneHeight * ARTICLE_FOOTER_MAX_RATIO),
-          Math.floor(paneHeight - ARTICLE_CONTENT_MIN_HEIGHT),
+          Math.floor(paneHeight - ARTICLE_CONTENT_MIN_HEIGHT - ARTICLE_FOOTER_RESIZER_HEIGHT),
         ),
       ),
     };

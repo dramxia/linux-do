@@ -340,10 +340,12 @@ describe('topic split layout lifecycle', () => {
     expect(columnResizer?.getAttribute('aria-orientation')).toBe('vertical');
     expect(columnResizer?.tabIndex).toBe(0);
     expect(getComputedStyle(articlePane as HTMLElement).display).toBe('flex');
-    expect(getComputedStyle(articlePane as HTMLElement).borderRadius).toBe('var(--ldtk-radius)');
+    expect(articlePane?.classList.contains('ldtk-reading-pane')).toBe(false);
     expect(getComputedStyle(articlePane as HTMLElement).overflowX).toBe('hidden');
     expect(getComputedStyle(articlePane as HTMLElement).overflowY).toBe('hidden');
     expect(getComputedStyle(articlePane as HTMLElement).scrollbarGutter).toBe('auto');
+    expect(getComputedStyle(articleScroll as HTMLElement).borderRadius).toBe('var(--ldtk-radius)');
+    expect(getComputedStyle(articleScroll as HTMLElement).boxShadow).toContain('rgb(0 0 0 / 5%)');
     expect(getComputedStyle(articleScroll as HTMLElement).overflowY).toBe('auto');
     expect(getComputedStyle(articleScroll as HTMLElement).scrollbarGutter).toBe('auto');
     expect(getComputedStyle(articleScroll as HTMLElement).scrollbarWidth).toBe('thin');
@@ -359,7 +361,22 @@ describe('topic split layout lifecycle', () => {
     ).toContain('var(--ldtk-foreground)');
     expect(articleScroll?.contains(articlePost as HTMLElement)).toBe(true);
     expect(articleScroll?.contains(articleFooter as HTMLElement)).toBe(false);
-    expect(articlePane?.lastElementChild).toBe(articleFooter);
+    expect(Array.from(articlePane?.children || [])).toEqual([
+      articleScroll,
+      articleFooterResizer,
+      articleFooter,
+    ]);
+    expect(articleFooterResizer?.parentElement).toBe(articlePane);
+    expect(articleFooter?.contains(articleFooterResizer as HTMLElement)).toBe(false);
+    expect(getComputedStyle(articleFooterResizer as HTMLElement).height).toBe('16px');
+    expect(getComputedStyle(articleFooterResizer as HTMLElement).backgroundColor).toBe(
+      'rgba(0, 0, 0, 0)',
+    );
+    expect(getComputedStyle(articleFooter as HTMLElement).borderRadius).toBe('var(--ldtk-radius)');
+    expect(getComputedStyle(articleFooter as HTMLElement).boxShadow).toContain('rgb(0 0 0 / 5%)');
+    expect(document.getElementById('ldtk-topic-reading-style')?.textContent).toContain(
+      '.ldtk-reading-pane,\n.ldtk-article-scroll,\n.ldtk-article-footer {\n  background: var(--ldtk-background);\n  border: 1px solid var(--ldtk-border);\n  border-radius: var(--ldtk-radius);\n  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 5%);',
+    );
     expect(getComputedStyle(articleFooter as HTMLElement).maxHeight).toBe('min(21vh, 130px)');
     expect(articleFooterResizer?.getAttribute('role')).toBe('separator');
     expect(articleFooterResizer?.getAttribute('aria-orientation')).toBe('horizontal');
@@ -631,7 +648,7 @@ describe('topic split layout lifecycle', () => {
 
     const articlePane = document.querySelector<HTMLElement>('.ldtk-article-pane') as HTMLElement;
     const footer = articlePane.querySelector<HTMLElement>('.ldtk-article-footer') as HTMLElement;
-    const resizer = footer.querySelector<HTMLElement>(
+    const resizer = articlePane.querySelector<HTMLElement>(
       '.ldtk-article-footer-resizer',
     ) as HTMLElement;
     Object.defineProperty(articlePane, 'clientHeight', { configurable: true, value: 700 });
@@ -686,10 +703,9 @@ describe('topic split layout lifecycle', () => {
     resizer.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowUp' }));
     await refreshTopicLayout(enabledSettings, true);
     const restoredFooter = document.querySelector<HTMLElement>('.ldtk-article-footer');
+    const restoredResizer = document.querySelector<HTMLElement>('.ldtk-article-footer-resizer');
     expect(restoredFooter?.style.height).toBe('80px');
-    expect(
-      restoredFooter?.querySelector('.ldtk-article-footer-resizer')?.getAttribute('aria-valuenow'),
-    ).toBe('80');
+    expect(restoredResizer?.getAttribute('aria-valuenow')).toBe('80');
   });
 
   it('keeps native export actions behind the split reading surface', async () => {
@@ -948,6 +964,9 @@ describe('topic split layout lifecycle', () => {
     const articlePane = document.querySelector('.ldtk-article-pane');
     const articleScroll = articlePane?.querySelector('.ldtk-article-scroll');
     const footer = articlePane?.querySelector('.ldtk-article-footer');
+    const resizer = articlePane?.querySelector('.ldtk-article-footer-resizer');
+    expect(resizer?.previousElementSibling).toBe(articleScroll);
+    expect(resizer?.nextElementSibling).toBe(footer);
     expect(footer).toBe(articlePane?.lastElementChild);
     expect(articleScroll?.contains(footer as Node)).toBe(false);
     expect(getComputedStyle(footer as HTMLElement).flexGrow).toBe('0');
