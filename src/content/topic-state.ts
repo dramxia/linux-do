@@ -12,6 +12,7 @@ export interface TopicReadingState {
   leftScrollTop: number;
   rightScrollTop: number;
   articleFooterHeight?: number;
+  articleColumnWidthPercent?: number;
 }
 
 export type PaginationItem = number | 'ellipsis';
@@ -124,11 +125,19 @@ export function readTopicState(
       value.articleFooterHeight > 0
         ? Math.round(value.articleFooterHeight)
         : undefined;
+    const articleColumnWidthPercent =
+      typeof value.articleColumnWidthPercent === 'number' &&
+      Number.isFinite(value.articleColumnWidthPercent) &&
+      value.articleColumnWidthPercent > 0 &&
+      value.articleColumnWidthPercent < 100
+        ? Math.round(value.articleColumnWidthPercent * 10) / 10
+        : undefined;
     return {
       page: Math.max(1, Math.trunc(value.page)),
       leftScrollTop: Math.max(0, Number(value.leftScrollTop) || 0),
       rightScrollTop: Math.max(0, Number(value.rightScrollTop) || 0),
       ...(articleFooterHeight === undefined ? {} : { articleFooterHeight }),
+      ...(articleColumnWidthPercent === undefined ? {} : { articleColumnWidthPercent }),
     };
   } catch {
     return null;

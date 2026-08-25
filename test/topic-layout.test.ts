@@ -65,12 +65,13 @@ function jsonResponse(value: unknown, status = 200): Response {
 function dispatchPointer(
   target: Element,
   type: string,
-  options: { clientY: number; pointerId?: number; button?: number },
+  options: { clientX?: number; clientY?: number; pointerId?: number; button?: number },
 ): void {
   const event = new MouseEvent(type, {
     bubbles: true,
     cancelable: true,
-    clientY: options.clientY,
+    clientX: options.clientX ?? 0,
+    clientY: options.clientY ?? 0,
     button: options.button ?? 0,
   });
   Object.defineProperties(event, {
@@ -320,7 +321,9 @@ describe('topic split layout lifecycle', () => {
     const articlePane = root?.querySelector<HTMLElement>('.ldtk-article-pane');
     const articleScroll = root?.querySelector<HTMLElement>('.ldtk-article-scroll');
     const articleFooter = root?.querySelector<HTMLElement>('.ldtk-article-footer');
+    const commentsPane = root?.querySelector<HTMLElement>('.ldtk-comments-pane');
     const articleFooterResizer = root?.querySelector<HTMLElement>('.ldtk-article-footer-resizer');
+    const columnResizer = root?.querySelector<HTMLElement>('.ldtk-column-resizer');
     const articlePost = root?.querySelector<HTMLElement>('.ldtk-article-content.topic-post');
     const articleByline = root?.querySelector<HTMLElement>('.ldtk-article-byline');
     const publishedAt = articleByline?.querySelector<HTMLTimeElement>('time');
@@ -332,12 +335,28 @@ describe('topic split layout lifecycle', () => {
     );
     const nextIcon = root?.querySelector<SVGSVGElement>('.ldtk-pagination button:last-child svg');
     expect(getComputedStyle(grid as HTMLElement).display).toBe('grid');
-    expect(getComputedStyle(grid as HTMLElement).gap).toBe('10px');
+    expect(getComputedStyle(grid as HTMLElement).gap).toBe('0');
+    expect(columnResizer?.getAttribute('role')).toBe('separator');
+    expect(columnResizer?.getAttribute('aria-orientation')).toBe('vertical');
+    expect(columnResizer?.tabIndex).toBe(0);
     expect(getComputedStyle(articlePane as HTMLElement).display).toBe('flex');
     expect(getComputedStyle(articlePane as HTMLElement).borderRadius).toBe('var(--ldtk-radius)');
     expect(getComputedStyle(articlePane as HTMLElement).overflowX).toBe('hidden');
     expect(getComputedStyle(articlePane as HTMLElement).overflowY).toBe('hidden');
+    expect(getComputedStyle(articlePane as HTMLElement).scrollbarGutter).toBe('auto');
     expect(getComputedStyle(articleScroll as HTMLElement).overflowY).toBe('auto');
+    expect(getComputedStyle(articleScroll as HTMLElement).scrollbarGutter).toBe('auto');
+    expect(getComputedStyle(articleScroll as HTMLElement).scrollbarWidth).toBe('thin');
+    expect(getComputedStyle(commentsPane as HTMLElement).scrollbarGutter).toBe('auto');
+    expect(getComputedStyle(commentsPane as HTMLElement).scrollbarWidth).toBe('thin');
+    expect(getComputedStyle(articleFooter as HTMLElement).scrollbarGutter).toBe('auto');
+    expect(getComputedStyle(articleFooter as HTMLElement).scrollbarWidth).toBe('thin');
+    expect(
+      getComputedStyle(root as HTMLElement).getPropertyValue('--ldtk-scrollbar-thumb'),
+    ).toContain('var(--ldtk-muted-foreground)');
+    expect(
+      getComputedStyle(root as HTMLElement).getPropertyValue('--ldtk-scrollbar-thumb-hover'),
+    ).toContain('var(--ldtk-foreground)');
     expect(articleScroll?.contains(articlePost as HTMLElement)).toBe(true);
     expect(articleScroll?.contains(articleFooter as HTMLElement)).toBe(false);
     expect(articlePane?.lastElementChild).toBe(articleFooter);
@@ -360,6 +379,54 @@ describe('topic split layout lifecycle', () => {
     expect(commentStatus?.getAttribute('aria-live')).toBe('polite');
     expect(previousIcon?.classList.contains('d-icon-lucide-chevron-left')).toBe(true);
     expect(nextIcon?.classList.contains('d-icon-lucide-chevron-right')).toBe(true);
+  });
+
+  it('resizes the two columns by pointer and keyboard, then restores the ratio', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(topic())));
+    await refreshTopicLayout(enabledSettings);
+
+    const grid = document.querySelector<HTMLElement>('.ldtk-reading-grid') as HTMLElement;
+    const resizer = grid.querySelector<HTMLElement>('.ldtk-column-resizer') as HTMLElement;
+    Object.defineProperty(grid, 'clientWidth', { configurable: true, value: 1420 });
+    Object.defineProperty(resizer, 'setPointerCapture', { configurable: true, value: vi.fn() });
+    Object.defineProperty(resizer, 'hasPointerCapture', {
+      configurable: true,
+      value: vi.fn().mockReturnValue(false),
+    });
+    let resizeFrame: FrameRequestCallback | undefined;
+    const requestAnimationFrame = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        resizeFrame = callback;
+        return 42;
+      });
+
+    dispatchPointer(resizer, 'pointerdown', { clientX: 840 });
+    dispatchPointer(resizer, 'pointermove', { clientX: 875 });
+    dispatchPointer(resizer, 'pointermove', { clientX: 910 });
+
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(grid.style.getPropertyValue('--ldtk-article-column-width')).toBe('60%');
+    resizeFrame?.(performance.now());
+    expect(grid.style.getPropertyValue('--ldtk-article-column-width')).toBe('65%');
+
+    dispatchPointer(resizer, 'pointerup', { clientX: 910 });
+
+    expect(resizer.getAttribute('aria-valuenow')).toBe('65');
+    expect(grid.dataset.resizingColumns).toBeUndefined();
+    expect(JSON.parse(sessionStorage.getItem('ldtk:split-reading:123') || '{}')).toMatchObject({
+      articleColumnWidthPercent: 65,
+    });
+
+    resizer.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }));
+    expect(grid.style.getPropertyValue('--ldtk-article-column-width')).toBe('63%');
+
+    await refreshTopicLayout(enabledSettings, true);
+    const restoredGrid = document.querySelector<HTMLElement>('.ldtk-reading-grid');
+    expect(restoredGrid?.style.getPropertyValue('--ldtk-article-column-width')).toBe('63%');
+    expect(restoredGrid?.querySelector('.ldtk-column-resizer')?.getAttribute('aria-valuenow')).toBe(
+      '63',
+    );
   });
 
   it('renders solved answers and the shared-issue button above the article controls', async () => {

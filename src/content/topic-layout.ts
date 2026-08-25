@@ -66,6 +66,14 @@ const ARTICLE_FOOTER_MIN_HEIGHT = 64;
 const ARTICLE_FOOTER_MAX_RATIO = 0.5;
 const ARTICLE_CONTENT_MIN_HEIGHT = 160;
 const ARTICLE_FOOTER_KEYBOARD_STEP = 16;
+const ARTICLE_COLUMN_DEFAULT_WIDTH_PERCENT = 60;
+const ARTICLE_COLUMN_COMPACT_WIDTH_PERCENT = 56;
+const ARTICLE_COLUMN_MIN_WIDTH = 320;
+const ARTICLE_COLUMN_MIN_PERCENT = 25;
+const ARTICLE_COLUMN_MAX_PERCENT = 75;
+const COMMENTS_COLUMN_MIN_WIDTH = 420;
+const COLUMN_RESIZER_WIDTH = 10;
+const COLUMN_RESIZER_KEYBOARD_STEP = 2;
 const CODE_COPY_RESET_DELAY = 3_000;
 const REACTION_PICKER_CLOSE_DELAY = 150;
 const LIKE_USERS_PAGE_SIZE = 30;
@@ -121,6 +129,8 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   --ldtk-accent-foreground: var(--primary, #18181b);
   --ldtk-ring: var(--tertiary, #0f766e);
   --ldtk-brand: var(--tertiary, #0f766e);
+  --ldtk-scrollbar-thumb: color-mix(in srgb, var(--ldtk-muted-foreground) 58%, transparent);
+  --ldtk-scrollbar-thumb-hover: color-mix(in srgb, var(--ldtk-foreground) 72%, transparent);
   --ldtk-radius: 10px;
   box-sizing: border-box;
   contain: layout paint;
@@ -134,13 +144,51 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   box-sizing: border-box;
 }
 .ldtk-reading-grid {
+  --ldtk-article-column-width: 60%;
   width: min(100%, 1880px);
   height: 100%;
   margin: 0 auto;
   padding: 10px;
   display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(420px, 2fr);
-  gap: 10px;
+  grid-template-columns:
+    minmax(0, min(var(--ldtk-article-column-width), calc(100% - 430px)))
+    10px
+    minmax(420px, 1fr);
+  gap: 0;
+}
+.ldtk-column-resizer {
+  position: relative;
+  z-index: 5;
+  width: 10px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+.ldtk-column-resizer::before {
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 4px;
+  width: 2px;
+  background: var(--ldtk-border);
+  content: "";
+  transition: background-color 120ms ease;
+}
+.ldtk-column-resizer:hover::before,
+.ldtk-column-resizer:focus-visible::before,
+.ldtk-column-resizer[data-dragging="true"]::before {
+  background: var(--ldtk-ring);
+}
+.ldtk-column-resizer:focus-visible {
+  outline: 2px solid var(--ldtk-ring);
+  outline-offset: -2px;
+}
+.ldtk-reading-grid[data-resizing-columns="true"],
+.ldtk-reading-grid[data-resizing-columns="true"] * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 .ldtk-reading-pane {
   min-width: 0;
@@ -148,7 +196,7 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: auto;
   background: var(--ldtk-background);
   border: 1px solid var(--ldtk-border);
   border-radius: var(--ldtk-radius);
@@ -159,6 +207,7 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   flex-direction: column;
   overflow-x: hidden;
   overflow-y: hidden;
+  scrollbar-gutter: auto;
 }
 .ldtk-article-scroll {
   flex: 1 1 auto;
@@ -167,7 +216,42 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: auto;
+}
+.ldtk-comments-pane,
+.ldtk-article-scroll,
+.ldtk-article-footer {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ldtk-scrollbar-thumb) transparent;
+}
+.ldtk-comments-pane::-webkit-scrollbar,
+.ldtk-article-scroll::-webkit-scrollbar,
+.ldtk-article-footer::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.ldtk-comments-pane::-webkit-scrollbar-track,
+.ldtk-article-scroll::-webkit-scrollbar-track,
+.ldtk-article-footer::-webkit-scrollbar-track,
+.ldtk-comments-pane::-webkit-scrollbar-corner,
+.ldtk-article-scroll::-webkit-scrollbar-corner,
+.ldtk-article-footer::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.ldtk-comments-pane::-webkit-scrollbar-thumb,
+.ldtk-article-scroll::-webkit-scrollbar-thumb,
+.ldtk-article-footer::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--ldtk-scrollbar-thumb);
+  background-clip: padding-box;
+}
+.ldtk-comments-pane::-webkit-scrollbar-thumb:hover,
+.ldtk-article-scroll::-webkit-scrollbar-thumb:hover,
+.ldtk-article-footer::-webkit-scrollbar-thumb:hover {
+  background: var(--ldtk-scrollbar-thumb-hover);
+  background-clip: padding-box;
 }
 .ldtk-article-header {
   max-width: 760px;
@@ -242,7 +326,7 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
   background: var(--ldtk-background);
   border-top: 1px solid var(--ldtk-border);
   box-shadow: 0 -6px 18px rgb(0 0 0 / 5%);
-  scrollbar-gutter: stable;
+  scrollbar-gutter: auto;
 }
 .ldtk-article-footer > * {
   max-width: 760px;
@@ -1417,7 +1501,7 @@ html.${ACTIVE_CLASS} .sidebar-wrapper.ldtk-sidebar-center-target {
 }
 @media (max-width: 1439px) {
   .ldtk-reading-grid {
-    grid-template-columns: minmax(0, 56fr) minmax(420px, 44fr);
+    --ldtk-article-column-width: 56%;
   }
   .ldtk-article-scroll {
     padding-inline: 28px;
@@ -1822,9 +1906,25 @@ interface ArticleFooterResize {
   maxHeight: number;
 }
 
+interface ColumnResizeBounds {
+  contentWidth: number;
+  minPercent: number;
+  maxPercent: number;
+}
+
+interface ColumnResize {
+  pointerId: number;
+  startX: number;
+  startPercent: number;
+  latestX: number;
+  bounds: ColumnResizeBounds;
+}
+
 class TopicLayout {
   readonly root = createElement('section', ROOT_CLASS);
+  private readonly grid = createElement('div', 'ldtk-reading-grid');
   private readonly articlePane = createElement('section', 'ldtk-reading-pane ldtk-article-pane');
+  private readonly columnResizer = createElement('div', 'ldtk-column-resizer');
   private readonly articleScroll = createElement('div', 'ldtk-article-scroll');
   private readonly commentsPane = createElement('section', 'ldtk-reading-pane ldtk-comments-pane');
   private readonly commentsList = createElement('div', 'ldtk-comments-list');
@@ -1864,6 +1964,9 @@ class TopicLayout {
   private articleFooterHeight: number | undefined;
   private articleFooterResize: ArticleFooterResize | null = null;
   private articleFooterResizeFrame: number | null = null;
+  private articleColumnWidthPercent: number;
+  private columnResize: ColumnResize | null = null;
+  private columnResizeFrame: number | null = null;
   private reactionPickerCloseTimer: number | null = null;
   private suppressReactionFocusOpen = false;
 
@@ -1889,21 +1992,37 @@ class TopicLayout {
           rightScrollTop: 0,
         };
     this.articleFooterHeight = this.state.articleFooterHeight;
+    this.articleColumnWidthPercent =
+      this.state.articleColumnWidthPercent ??
+      (window.innerWidth <= 1439
+        ? ARTICLE_COLUMN_COMPACT_WIDTH_PERCENT
+        : ARTICLE_COLUMN_DEFAULT_WIDTH_PERCENT);
   }
 
   mountShell(articleReplies: TopicPost[] = []): void {
     this.articleReplies = articleReplies;
     this.ensureStyle();
     this.root.setAttribute('aria-label', '主题双栏阅读');
-    const grid = createElement('div', 'ldtk-reading-grid');
-    grid.append(this.articlePane, this.commentsPane);
-    this.root.appendChild(grid);
+    this.columnResizer.tabIndex = 0;
+    this.columnResizer.setAttribute('role', 'separator');
+    this.columnResizer.setAttribute('aria-label', '调整正文和评论宽度');
+    this.columnResizer.setAttribute('aria-orientation', 'vertical');
+    this.columnResizer.title = '左右拖动调整正文和评论宽度';
+    this.columnResizer.addEventListener('pointerdown', this.handleColumnResizeStart);
+    this.columnResizer.addEventListener('pointermove', this.handleColumnResizeMove);
+    this.columnResizer.addEventListener('pointerup', this.handleColumnResizeEnd);
+    this.columnResizer.addEventListener('pointercancel', this.handleColumnResizeEnd);
+    this.columnResizer.addEventListener('lostpointercapture', this.handleColumnResizeEnd);
+    this.columnResizer.addEventListener('keydown', this.handleColumnResizeKeyDown);
+    this.grid.append(this.articlePane, this.columnResizer, this.commentsPane);
+    this.root.appendChild(this.grid);
     if (this.source.articleReady) this.renderArticle();
     else this.renderArticleSkeleton();
     this.renderCommentsShell();
     this.renderCommentSlots();
     this.updateHeaderOffset();
     document.body.appendChild(this.root);
+    this.applyArticleColumnWidth(this.articleColumnWidthPercent);
     this.constrainArticleFooterHeight();
     document.documentElement.classList.add(ACTIVE_CLASS);
     clearPendingTopicLayout();
@@ -2055,6 +2174,10 @@ class TopicLayout {
       window.cancelAnimationFrame(this.articleFooterResizeFrame);
       this.articleFooterResizeFrame = null;
     }
+    if (this.columnResizeFrame !== null) {
+      window.cancelAnimationFrame(this.columnResizeFrame);
+      this.columnResizeFrame = null;
+    }
     if (this.injectButtonsFrame !== null) window.cancelAnimationFrame(this.injectButtonsFrame);
     this.injectButtonsFrame = null;
     if (this.retryCountdownTimer !== null) window.clearTimeout(this.retryCountdownTimer);
@@ -2064,7 +2187,9 @@ class TopicLayout {
       this.reactionPickerCloseTimer = null;
     }
     this.articleFooterResize = null;
+    this.columnResize = null;
     delete this.articlePane.dataset.resizingFooter;
+    delete this.grid.dataset.resizingColumns;
     this.clearSidebarAlignments();
     this.pageAbort?.abort();
     this.pageAbort = null;
@@ -2105,6 +2230,7 @@ class TopicLayout {
     this.root.style.setProperty('--ldtk-header-height', `${this.shellHeaderHeight}px`);
     const target = this.getShellGeometry(this.shellHeaderHeight);
     this.applyShellGeometry(target);
+    this.updateColumnResizerAria(this.articleColumnWidthPercent, this.getColumnResizeBounds());
     this.constrainArticleFooterHeight();
   }
 
@@ -2114,6 +2240,154 @@ class TopicLayout {
       this.settings.commentsPerPage === settings.commentsPerPage
     );
   }
+
+  private getColumnResizeBounds(): ColumnResizeBounds {
+    const style = getComputedStyle(this.grid);
+    const measuredWidth = this.grid.clientWidth || this.grid.getBoundingClientRect().width;
+    const horizontalPadding =
+      (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
+    const contentWidth = Math.max(0, measuredWidth - horizontalPadding);
+    if (contentWidth <= 0) {
+      return {
+        contentWidth: 0,
+        minPercent: ARTICLE_COLUMN_MIN_PERCENT,
+        maxPercent: ARTICLE_COLUMN_MAX_PERCENT,
+      };
+    }
+    const maxPercent = Math.max(
+      0,
+      Math.min(
+        ARTICLE_COLUMN_MAX_PERCENT,
+        ((contentWidth - COLUMN_RESIZER_WIDTH - COMMENTS_COLUMN_MIN_WIDTH) / contentWidth) * 100,
+      ),
+    );
+    const minPercent = Math.min(
+      maxPercent,
+      Math.max(ARTICLE_COLUMN_MIN_PERCENT, (ARTICLE_COLUMN_MIN_WIDTH / contentWidth) * 100),
+    );
+    return { contentWidth, minPercent, maxPercent };
+  }
+
+  private applyArticleColumnWidth(
+    percent: number,
+    bounds = this.getColumnResizeBounds(),
+    updateAria = true,
+  ): void {
+    const nextPercent =
+      Math.round(Math.min(bounds.maxPercent, Math.max(bounds.minPercent, percent)) * 10) / 10;
+    this.articleColumnWidthPercent = nextPercent;
+    const nextCss = `${nextPercent}%`;
+    if (this.grid.style.getPropertyValue('--ldtk-article-column-width') !== nextCss) {
+      this.grid.style.setProperty('--ldtk-article-column-width', nextCss);
+    }
+    if (updateAria) this.updateColumnResizerAria(nextPercent, bounds);
+  }
+
+  private updateColumnResizerAria(percent: number, bounds: ColumnResizeBounds): void {
+    const current =
+      Math.round(Math.min(bounds.maxPercent, Math.max(bounds.minPercent, percent)) * 10) / 10;
+    const values: Record<string, string> = {
+      'aria-valuemin': String(Math.round(bounds.minPercent * 10) / 10),
+      'aria-valuemax': String(Math.round(bounds.maxPercent * 10) / 10),
+      'aria-valuenow': String(current),
+      'aria-valuetext': `正文 ${current}%，评论 ${Math.round((100 - current) * 10) / 10}％`,
+    };
+    Object.entries(values).forEach(([name, value]) => {
+      if (this.columnResizer.getAttribute(name) !== value) {
+        this.columnResizer.setAttribute(name, value);
+      }
+    });
+  }
+
+  private readonly handleColumnResizeStart = (event: PointerEvent): void => {
+    if (event.isPrimary === false || event.button !== 0 || this.columnResize) return;
+    const bounds = this.getColumnResizeBounds();
+    if (bounds.contentWidth <= 0) return;
+    const startPercent = Math.min(
+      bounds.maxPercent,
+      Math.max(bounds.minPercent, this.articleColumnWidthPercent),
+    );
+    event.preventDefault();
+    this.columnResize = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startPercent,
+      latestX: event.clientX,
+      bounds,
+    };
+    this.columnResizer.dataset.dragging = 'true';
+    this.grid.dataset.resizingColumns = 'true';
+    if (typeof this.columnResizer.setPointerCapture === 'function') {
+      this.columnResizer.setPointerCapture(event.pointerId);
+    }
+  };
+
+  private readonly handleColumnResizeMove = (event: PointerEvent): void => {
+    const resize = this.columnResize;
+    if (!resize || event.pointerId !== resize.pointerId) return;
+    event.preventDefault();
+    const coalescedEvents =
+      typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [];
+    resize.latestX = coalescedEvents.at(-1)?.clientX ?? event.clientX;
+    if (this.columnResizeFrame !== null) return;
+    this.columnResizeFrame = window.requestAnimationFrame(this.flushColumnResizeFrame);
+  };
+
+  private readonly flushColumnResizeFrame = (): void => {
+    this.columnResizeFrame = null;
+    const resize = this.columnResize;
+    if (!resize || this.destroyed) return;
+    this.applyArticleColumnWidth(
+      resize.startPercent + ((resize.latestX - resize.startX) / resize.bounds.contentWidth) * 100,
+      resize.bounds,
+      false,
+    );
+  };
+
+  private flushPendingColumnResize(): void {
+    if (this.columnResizeFrame !== null) {
+      window.cancelAnimationFrame(this.columnResizeFrame);
+      this.columnResizeFrame = null;
+    }
+    this.flushColumnResizeFrame();
+  }
+
+  private readonly handleColumnResizeEnd = (event: PointerEvent): void => {
+    const resize = this.columnResize;
+    if (!resize || event.pointerId !== resize.pointerId) return;
+    if (event.type === 'pointerup') resize.latestX = event.clientX;
+    this.flushPendingColumnResize();
+    this.updateColumnResizerAria(this.articleColumnWidthPercent, resize.bounds);
+    this.columnResize = null;
+    delete this.columnResizer.dataset.dragging;
+    delete this.grid.dataset.resizingColumns;
+    if (
+      event.type !== 'lostpointercapture' &&
+      typeof this.columnResizer.hasPointerCapture === 'function' &&
+      this.columnResizer.hasPointerCapture(event.pointerId)
+    ) {
+      this.columnResizer.releasePointerCapture(event.pointerId);
+    }
+    this.saveState();
+  };
+
+  private readonly handleColumnResizeKeyDown = (event: KeyboardEvent): void => {
+    const bounds = this.getColumnResizeBounds();
+    let nextPercent: number | null = null;
+    if (event.key === 'ArrowLeft') {
+      nextPercent = this.articleColumnWidthPercent - COLUMN_RESIZER_KEYBOARD_STEP;
+    } else if (event.key === 'ArrowRight') {
+      nextPercent = this.articleColumnWidthPercent + COLUMN_RESIZER_KEYBOARD_STEP;
+    } else if (event.key === 'Home') {
+      nextPercent = bounds.minPercent;
+    } else if (event.key === 'End') {
+      nextPercent = bounds.maxPercent;
+    }
+    if (nextPercent === null) return;
+    event.preventDefault();
+    this.applyArticleColumnWidth(nextPercent, bounds);
+    this.saveState();
+  };
 
   private ensureStyle(): void {
     ensureLayoutStyle();
@@ -4423,6 +4697,7 @@ class TopicLayout {
       ...(this.articleFooterHeight === undefined
         ? {}
         : { articleFooterHeight: this.articleFooterHeight }),
+      articleColumnWidthPercent: this.articleColumnWidthPercent,
     });
   }
 }

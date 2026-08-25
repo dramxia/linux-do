@@ -100,12 +100,14 @@ describe('topic route and pagination state', () => {
       leftScrollTop: 80,
       rightScrollTop: 40,
       articleFooterHeight: 224,
+      articleColumnWidthPercent: 63.25,
     });
     expect(readTopicState('123')).toEqual({
       page: 2,
       leftScrollTop: 80,
       rightScrollTop: 40,
       articleFooterHeight: 224,
+      articleColumnWidthPercent: 63.3,
     });
   });
 
